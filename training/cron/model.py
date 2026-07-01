@@ -1,0 +1,184 @@
+"""Tiny tagger with one trunk and two heads, plus quantization-aware training.
+
+The trunk is sparse embedding row-sum, a depthwise temporal convolution with
+neighbour injection, a bidirectional gated linear recurrence (a sequential
+scan), masked global context pooling, and a gated head. It predicts one role per
+token and one clause-boundary logit. Feature dimensions come from the Phase 13
+manifest, never from a hardcoded label order.
+
+QAT is symmetric per-tensor integer quantization with a straight-through
+estimator over 2-D parameters. The forward graph is identical apart from the
+quantization, so selection can run with `qat=True` and track the deployed model.
+"""
+from __future__ import annotations
+
+import math
+
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+
+def fake_quantize(weight: torch.Tensor, bits: int) -> torch.Tensor:
+    """Symmetric per-tensor int-`bits` quantization with a straight-through pass.
+
+    `scale` maps the largest magnitude onto the positive integer ceiling
+    `(1 << (bits - 1)) - 1`. The rounding residual is `detach()`ed and added
+    back, so gradients flow to the full-precision weight unchanged.
+    """
+    ceiling = (1 << (bits - 1)) - 1
+    scale = weight.detach().abs().amax()
+    scale = torch.where(scale > 0, scale / ceiling, torch.ones_like(scale))
+    quantized = (weight / scale).round().clamp(-ceiling, ceiling) * scale
+    return weight + (quantized - weight).detach()
+
+
+class QLinear(nn.Module):
+    """A linear layer whose 2-D weight is fake-quantized when `qat` is set."""
+
+    def __init__(self, in_features: int, out_features: int, bits: int = 6):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.bits = bits
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        self.bias = nn.Parameter(torch.empty(out_features))
+        self.qat = False
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        bound = 1.0 / math.sqrt(in_features) if in_features > 0 else 0.0
+        nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        weight = fake_quantize(self.weight, self.bits) if self.qat else self.weight
+        return F.linear(inputs, weight, self.bias)
+
+
+class GatedRecurrence(nn.Module):
+    """One direction of a gated linear recurrence, evaluated as a sequential scan.
+
+    At each step `h = (1 - g) * h_prev + g * proposal`, gated by a sigmoid. The
+    validity mask freezes the state on padded positions, so the state and every
+    later output are independent of how far the sequence was padded.
+    """
+
+    def __init__(self, hidden: int, bits: int = 6):
+        super().__init__()
+        self.proposal = QLinear(hidden, hidden, bits)
+        self.gate = QLinear(hidden, hidden, bits)
+
+    def forward(self, inputs: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+        proposal = torch.tanh(self.proposal(inputs))
+        gate = torch.sigmoid(self.gate(inputs))
+        state = inputs.new_zeros(inputs.shape[0], inputs.shape[2])
+        mask = valid.to(inputs.dtype)
+        outputs: list[torch.Tensor] = []
+        for step in range(inputs.shape[1]):
+            step_mask = mask[:, step].unsqueeze(-1)
+            candidate = (1.0 - gate[:, step]) * state + gate[:, step] * proposal[:, step]
+            state = state + step_mask * (candidate - state)
+            outputs.append(state)
+        return torch.stack(outputs, dim=1)
+
+
+class Tagger(nn.Module):
+    """The shared trunk and its role and boundary heads."""
+
+    def __init__(
+        self,
+        feature_rows: int,
+        rows_per_token: int,
+        role_classes: int,
+        hidden: int = 32,
+        kernel_size: int = 3,
+        quantization_bits: int = 6,
+    ):
+        super().__init__()
+        self.feature_rows = feature_rows
+        self.rows_per_token = rows_per_token
+        self.role_classes = role_classes
+        self.hidden = hidden
+        self.kernel_size = kernel_size
+        self.quantization_bits = quantization_bits
+
+        self.embedding = nn.Embedding(feature_rows + 1, hidden, padding_idx=feature_rows)
+        self.depthwise = nn.Conv1d(
+            hidden, hidden, kernel_size, padding=kernel_size // 2, groups=hidden
+        )
+        self.neighbor = QLinear(hidden, hidden, quantization_bits)
+        self.forward_recurrence = GatedRecurrence(hidden, quantization_bits)
+        self.backward_recurrence = GatedRecurrence(hidden, quantization_bits)
+        self.combine = QLinear(2 * hidden, hidden, quantization_bits)
+        self.context_norm = nn.LayerNorm(hidden)
+        self.head_gate = QLinear(2 * hidden, hidden, quantization_bits)
+        self.role_head = QLinear(hidden, role_classes, quantization_bits)
+        self.boundary_head = QLinear(hidden, 1, quantization_bits)
+        self._qat = False
+
+    @property
+    def qat(self) -> bool:
+        return self._qat
+
+    @qat.setter
+    def qat(self, value: bool) -> None:
+        self._qat = bool(value)
+        for module in self.modules():
+            if isinstance(module, QLinear):
+                module.qat = self._qat
+
+    def _gather_neighbors(self, states: torch.Tensor, neighbors: torch.Tensor) -> torch.Tensor:
+        """Sum the trunk state at each token's previous/next non-space neighbour."""
+        batch, width, slots = neighbors.shape
+        hidden = states.shape[-1]
+        index = (
+            neighbors.clamp(min=0)
+            .reshape(batch, width * slots)
+            .unsqueeze(-1)
+            .expand(batch, width * slots, hidden)
+        )
+        gathered = torch.gather(states, 1, index).reshape(batch, width, slots, hidden)
+        present = (neighbors >= 0).unsqueeze(-1).to(states.dtype)
+        return (gathered * present).sum(dim=2)
+
+    def forward(
+        self, rows: torch.Tensor, valid: torch.Tensor, neighbors: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        batch, width, _ = rows.shape
+        embedding_weight = self.embedding.weight
+        if self.qat:
+            embedding_weight = fake_quantize(embedding_weight, self.quantization_bits)
+        embedded = F.embedding(rows, embedding_weight, padding_idx=self.feature_rows)
+        states = embedded.sum(dim=2)
+        states = states + self.neighbor(self._gather_neighbors(states, neighbors))
+
+        mask = valid.unsqueeze(-1).to(states.dtype)
+        states = states * mask
+        convolved = self.depthwise(states.transpose(1, 2)).transpose(1, 2)
+        states = (states + convolved) * mask
+
+        forward = self.forward_recurrence(states, valid)
+        reversed_states = torch.flip(states, dims=[1])
+        reversed_valid = torch.flip(valid, dims=[1])
+        backward = torch.flip(
+            self.backward_recurrence(reversed_states, reversed_valid), dims=[1]
+        )
+
+        combined = self.combine(torch.cat([forward, backward], dim=-1))
+        combined = self.context_norm(combined)
+
+        denominator = mask.sum(dim=1).clamp(min=1.0)
+        pooled = (combined * mask).sum(dim=1) / denominator
+        pooled = pooled.unsqueeze(1).expand(-1, width, -1)
+        gate = torch.sigmoid(self.head_gate(torch.cat([combined, pooled], dim=-1)))
+        gated = gate * combined
+
+        roles = self.role_head(gated)
+        boundary = self.boundary_head(gated).squeeze(-1)
+        return roles, boundary
+
+
+def parameter_counts(model: nn.Module) -> dict[str, int]:
+    total = sum(parameter.numel() for parameter in model.parameters())
+    trainable = sum(
+        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+    )
+    return {"total": total, "trainable": trainable}
