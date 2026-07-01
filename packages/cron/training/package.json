@@ -8,6 +8,7 @@
     "corpus:plan": "bun run src/llm/coverage.ts",
     "corpus:run": "bun run src/llm/runner.ts",
     "corpus:verify": "bun run src/llm/verify.ts",
+    "corpus:merge": "bun run src/corpus/merge.ts",
     "gen": "bun run src/generate.ts --split train --exclude data/synth/heldout.jsonl.fingerprints.json && bun run src/generate.ts --split validation --exclude data/synth/heldout.jsonl.fingerprints.json",
     "gen:heldout": "bun run src/generate.ts --split heldout"
   },
