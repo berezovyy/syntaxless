@@ -1,1 +1,3 @@
-Tiny models that remove syntax from software.
+# Syntaxless
+
+Natural-language schedules to a typed intent AST and cron expressions.

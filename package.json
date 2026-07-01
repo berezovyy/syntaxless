@@ -1,0 +1,25 @@
+{
+  "name": "syntaxless",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "typecheck": "bun run --filter '@syntaxless/*' --if-present typecheck",
+    "test": "bun run --filter '@syntaxless/*' --if-present test",
+    "build": "bun run --filter '@syntaxless/*' --if-present build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "latest",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "packageManager": "bun@1.4.0"
+}
