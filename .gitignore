@@ -4,3 +4,5 @@ coverage/
 .DS_Store
 *.log
 tmp/
+packages/cron/training/data/synth/
+training/cron/.venv/
