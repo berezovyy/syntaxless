@@ -6,6 +6,7 @@
  * collides with {@link RESERVED_PHRASES}; the reserved list is registered here
  * exactly once and reused by Phase 08's held-out split.
  */
+import { ORDINAL_WORDS } from "../../src/parser/lexicon.js";
 import type { Rng } from "./rng";
 
 /** Lowercase and collapse whitespace, matching how reserved text is compared. */
@@ -77,7 +78,7 @@ const VERBS = [
   "approve",
 ] as const;
 
-const ORDERS = ["first", "second", "third", "last", "next", "previous"] as const;
+const ORDERS = [...ORDINAL_WORDS.filter((word) => word !== "fourth"), "next", "previous"] as const;
 
 const MAX_ATTEMPTS = 100;
 

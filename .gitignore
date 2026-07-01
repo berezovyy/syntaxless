@@ -5,4 +5,5 @@ coverage/
 *.log
 tmp/
 packages/cron/training/data/synth/
+packages/cron/training/data/llm/
 training/cron/.venv/
