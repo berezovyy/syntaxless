@@ -1,0 +1,35 @@
+{
+  "name": "@syntaxless/cron",
+  "version": "0.0.0",
+  "description": "Natural-language schedules to a typed intent AST and cron expressions",
+  "keywords": [
+    "cron",
+    "natural-language",
+    "recurrence",
+    "schedule",
+    "typescript"
+  ],
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "5.9.3"
+  }
+}
