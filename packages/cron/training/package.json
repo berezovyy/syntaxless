@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "bun test"
+    "test": "bun test",
+    "gen": "bun run src/generate.ts --split train --exclude data/synth/heldout.jsonl.fingerprints.json && bun run src/generate.ts --split validation --exclude data/synth/heldout.jsonl.fingerprints.json",
+    "gen:heldout": "bun run src/generate.ts --split heldout"
   }
 }
