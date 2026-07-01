@@ -9,3 +9,6 @@ export type {
   TimeOfDay,
   Weekday,
 } from "./types/intent.js";
+
+export { compile, compileWeekdays, WEEKDAY_NUMBER } from "./compiler/index.js";
+export type { CompileFailureCode, CompileResult } from "./compiler/index.js";
