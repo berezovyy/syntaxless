@@ -199,7 +199,7 @@ export async function verifyCandidate(
       );
     }
 
-    const parsedText = await parse(text);
+    const parsedText = await parse(text, { source: "rules" });
 
     if (parsedText.ok) {
       return rejection(

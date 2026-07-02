@@ -14,6 +14,8 @@ import {
   WEEKDAY_GROUPS,
   WEEKDAY_SEQUENCE,
 } from "./lexicon.js";
+import { parseWithModel } from "./model.js";
+import type { ModelParserOptions } from "./model.js";
 import { normalize } from "./normalize.js";
 
 export type ParseFailureCode =
@@ -22,18 +24,54 @@ export type ParseFailureCode =
   | "unrecognized-time"
   | "unrecognized-weekday"
   | "unrecognized-interval"
-  | "conflicting-selectors";
+  | "conflicting-selectors"
+  | "low-confidence"
+  | "model-error";
 
+/** Which understanding step produced a {@link ParseResult}. */
+export type ParseSource = "rules" | "model";
+
+/** A machine-readable note attached to a parse. Never carries an intent fact. */
+export interface Diagnostic {
+  code: string;
+  severity: "error" | "warning" | "suggestion";
+  message: string;
+}
+
+/**
+ * Additive extension of the Phase 04 result: the original `ok`/`intent`/
+ * `reason`/`code` members are unchanged, and every variant now carries the
+ * confidence, diagnostics, and the source that produced it.
+ */
 export type ParseResult =
-  { ok: true; intent: ScheduleIntent } | { ok: false; reason: string; code: ParseFailureCode };
+  | {
+      ok: true;
+      intent: ScheduleIntent;
+      confidence: number;
+      diagnostics: Diagnostic[];
+      source: ParseSource;
+    }
+  | {
+      ok: false;
+      reason: string;
+      code: ParseFailureCode;
+      confidence: number;
+      diagnostics: Diagnostic[];
+      source: ParseSource;
+    };
 
 interface Frequency {
   unit: FrequencyUnit;
   interval: number;
 }
 
-function fail(code: ParseFailureCode, reason: string): ParseResult {
-  return { ok: false, reason, code };
+function fail(
+  code: ParseFailureCode,
+  reason: string,
+  source: ParseSource = "rules",
+  diagnostics: Diagnostic[] = [],
+): ParseResult {
+  return { ok: false, reason, code, confidence: 0, diagnostics, source };
 }
 
 function addWeekdayRange(target: Weekday[], start: Weekday, end: Weekday): void {
@@ -101,10 +139,10 @@ function parseTime(text: string): TimeOfDay | "invalid" | null {
 
 /**
  * v0 rule-based parser. It deliberately recognizes a small, closed grammar and fails
- * explicitly on anything else. The function is async so a model-backed implementation can
- * replace the body later without changing the public contract.
+ * explicitly on anything else. It is the baseline the model path must match and the
+ * fallback reachable through `parse(text, { source: "rules" })`.
  */
-export async function parse(text: string): Promise<ParseResult> {
+async function parseWithRules(text: string): Promise<ParseResult> {
   const normalized = normalize(text);
 
   if (normalized.length === 0) {
@@ -348,5 +386,16 @@ export async function parse(text: string): Promise<ParseResult> {
   if (dayOfMonth !== null) intent.dayOfMonth = dayOfMonth;
   if (ordinalWeekday !== null) intent.ordinalWeekday = ordinalWeekday;
 
-  return { ok: true, intent };
+  return { ok: true, intent, confidence: 1, diagnostics: [], source: "rules" };
+}
+
+/**
+ * Public async parse. The model path is the default; `{ source: "rules" }`
+ * reaches the deterministic Phase 04 baseline. Both paths return the same
+ * additive {@link ParseResult}, so `cron()` never needs to know which ran.
+ */
+export async function parse(text: string, options?: ModelParserOptions): Promise<ParseResult> {
+  if (options?.source === "rules") return parseWithRules(text);
+
+  return parseWithModel(text, options);
 }

@@ -14,7 +14,14 @@ export { compile, compileWeekdays, WEEKDAY_NUMBER } from "./compiler/index.js";
 export type { CompileFailureCode, CompileResult } from "./compiler/index.js";
 
 export { parse } from "./parser/index.js";
-export type { ParseFailureCode, ParseResult } from "./parser/index.js";
+
+export type {
+  Diagnostic,
+  ModelParserOptions,
+  ParseFailureCode,
+  ParseResult,
+  ParseSource,
+} from "./parser/index.js";
 
 import { compile } from "./compiler/index.js";
 import type { CompileFailureCode } from "./compiler/index.js";

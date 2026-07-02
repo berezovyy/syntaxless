@@ -103,7 +103,13 @@ const phraseCases: Array<{ phrase: string; intent: ScheduleIntent }> = [
 ];
 
 test.each(phraseCases)("parse: $phrase", async ({ phrase, intent }) => {
-  expect(await parse(phrase)).toEqual({ ok: true, intent });
+  expect(await parse(phrase, { source: "rules" })).toEqual({
+    ok: true,
+    intent,
+    confidence: 1,
+    diagnostics: [],
+    source: "rules",
+  });
 });
 
 const failureCases: Array<{ phrase: string; code: ParseFailureCode }> = [
@@ -118,7 +124,7 @@ const failureCases: Array<{ phrase: string; code: ParseFailureCode }> = [
 ];
 
 test.each(failureCases)("parse fails: $phrase -> $code", async ({ phrase, code }) => {
-  const result = await parse(phrase);
+  const result = await parse(phrase, { source: "rules" });
 
   expect(result.ok).toBe(false);
 
