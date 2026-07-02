@@ -8,12 +8,12 @@
  * accumulation error.
  */
 
-import { decodeWeights } from "./decode.ts";
-import type { WeightsArtifact } from "./decode.ts";
-import { LABEL_COUNT, LABELS } from "./labels.ts";
-import { featureRows, PADDING_ROW } from "./tokenizer.ts";
-import type { RawToken } from "./tokenizer.ts";
-import { weights } from "./weights.gen.ts";
+import { decodeWeights } from "./decode.js";
+import type { WeightsArtifact } from "./decode.js";
+import { LABEL_COUNT, LABELS } from "./labels.js";
+import { featureRows, PADDING_ROW } from "./tokenizer.js";
+import type { RawToken } from "./tokenizer.js";
+import { weights } from "./weights.gen.js";
 
 const ARTIFACT: WeightsArtifact = weights;
 const HIDDEN = ARTIFACT.hidden;
