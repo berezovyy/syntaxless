@@ -42,10 +42,17 @@ FORMAT_VERSION = 1
 STORAGE = "alphabet"
 #: Fixtures freeze at most this many held-out sequences for Phase 16 parity.
 MAX_PARITY_SEQUENCES = 512
-#: Default output locations, relative to the repository root.
-DEFAULT_REPORT = "training/cron/export-report.json"
-DEFAULT_MODULE = "packages/cron/src/model/weights.gen.ts"
+#: Default output locations, relative to the repository root. The exporter never
+#: writes the active module directly: it emits a candidate, runs the Phase 19
+#: gate, and promotes only on acceptance.
+DEFAULT_CANDIDATE = "packages/cron/training/candidate/weights.gen.ts"
+DEFAULT_ACTIVE_MODULE = "packages/cron/src/model/weights.gen.ts"
+DEFAULT_CANDIDATE_REPORT = "training/cron/candidate/export-report.json"
+DEFAULT_REPORT = "training/cron/active/export-report.json"
 DEFAULT_FIXTURES = "packages/cron/tests/fixtures"
+DEFAULT_DIST = "packages/cron/dist"
+DEFAULT_CORPUS = "packages/cron/training/data/gold/reserved-carriers.jsonl"
+DEFAULT_TRAIN_SPLIT = "packages/cron/training/data/synth/train.jsonl"
 #: Files hashed into the report provenance block.
 EXPORT_SOURCES = (
     "calibrate.py",
@@ -420,11 +427,59 @@ def build_artifact(
     }
 
 
+GATE_PACKAGE = "@syntaxless/cron-training"
+GATE_SCRIPT = "gate"
+
+
+def run_gate(
+    candidate_path: Path,
+    baseline_path: Path,
+    dist_dir: Path,
+    corpus_path: Path,
+    train_split: Path,
+    out_path: Path,
+) -> tuple[int, dict | None, str]:
+    """Invoke the Phase 19 gate from the repo root and read its report."""
+    command = [
+        "bun",
+        "run",
+        "--filter",
+        GATE_PACKAGE,
+        GATE_SCRIPT,
+        "--",
+        "--dist",
+        str(dist_dir),
+        "--candidate",
+        str(candidate_path),
+        "--baseline",
+        str(baseline_path),
+        "--corpus",
+        str(corpus_path),
+        "--train-split",
+        str(train_split),
+        "--out",
+        str(out_path),
+    ]
+    completed = subprocess.run(
+        command, cwd=repo_root(), capture_output=True, text=True
+    )
+    report: dict | None = None
+    if out_path.exists():
+        report = json.loads(out_path.read_text())
+    output = (completed.stdout + completed.stderr).strip()
+    return completed.returncode, report, output
+
+
 def export(
     checkpoint_path: Path,
-    report_path: Path,
-    module_path: Path,
+    candidate_path: Path,
+    active_path: Path,
+    candidate_report_path: Path,
+    active_report_path: Path,
     fixtures_dir: Path,
+    dist_dir: Path,
+    corpus_path: Path,
+    train_split: Path,
     data_dir: Path | None = None,
     batch_size: int = 64,
     device: str = "cpu",
@@ -465,9 +520,20 @@ def export(
     heldout_metrics = evaluate(
         decoded, heldout, calibration.threshold, batch_size, device
     )
-    parity = freeze_parity(decoded, heldout, fixtures_dir, max_parity)
 
-    write_text_atomic(module_path, render_module(artifact, artifact_sha))
+    # Emit the candidate artifact. The active module is never written here.
+    module_source = render_module(artifact, artifact_sha)
+    write_text_atomic(candidate_path, module_source)
+
+    gate_out = candidate_report_path.parent / "gate.json"
+    returncode, gate_report, gate_output = run_gate(
+        candidate_path, active_path, dist_dir, corpus_path, train_split, gate_out
+    )
+    accepted = returncode == 0 and bool(gate_report and gate_report.get("accepted"))
+
+    # The frozen parity fixture is part of what ships, so only freeze it once the
+    # candidate is accepted; a rejected export leaves the committed fixtures.
+    parity = freeze_parity(decoded, heldout, fixtures_dir, max_parity) if accepted else None
 
     report = {
         "formatVersion": FORMAT_VERSION,
@@ -506,14 +572,38 @@ def export(
             "heldout": heldout_metrics,
         },
         "parity": parity,
-        "module": display_path(module_path),
+        "candidateModule": display_path(candidate_path),
+        "activeModule": display_path(active_path),
+        "module": display_path(candidate_path),
         "dataDirectory": display_path(data_dir),
         "config": checkpoint.get("config"),
+        "promotion": {
+            "accepted": accepted,
+            "gateReturnCode": returncode,
+            "gateReport": gate_report,
+            "gateOutput": gate_output,
+        },
         "sourceHashes": source_hashes(),
         "gitRev": git_revision(),
     }
-    write_text_atomic(report_path, json.dumps(report, indent=2) + "\n")
-    return report
+    write_text_atomic(candidate_report_path, json.dumps(report, indent=2) + "\n")
+
+    if not accepted:
+        # A rejected candidate is never promoted and never committed.
+        raise SystemExit(
+            "export rejected: "
+            + (gate_output or "the promotion gate did not accept the candidate")
+        )
+
+    # Promote: copy the candidate module and publish the active report last.
+    write_text_atomic(active_path, module_source)
+    active_report = {
+        **report,
+        "module": display_path(active_path),
+        "promotion": {**report["promotion"], "promoted": True},
+    }
+    write_text_atomic(active_report_path, json.dumps(active_report, indent=2) + "\n")
+    return active_report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -524,9 +614,14 @@ def main(argv: list[str] | None = None) -> int:
         description="Export a checkpoint as hash-verified int6 weights.",
     )
     parser.add_argument("--checkpoint", required=True, help="path to best.pt")
+    parser.add_argument("--candidate", default=DEFAULT_CANDIDATE)
+    parser.add_argument("--active", default=DEFAULT_ACTIVE_MODULE)
     parser.add_argument("--report", default=DEFAULT_REPORT)
-    parser.add_argument("--module", default=DEFAULT_MODULE)
+    parser.add_argument("--candidate-report", default=DEFAULT_CANDIDATE_REPORT)
     parser.add_argument("--fixtures", default=DEFAULT_FIXTURES)
+    parser.add_argument("--dist", default=DEFAULT_DIST)
+    parser.add_argument("--corpus", default=DEFAULT_CORPUS)
+    parser.add_argument("--train-split", default=DEFAULT_TRAIN_SPLIT)
     parser.add_argument(
         "--data-dir",
         default=None,
@@ -544,9 +639,14 @@ def main(argv: list[str] | None = None) -> int:
 
     report = export(
         checkpoint_path=checkpoint_path,
-        report_path=resolve_path(args.report),
-        module_path=resolve_path(args.module),
+        candidate_path=resolve_path(args.candidate),
+        active_path=resolve_path(args.active),
+        candidate_report_path=resolve_path(args.candidate_report),
+        active_report_path=resolve_path(args.report),
         fixtures_dir=resolve_path(args.fixtures),
+        dist_dir=resolve_path(args.dist),
+        corpus_path=resolve_path(args.corpus),
+        train_split=resolve_path(args.train_split),
         data_dir=data_dir,
         batch_size=args.batch,
         device=args.device,
@@ -555,9 +655,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"artifact sha256: {report['artifactSha256']}")
     print(f"boundary threshold: {report['boundaryThreshold']}")
     print(f"parameters: {report['parameters']['total']}")
-    print(f"module -> {report['module']}")
+    print(f"candidate -> {report['candidateModule']}")
+    print(f"active -> {report['activeModule']}")
     print(f"report -> {resolve_path(args.report)}")
     return 0
+
 
 
 if __name__ == "__main__":

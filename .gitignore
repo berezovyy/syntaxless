@@ -6,6 +6,8 @@ coverage/
 tmp/
 packages/cron/training/data/synth/
 packages/cron/training/data/llm/
+packages/cron/training/candidate/
+packages/cron/training/results/
 training/cron/.venv/
 training/cron/runs/
 __pycache__/

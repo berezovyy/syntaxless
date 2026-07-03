@@ -11,7 +11,9 @@
     "corpus:merge": "bun run src/corpus/merge.ts",
     "featurize": "bun run src/featurize.ts",
     "gen": "bun run src/generate.ts --split train --exclude data/synth/heldout.jsonl.fingerprints.json && bun run src/generate.ts --split validation --exclude data/synth/heldout.jsonl.fingerprints.json",
-    "gen:heldout": "bun run src/generate.ts --split heldout"
+    "gen:heldout": "bun run src/generate.ts --split heldout",
+    "evaluate": "bun run src/evaluate.ts",
+    "gate": "bun run src/gate.ts"
   },
   "devDependencies": {
     "@opencode-ai/sdk": "1.3.15",
