@@ -8,10 +8,13 @@
  * `model-error`, never a guessed intent. Nothing here calls the rule parser.
  *
  * This module deliberately exposes no injectable engine: the parse options are
- * `{ source?: "model" | "rules" }`, and `parseWithModel` always runs the
- * bundled Phase 15 weights.
+ * `{ source?: "model" | "rules", weights?: Uint8Array }`, and `parseWithModel`
+ * resolves the engine through the lazy Phase 20 lifecycle. The inference module
+ * is imported on demand, so importing this module initializes nothing.
  */
-import { inferTokens } from "../model/inference.js";
+import { getEngine } from "../model/engine.js";
+import type { EngineConfig } from "../model/engine.js";
+import type { Predictions } from "../model/inference.js";
 import { tokenize } from "../model/tokenizer.js";
 import type { RawToken } from "../model/tokenizer.js";
 import { classifyConfidence } from "./confidence.js";
@@ -23,12 +26,19 @@ import type { Diagnostic, ParseResult } from "./parse.js";
 /** Public parser options. `source` defaults to `"model"`. */
 export interface ModelParserOptions {
   source?: "model" | "rules";
+  /** Self-hosted weight bytes; overrides the bundled artifact. */
+  weights?: Uint8Array;
 }
 
-/** Build the decoder's input from tokens and one forward pass. */
-export function labelTokens(tokens: readonly RawToken[]): LabeledToken[] {
-  const predictions = inferTokens(tokens);
-
+/**
+ * Build the decoder's input from tokens and one forward pass. Pure: the
+ * predictions are supplied by the caller, so this module never imports the
+ * inference engine.
+ */
+export function labelTokensFromPredictions(
+  tokens: readonly RawToken[],
+  predictions: Predictions,
+): LabeledToken[] {
   return tokens.map((token, index) => ({
     token,
     role: predictions.labels[index]!,
@@ -115,7 +125,7 @@ export function resultFromLabeledTokens(labeled: readonly LabeledToken[]): Parse
 /** Run the bundled model over normalized text and resolve the intent. */
 export async function parseWithModel(
   text: string,
-  _options?: ModelParserOptions,
+  options?: ModelParserOptions,
 ): Promise<ParseResult> {
   const normalized = normalize(text);
 
@@ -130,5 +140,12 @@ export async function parseWithModel(
     };
   }
 
-  return resultFromLabeledTokens(labelTokens(tokenize(normalized)));
+  const config: EngineConfig | undefined =
+    options?.weights === undefined ? undefined : { weights: options.weights };
+
+  const engine = await getEngine(config);
+  const tokens = tokenize(normalized);
+  const predictions = engine.inferTokens(tokens);
+
+  return resultFromLabeledTokens(labelTokensFromPredictions(tokens, predictions));
 }

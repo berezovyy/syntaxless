@@ -13,7 +13,7 @@ export type {
 export { compile, compileWeekdays, WEEKDAY_NUMBER } from "./compiler/index.js";
 export type { CompileFailureCode, CompileResult } from "./compiler/index.js";
 
-export { parse } from "./parser/index.js";
+export { parse } from "./parser/parse.js";
 
 export type {
   Diagnostic,
@@ -23,10 +23,13 @@ export type {
   ParseSource,
 } from "./parser/index.js";
 
+export { getEngine, preload, dispose } from "./model/engine.js";
+export type { EngineConfig, InferenceEngine } from "./model/engine.js";
+
 import { compile } from "./compiler/index.js";
 import type { CompileFailureCode } from "./compiler/index.js";
-import { parse } from "./parser/index.js";
 import type { ParseFailureCode } from "./parser/index.js";
+import { parse } from "./parser/parse.js";
 import type { ScheduleIntent } from "./types/intent.js";
 
 export type CronFailureCode = ParseFailureCode | CompileFailureCode;

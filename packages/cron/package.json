@@ -27,10 +27,13 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "bun test",
     "build": "tsc -p tsconfig.build.json",
-    "smoke": "bun run build && bun scripts/smoke.ts"
+    "smoke": "bun run build && bun scripts/smoke.ts",
+    "test:browser": "bun run build && bun tests/browser.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "typescript": "5.9.3"
+    "playwright": "1.62.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
   }
 }
