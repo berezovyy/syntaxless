@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
@@ -20,6 +21,20 @@ import { createServer } from "vite";
 const workspaceRoot = resolve(import.meta.dirname, "../../..");
 const ENTRY = "/packages/cron/dist/index.js";
 const SENTENCE = "every weekday at 9";
+
+// The Phase 21 esbuild split emits flat hashed `model-<hash>.js` chunks. Only
+// the chunks that `dist/index.js` imports dynamically belong to the lazy model
+// boundary; statically imported chunks (labels/tokenizer) load on import and
+// must not be counted as initialization.
+const entrySource = readFileSync(resolve(import.meta.dirname, "../dist/index.js"), "utf8");
+
+const lazyModelChunks = new Set(
+  [...entrySource.matchAll(/import\("\.\/(model-[^"]+\.js)"\)/g)].map((match) => match[1]!),
+);
+
+if (lazyModelChunks.size === 0) {
+  throw new Error("browser: no dynamic model chunks found in dist/index.js");
+}
 
 interface RecordedRequest {
   url: string;
@@ -48,6 +63,10 @@ const base = server.resolvedUrls!.local[0]!;
 
 const browser = await chromium.launch({ headless: true });
 const recordings: Recording[] = [];
+// Model chunks are emitted as flat `model-<hash>.js` files by the Phase 21
+// esbuild split. One initialization fetches every chunk in that set, so the
+// per-init count is derived from the first parse instead of hard-coded.
+let modelChunksPerInit = 0;
 
 async function recordedPage(): Promise<{
   page: Awaited<ReturnType<typeof browser.newPage>>;
@@ -69,7 +88,10 @@ async function recordedPage(): Promise<{
       });
     }
 
-    if (url.includes("/model/inference.")) recording.modelChunkCount += 1;
+    const pathname = new URL(url).pathname;
+    const chunkName = pathname.slice(pathname.lastIndexOf("/") + 1);
+
+    if (lazyModelChunks.has(chunkName)) recording.modelChunkCount += 1;
     recording.requests.push({ url, body: request.postData() });
 
     return route.continue();
@@ -114,9 +136,11 @@ try {
       { entry: ENTRY, sentence: SENTENCE },
     );
 
+    modelChunksPerInit = recording.modelChunkCount;
+
     check(
-      recording.modelChunkCount === 1,
-      `first parse requested the model ${recording.modelChunkCount} times, expected 1`,
+      modelChunksPerInit > 0,
+      `first parse requested the model ${modelChunksPerInit} times, expected at least 1`,
     );
 
     await page.close();
@@ -139,8 +163,8 @@ try {
     }, ENTRY);
 
     check(
-      recording.modelChunkCount === 1,
-      `concurrent parses requested the model ${recording.modelChunkCount} times, expected 1`,
+      recording.modelChunkCount === modelChunksPerInit,
+      `concurrent parses requested the model ${recording.modelChunkCount} times, expected ${modelChunksPerInit}`,
     );
 
     await page.close();
@@ -159,8 +183,8 @@ try {
     }, ENTRY);
 
     check(
-      recording.modelChunkCount === 1,
-      `preload requested the model ${recording.modelChunkCount} times, expected 1`,
+      recording.modelChunkCount === modelChunksPerInit,
+      `preload requested the model ${recording.modelChunkCount} times, expected ${modelChunksPerInit}`,
     );
 
     await page.evaluate(
@@ -173,7 +197,7 @@ try {
     );
 
     check(
-      recording.modelChunkCount === 1,
+      recording.modelChunkCount === modelChunksPerInit,
       `parse after preload re-initialized the model (${recording.modelChunkCount} requests), expected no re-init`,
     );
 
@@ -193,8 +217,8 @@ try {
     }, ENTRY);
 
     check(
-      recording.modelChunkCount === 1,
-      `preload requested the model ${recording.modelChunkCount} times, expected 1`,
+      recording.modelChunkCount === modelChunksPerInit,
+      `preload requested the model ${recording.modelChunkCount} times, expected ${modelChunksPerInit}`,
     );
 
     await page.evaluate(async (entry) => {
@@ -215,8 +239,8 @@ try {
     );
 
     check(
-      recording.modelChunkCount === 2,
-      `dispose did not allow re-initialization (${recording.modelChunkCount} requests, expected 2)`,
+      recording.modelChunkCount === modelChunksPerInit * 2,
+      `dispose did not allow re-initialization (${recording.modelChunkCount} requests, expected ${modelChunksPerInit * 2})`,
     );
 
     await page.close();
