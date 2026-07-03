@@ -106,7 +106,7 @@ class Dataset:
     def _load(self, key: str) -> np.ndarray:
         spec = self.manifest.format[key]
         dtype = NUMPY_DTYPES[spec["dtype"]]
-        return np.fromfile(f"{self.prefix}{spec['suffix']}", dtype=dtype)
+        return np.memmap(f"{self.prefix}{spec['suffix']}", dtype=dtype, mode="r")
 
     def __len__(self) -> int:
         return self.sequences
@@ -118,13 +118,18 @@ class Dataset:
             result[key] = _sha256(Path(f"{self.prefix}{spec['suffix']}"))
         return result
 
-    def batches(self, batch_size: int):
+    def batches(self, batch_size: int, shuffle_seed: int | None = None):
         """Yield batches of sequence indices, grouped by similar length.
 
         Sorting by length before chunking means only the last batch of each
         length class carries meaningful padding.
         """
-        order = np.lexsort((np.arange(self.sequences), self.lengths))
+        tie_break = np.arange(self.sequences)
+        if shuffle_seed is not None:
+            permutation = np.random.default_rng(shuffle_seed).permutation(self.sequences)
+            tie_break = np.empty(self.sequences, dtype=np.int64)
+            tie_break[permutation] = np.arange(self.sequences)
+        order = np.lexsort((tie_break, self.lengths))
         for start in range(0, self.sequences, batch_size):
             yield [int(index) for index in order[start : start + batch_size]]
 

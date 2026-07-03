@@ -96,7 +96,7 @@ export interface FeaturizeSummary {
   files: Record<keyof ShardFormat, string> & { manifest: string };
 }
 
-interface PerRecord {
+export interface PerRecord {
   rows: Uint16Array;
   labels: Uint8Array;
   boundaries: Uint8Array;
@@ -111,7 +111,10 @@ interface PerRecord {
  * spans share UTF-16 offsets, so alignment is a comparison of half-open
  * intervals.
  */
-function featurizeRecord(record: CorpusRecord, tokens: ReturnType<typeof tokenize>): PerRecord {
+export function featurizeRecord(
+  record: CorpusRecord,
+  tokens: ReturnType<typeof tokenize>,
+): PerRecord {
   const rows = new Uint16Array(tokens.length * FEATURE_COUNT).fill(PADDING_ROW);
   const labels = new Uint8Array(tokens.length).fill(PADDING_LABEL);
   const boundaries = new Uint8Array(tokens.length);

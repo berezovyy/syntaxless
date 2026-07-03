@@ -27,6 +27,7 @@ class Config:
     storage: str = "training/cron/runs"
     device: str = "cpu"
     device_requested: str = "auto"
+    data_prefix: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize for the report without aliasing the dataclass."""
@@ -63,6 +64,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="'auto', 'cpu', 'cuda', or any torch device string",
     )
+    parser.add_argument(
+        "--data-prefix",
+        default=None,
+        help=(
+            "pre-featurized split base; loads <prefix>-train, "
+            "<prefix>-validation, and <prefix>-heldout instead of generate.ts"
+        ),
+    )
     return parser
 
 
@@ -92,4 +101,5 @@ def parse_args(argv: list[str] | None = None) -> Config:
         storage=args.storage,
         device=resolve_device(args.device),
         device_requested=args.device,
+        data_prefix=args.data_prefix,
     )

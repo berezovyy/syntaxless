@@ -17,19 +17,31 @@ export const WEEKDAY_SEQUENCE: Weekday[] = [
 export const WEEKDAY_ALIASES: Record<string, Weekday> = {
   monday: "monday",
   mon: "monday",
+  "mon.": "monday",
   tuesday: "tuesday",
   tue: "tuesday",
+  tues: "tuesday",
+  "tue.": "tuesday",
+  "tues.": "tuesday",
   wednesday: "wednesday",
   wed: "wednesday",
+  "wed.": "wednesday",
   thursday: "thursday",
   thu: "thursday",
+  thur: "thursday",
   thurs: "thursday",
+  "thu.": "thursday",
+  "thur.": "thursday",
+  "thurs.": "thursday",
   friday: "friday",
   fri: "friday",
+  "fri.": "friday",
   saturday: "saturday",
   sat: "saturday",
+  "sat.": "saturday",
   sunday: "sunday",
   sun: "sunday",
+  "sun.": "sunday",
 };
 
 /**
@@ -47,6 +59,32 @@ export const WEEKDAY_PLURAL_ALIASES: Record<string, Weekday> = {
   sundays: "sunday",
 };
 
+/** Descriptions must name a day without guessing the user's week convention.
+ * Bare "first day of the week" is intentionally NOT an alias for Monday. */
+export const WEEKDAY_DESCRIPTIONS: Readonly<Record<string, Weekday>> = (() => {
+  const entries: Record<string, Weekday> = {};
+  const positions = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh"];
+
+  WEEKDAY_SEQUENCE.forEach((day, index) => {
+    const previous = WEEKDAY_SEQUENCE[(index + 6) % 7]!;
+    const next = WEEKDAY_SEQUENCE[(index + 1) % 7]!;
+
+    entries[`the day after ${previous}`] = day;
+    entries[`the day following ${previous}`] = day;
+    entries[`the day immediately after ${previous}`] = day;
+    entries[`the day before ${next}`] = day;
+    entries[`the day preceding ${next}`] = day;
+    entries[`the day immediately before ${next}`] = day;
+    entries[`the ${positions[index]} day of the ISO week`] = day;
+    entries[`the ${positions[index]} day in an ISO week`] = day;
+    entries[`the ${positions[index]} day of a Monday-first week`] = day;
+  });
+
+  return Object.fromEntries(
+    Object.entries(entries).map(([text, day]) => [text.toLowerCase(), day]),
+  );
+})();
+
 /** Words that expand to a fixed set of weekdays. */
 export const WEEKDAY_GROUPS: Record<string, Weekday[]> = {
   weekday: ["monday", "tuesday", "wednesday", "thursday", "friday"],
@@ -55,7 +93,103 @@ export const WEEKDAY_GROUPS: Record<string, Weekday[]> = {
   workdays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
   weekend: ["saturday", "sunday"],
   weekends: ["saturday", "sunday"],
+  "weekend day": ["saturday", "sunday"],
+  "weekend days": ["saturday", "sunday"],
+  "monday to friday": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  "monday through friday": ["monday", "tuesday", "wednesday", "thursday", "friday"],
 };
+
+export interface DayGroupExpression {
+  text: string;
+  prefix: string;
+  surface: string;
+  weekdays: Weekday[];
+}
+
+/** Complete, grammatical phrasings for the two built-in weekday groups. */
+export const DAYGROUP_EXPRESSIONS: readonly DayGroupExpression[] = ["weekday", "workday"]
+  .flatMap((surface) => [
+    {
+      text: `every ${surface}`,
+      prefix: "every",
+      surface,
+      weekdays: WEEKDAY_GROUPS[surface]!,
+    },
+    {
+      text: `each ${surface}`,
+      prefix: "each",
+      surface,
+      weekdays: WEEKDAY_GROUPS[surface]!,
+    },
+  ])
+  .concat(
+    ["weekdays", "workdays"].flatMap((surface) => [
+      {
+        text: `on ${surface}`,
+        prefix: "on",
+        surface,
+        weekdays: WEEKDAY_GROUPS[surface]!,
+      },
+      {
+        text: `weekly on ${surface}`,
+        prefix: "weekly on",
+        surface,
+        weekdays: WEEKDAY_GROUPS[surface]!,
+      },
+      {
+        text: `every week on ${surface}`,
+        prefix: "every week on",
+        surface,
+        weekdays: WEEKDAY_GROUPS[surface]!,
+      },
+      {
+        text: `each week on ${surface}`,
+        prefix: "each week on",
+        surface,
+        weekdays: WEEKDAY_GROUPS[surface]!,
+      },
+    ]),
+    ["weekend", "weekend day"].flatMap((surface) => [
+      {
+        text: `every ${surface}`,
+        prefix: "every",
+        surface,
+        weekdays: WEEKDAY_GROUPS[surface]!,
+      },
+      {
+        text: `each ${surface}`,
+        prefix: "each",
+        surface,
+        weekdays: WEEKDAY_GROUPS[surface]!,
+      },
+    ]),
+    ["weekends", "weekend days"].flatMap((surface) => [
+      {
+        text: `on ${surface}`,
+        prefix: "on",
+        surface,
+        weekdays: WEEKDAY_GROUPS[surface]!,
+      },
+      {
+        text: `every ${surface}`,
+        prefix: "every",
+        surface,
+        weekdays: WEEKDAY_GROUPS[surface]!,
+      },
+      {
+        text: `each ${surface}`,
+        prefix: "each",
+        surface,
+        weekdays: WEEKDAY_GROUPS[surface]!,
+      },
+    ]),
+    ["monday to friday", "monday through friday"].map((surface) => ({
+      text: surface,
+      prefix: "",
+      surface,
+      weekdays: WEEKDAY_GROUPS[surface]!,
+    })),
+  );
 
 /** Cardinal number words, so both the parser and the renderer spell numbers the
  * same way. `NUMBER_WORDS` is the lookup form; {@link numberWord} is the renderer
@@ -118,27 +252,50 @@ export function numberWord(value: number): string {
 export const UNIT_ALIASES: Record<string, FrequencyUnit> = {
   minute: "minute",
   minutes: "minute",
+  min: "minute",
+  mins: "minute",
   hour: "hour",
   hours: "hour",
+  hr: "hour",
+  hrs: "hour",
   day: "day",
   days: "day",
   week: "week",
   weeks: "week",
+  wk: "week",
+  wks: "week",
   month: "month",
   months: "month",
+  mo: "month",
+  mos: "month",
+};
+
+export const UNIT_ABBREVIATIONS: Readonly<
+  Record<FrequencyUnit, { singular: string; plural: string }>
+> = {
+  minute: { singular: "min", plural: "mins" },
+  hour: { singular: "hr", plural: "hrs" },
+  day: { singular: "day", plural: "days" },
+  week: { singular: "wk", plural: "wks" },
+  month: { singular: "mo", plural: "mos" },
 };
 
 /** Ordinal positions used by weekday rules. */
 export const ORDINAL_ALIASES: Record<string, Ordinal> = {
   first: "first",
+  "1st": "first",
   second: "second",
+  "2nd": "second",
   third: "third",
+  "3rd": "third",
   fourth: "fourth",
+  "4th": "fourth",
   last: "last",
+  final: "last",
 };
 
 /** Ordinal words in declaration order; carrier prose may draw on them. */
-export const ORDINAL_WORDS: readonly Ordinal[] = Object.keys(ORDINAL_ALIASES) as Ordinal[];
+export const ORDINAL_WORDS: readonly string[] = Object.keys(ORDINAL_ALIASES);
 
 /** Ordinal rank for the aligner: positions 1..4, `last` searches from the end. */
 export const ORDINAL_RANK: Record<Ordinal, number> = {
@@ -153,7 +310,334 @@ export const ORDINAL_RANK: Record<Ordinal, number> = {
 export const ADVERB_FREQUENCIES: Record<string, FrequencyUnit> = {
   daily: "day",
   hourly: "hour",
+  weekly: "week",
 };
+
+/** Idioms whose meaning cannot be obtained by reading one integer + unit. */
+export const FREQUENCY_IDIOMS: Readonly<Record<string, { unit: FrequencyUnit; interval: number }>> =
+  {
+    "once a minute": { unit: "minute", interval: 1 },
+    "once an hour": { unit: "hour", interval: 1 },
+    "once a day": { unit: "day", interval: 1 },
+    "once a week": { unit: "week", interval: 1 },
+    "once a month": { unit: "month", interval: 1 },
+    "once per minute": { unit: "minute", interval: 1 },
+    "once per hour": { unit: "hour", interval: 1 },
+    "once per day": { unit: "day", interval: 1 },
+    "once per week": { unit: "week", interval: 1 },
+    "once per month": { unit: "month", interval: 1 },
+    "once each minute": { unit: "minute", interval: 1 },
+    "once each hour": { unit: "hour", interval: 1 },
+    "once each day": { unit: "day", interval: 1 },
+    "once each week": { unit: "week", interval: 1 },
+    "once each month": { unit: "month", interval: 1 },
+    "one time per minute": { unit: "minute", interval: 1 },
+    "one time per hour": { unit: "hour", interval: 1 },
+    "one time per day": { unit: "day", interval: 1 },
+    "one time per week": { unit: "week", interval: 1 },
+    "one time per month": { unit: "month", interval: 1 },
+    "one time a minute": { unit: "minute", interval: 1 },
+    "one time an hour": { unit: "hour", interval: 1 },
+    "one time a day": { unit: "day", interval: 1 },
+    "one time a week": { unit: "week", interval: 1 },
+    "one time a month": { unit: "month", interval: 1 },
+    "each and every minute": { unit: "minute", interval: 1 },
+    "each and every hour": { unit: "hour", interval: 1 },
+    "each and every day": { unit: "day", interval: 1 },
+    "each and every week": { unit: "week", interval: 1 },
+    "each and every month": { unit: "month", interval: 1 },
+    "per minute": { unit: "minute", interval: 1 },
+    "per hour": { unit: "hour", interval: 1 },
+    "per day": { unit: "day", interval: 1 },
+    "per week": { unit: "week", interval: 1 },
+    "per month": { unit: "month", interval: 1 },
+    "once hourly": { unit: "hour", interval: 1 },
+    "once daily": { unit: "day", interval: 1 },
+    "once weekly": { unit: "week", interval: 1 },
+    "once monthly": { unit: "month", interval: 1 },
+    "on an hourly basis": { unit: "hour", interval: 1 },
+    "on a daily basis": { unit: "day", interval: 1 },
+    "on a weekly basis": { unit: "week", interval: 1 },
+    "on a monthly basis": { unit: "month", interval: 1 },
+    "minute by minute": { unit: "minute", interval: 1 },
+    "hour by hour": { unit: "hour", interval: 1 },
+    "day by day": { unit: "day", interval: 1 },
+    "week by week": { unit: "week", interval: 1 },
+    "month by month": { unit: "month", interval: 1 },
+    "every sixty minutes": { unit: "hour", interval: 1 },
+    "every twenty-four hours": { unit: "day", interval: 1 },
+    "every seven days": { unit: "week", interval: 1 },
+    "every fourteen days": { unit: "week", interval: 2 },
+    "every other minute": { unit: "minute", interval: 2 },
+    "every other hour": { unit: "hour", interval: 2 },
+    "every other day": { unit: "day", interval: 2 },
+    "every half hour": { unit: "minute", interval: 30 },
+    "every half an hour": { unit: "minute", interval: 30 },
+    "every half-hour": { unit: "minute", interval: 30 },
+    "half-hourly": { unit: "minute", interval: 30 },
+    "every quarter hour": { unit: "minute", interval: 15 },
+    "every quarter of an hour": { unit: "minute", interval: 15 },
+    "every quarter-hour": { unit: "minute", interval: 15 },
+    "quarter-hourly": { unit: "minute", interval: 15 },
+    fortnightly: { unit: "week", interval: 2 },
+    "every fortnight": { unit: "week", interval: 2 },
+    "once a fortnight": { unit: "week", interval: 2 },
+    "once every fortnight": { unit: "week", interval: 2 },
+    "every other week": { unit: "week", interval: 2 },
+    "every other month": { unit: "month", interval: 2 },
+    "alternate minutes": { unit: "minute", interval: 2 },
+    "alternate hours": { unit: "hour", interval: 2 },
+    "alternate days": { unit: "day", interval: 2 },
+    "alternate weeks": { unit: "week", interval: 2 },
+    "alternate months": { unit: "month", interval: 2 },
+    "alternating minutes": { unit: "minute", interval: 2 },
+    "alternating hours": { unit: "hour", interval: 2 },
+    "alternating days": { unit: "day", interval: 2 },
+    "alternating months": { unit: "month", interval: 2 },
+    "on alternate weeks": { unit: "week", interval: 2 },
+    "on alternating weeks": { unit: "week", interval: 2 },
+  };
+
+export const NAMED_HOURS: Readonly<Record<string, number>> = {
+  noon: 12,
+  midday: 12,
+  "twelve noon": 12,
+  midnight: 0,
+  "twelve midnight": 0,
+};
+
+export const MINUTE_IDIOMS: Readonly<Record<string, number>> = {
+  "a quarter": 15,
+  quarter: 15,
+  half: 30,
+  "a half": 30,
+};
+
+/** Ordinals in calendar dates, distinct from an ordinal weekday selector. */
+export const DAY_ORDINALS: readonly string[] = [
+  "first",
+  "second",
+  "third",
+  "fourth",
+  "fifth",
+  "sixth",
+  "seventh",
+  "eighth",
+  "ninth",
+  "tenth",
+  "eleventh",
+  "twelfth",
+  "thirteenth",
+  "fourteenth",
+  "fifteenth",
+  "sixteenth",
+  "seventeenth",
+  "eighteenth",
+  "nineteenth",
+  "twentieth",
+  "twenty-first",
+  "twenty-second",
+  "twenty-third",
+  "twenty-fourth",
+  "twenty-fifth",
+  "twenty-sixth",
+  "twenty-seventh",
+  "twenty-eighth",
+  "twenty-ninth",
+  "thirtieth",
+  "thirty-first",
+];
+
+/** Unambiguous English month names used inside labeled calendar dates. Numeric
+ * slash dates are intentionally absent because their day/month order is locale
+ * dependent. A trailing period on an abbreviation is accepted by the date
+ * normalizer rather than duplicated in this table. */
+export const MONTH_ALIASES: Readonly<Record<string, number>> = {
+  january: 1,
+  jan: 1,
+  february: 2,
+  feb: 2,
+  march: 3,
+  mar: 3,
+  april: 4,
+  apr: 4,
+  may: 5,
+  june: 6,
+  jun: 6,
+  july: 7,
+  jul: 7,
+  august: 8,
+  aug: 8,
+  september: 9,
+  sep: 9,
+  sept: 9,
+  october: 10,
+  oct: 10,
+  november: 11,
+  nov: 11,
+  december: 12,
+  dec: 12,
+};
+
+export const MONTH_NAMES: readonly string[] = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+export const MONTH_ABBREVIATIONS: readonly string[] = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+export const DAY_RULES = {
+  "last day": "last_day_of_month",
+  "final day": "last_day_of_month",
+  "last calendar day": "last_day_of_month",
+  "last business day": "last_business_day",
+  "final business day": "last_business_day",
+} as const;
+
+export const BOUND_ALIASES: Readonly<
+  Record<string, "start" | "end" | "end-inclusive" | "between">
+> = {
+  from: "start",
+  starting: "start",
+  "starting on": "start",
+  "beginning on": "start",
+  "on or after": "start",
+  "starting from": "start",
+  "beginning from": "start",
+  effective: "start",
+  "effective on": "start",
+  commencing: "start",
+  "commencing on": "start",
+  to: "end",
+  until: "end",
+  before: "end",
+  "ending before": "end",
+  "stopping before": "end",
+  "up until": "end",
+  "but not on or after": "end",
+  "ending on": "end-inclusive",
+  "through and including": "end-inclusive",
+  between: "between",
+};
+
+/** Wording inventories used by deterministic training templates. Entries are
+ * intentionally explicit: similar-looking ambiguous phrases do not belong. */
+export const RECURRENCE_PREFIXES = [
+  "every",
+  "each",
+  "once every",
+  "once per",
+  "repeating every",
+  "recurring every",
+  "at intervals of",
+] as const;
+
+export const UNIT_INTERVAL_PREFIXES = [
+  "every",
+  "each",
+  "once every",
+  "once per",
+  "every single",
+] as const;
+
+export const WEEKDAY_LIST_PREFIXES = [
+  "on",
+  "every",
+  "each",
+  "weekly on",
+  "every week on",
+  "each week on",
+] as const;
+
+export const WEEKDAY_RANGE_CONNECTORS = ["through", "to", "thru", "up to and including"] as const;
+
+export const EXCEPTION_PREFIXES = [
+  "except",
+  "except on",
+  "excluding",
+  "but not",
+  "but not on",
+  "other than",
+  "apart from",
+] as const;
+
+export const START_BOUND_PREFIXES = [
+  "from",
+  "starting",
+  "starting on",
+  "starting from",
+  "beginning on",
+  "beginning from",
+  "on or after",
+  "effective",
+  "effective on",
+  "commencing",
+  "commencing on",
+] as const;
+
+export const END_BOUND_PREFIXES = [
+  "until",
+  "before",
+  "up until",
+  "ending before",
+  "stopping before",
+  "but not on or after",
+] as const;
+
+export const INCLUSIVE_END_BOUND_PREFIXES = ["ending on", "through and including"] as const;
+
+export const CLOCK_PREFIXES = [
+  "at",
+  "for",
+  "scheduled for",
+  "at exactly",
+  "exactly at",
+  "precisely at",
+] as const;
+
+export const CLOCK_EXACT_SUFFIXES = ["sharp", "on the dot"] as const;
+export const INTERVAL_FRAME_SUFFIXES = ["intervals"] as const;
+export const PAST_CONNECTORS = ["past", "after"] as const;
+export const TO_CONNECTORS = ["to", "before"] as const;
+
+export const MONTHLY_PREFIXES = [
+  "monthly on",
+  "every month on",
+  "each month on",
+  "once a month on",
+] as const;
+
+export const ORDINAL_MONTH_FRAMES = [
+  "the {ordinal} {weekday} of every month",
+  "the {ordinal} {weekday} of each month",
+  "every month's {ordinal} {weekday}",
+  "each month's {ordinal} {weekday}",
+  "monthly on the {ordinal} {weekday}",
+  "on the {ordinal} {weekday} every month",
+] as const;
 
 /** Structural words the grammar consumes but never turns into intent fields. */
 export const CONNECTIVES: ReadonlySet<string> = new Set([
@@ -178,6 +662,8 @@ export const WORDS = {
   recur: {
     every: "every",
     each: "each",
+    once: "once",
+    repeating: "repeating",
     recurring: "recurring",
     monthly: "monthly",
   },
@@ -186,13 +672,24 @@ export const WORDS = {
     the: "the",
     of: "of",
     at: "at",
+    in: "in",
     and: "and",
     apart: "apart",
+    after: "after",
+    before: "before",
+    past: "past",
+    per: "per",
+    single: "single",
+    scheduled: "scheduled",
+    for: "for",
     other: "other",
+    alternate: "alternate",
+    alternating: "alternating",
     dash: "-",
     colon: ":",
     comma: ",",
     ampersand: "&",
+    slash: "/",
   },
   unit: {
     minute: "minute",
@@ -269,6 +766,10 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
     entries[word] = surface("WEEKDAY", weekday);
   }
 
+  for (const [word, weekday] of Object.entries(WEEKDAY_DESCRIPTIONS)) {
+    entries[word] = surface("WEEKDAY", weekday);
+  }
+
   for (const word of Object.keys(WEEKDAY_GROUPS)) {
     entries[word] = surface("DAYGROUP", word);
   }
@@ -284,6 +785,8 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
   for (const [word, ordinal] of Object.entries(ORDINAL_ALIASES)) {
     entries[word] = surface("ORDINAL", ORDINAL_RANK[ordinal]);
   }
+
+  for (const word of Object.keys(MONTH_ALIASES)) entries[word] = surface("DOM");
 
   for (const [word, value] of Object.entries(NUMBER_WORDS)) {
     entries[word] = surface("COUNT", value);
@@ -312,6 +815,43 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
   for (const word of Object.values(WORDS.meridiem)) {
     entries[word] = surface("MERIDIEM", word);
   }
+
+  for (const word of Object.values(WORDS.qualifier)) {
+    entries[word] = surface("MERIDIEM");
+  }
+
+  entries["a.m."] = surface("MERIDIEM", "am");
+  entries["p.m."] = surface("MERIDIEM", "pm");
+  entries["a.m"] = surface("MERIDIEM", "am");
+  entries["p.m"] = surface("MERIDIEM", "pm");
+
+  for (const word of Object.keys(FREQUENCY_IDIOMS)) entries[word] = surface("INTERVAL");
+  for (const [word, hour] of Object.entries(NAMED_HOURS)) entries[word] = surface("HOUR", hour);
+
+  for (const [word, minute] of Object.entries(MINUTE_IDIOMS)) {
+    entries[word] = surface("MINUTE", minute);
+  }
+
+  for (const word of Object.keys(DAY_RULES)) {
+    entries[word] = surface("DOM", DAY_RULES[word as keyof typeof DAY_RULES]);
+  }
+
+  for (const word of Object.keys(BOUND_ALIASES)) entries[word] = surface("BOUND");
+
+  DAY_ORDINALS.forEach((word, index) => {
+    entries[word] ??= surface("DOM", index + 1);
+  });
+
+  for (const phrase of RECURRENCE_PREFIXES) entries[phrase] ??= surface("RECUR");
+  for (const phrase of UNIT_INTERVAL_PREFIXES) entries[phrase] ??= surface("RECUR");
+  for (const phrase of WEEKDAY_LIST_PREFIXES) entries[phrase] ??= surface("RECUR");
+  for (const phrase of WEEKDAY_RANGE_CONNECTORS) entries[phrase] ??= surface("GLUE");
+  for (const phrase of EXCEPTION_PREFIXES) entries[phrase] ??= surface("EXCEPT");
+  for (const phrase of CLOCK_PREFIXES) entries[phrase] ??= surface("GLUE");
+  for (const phrase of CLOCK_EXACT_SUFFIXES) entries[phrase] = surface("EDGE");
+  for (const phrase of INTERVAL_FRAME_SUFFIXES) entries[phrase] = surface("EDGE");
+  for (const phrase of PAST_CONNECTORS) entries[phrase] ??= surface("GLUE");
+  for (const phrase of TO_CONNECTORS) entries[phrase] ??= surface("GLUE");
 
   return entries;
 })();

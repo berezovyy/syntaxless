@@ -1,4 +1,4 @@
-"""Training harness: regenerate splits, train the tagger, select on validation.
+"""Training harness: load or regenerate splits, train, select on validation.
 
 One epoch draws a fresh training split (`seed + epoch * STRIDE`), keeps
 validation and heldout frozen, and evaluates every epoch with `qat=True` so the
@@ -107,13 +107,14 @@ def train_epoch(
     batch_size: int,
     device: str,
     qat: bool,
+    shuffle_seed: int,
 ) -> dict[str, float]:
     model.train()
     model.qat = qat
     total_loss = 0.0
     total_tokens = 0
     batches = 0
-    for indices in dataset.batches(batch_size):
+    for indices in dataset.batches(batch_size, shuffle_seed=shuffle_seed):
         batch = dataset.batch(indices, device)
         labels = batch["labels"]
         mask = labels != -100
@@ -236,23 +237,37 @@ def main(argv: list[str] | None = None) -> int:
     data_dir = run_dir / "data"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    heldout_prefix = prepare(
-        "heldout", config.eval_samples, config.seed + HELDOUT_SEED_OFFSET, data_dir
-    )
-    heldout = Dataset(heldout_prefix)
+    external_train: Dataset | None = None
+    if config.data_prefix is not None:
+        external_base = Path(config.data_prefix)
+        if not external_base.is_absolute():
+            external_base = repo / external_base
+        heldout_prefix = Path(f"{external_base}-heldout")
+        validation_prefix = Path(f"{external_base}-validation")
+        train_prefix = Path(f"{external_base}-train")
+        external_train = Dataset(train_prefix)
+        heldout = Dataset(heldout_prefix)
+        validation = Dataset(validation_prefix)
+        assert_disjoint(external_train, heldout)
+        print(f"external corpus: {external_base}-{{train,validation,heldout}}")
+    else:
+        heldout_prefix = prepare(
+            "heldout", config.eval_samples, config.seed + HELDOUT_SEED_OFFSET, data_dir
+        )
+        heldout = Dataset(heldout_prefix)
+        validation_prefix = prepare(
+            "validation",
+            config.eval_samples,
+            config.seed + VALIDATION_SEED_OFFSET,
+            data_dir,
+            exclude=fingerprints_path(heldout_prefix),
+        )
+        validation = Dataset(validation_prefix)
     print(
         f"heldout: {len(heldout)} sequences, {heldout.token_count} tokens "
         f"({len(heldout.fingerprints)} fingerprints)"
     )
 
-    validation_prefix = prepare(
-        "validation",
-        config.eval_samples,
-        config.seed + VALIDATION_SEED_OFFSET,
-        data_dir,
-        exclude=fingerprints_path(heldout_prefix),
-    )
-    validation = Dataset(validation_prefix)
     print(
         f"validation: {len(validation)} sequences, {validation.token_count} tokens "
         f"({len(validation.fingerprints)} fingerprints)"
@@ -272,7 +287,10 @@ def main(argv: list[str] | None = None) -> int:
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.learning_rate, weight_decay=WEIGHT_DECAY
     )
-    steps_per_epoch = max(1, math.ceil(config.samples / config.batch))
+    training_sequences = (
+        len(external_train) if external_train is not None else config.samples
+    )
+    steps_per_epoch = max(1, math.ceil(training_sequences / config.batch))
     scheduler = make_scheduler(
         optimizer, total_steps=config.epochs * steps_per_epoch, warmup_steps=config.warmup_steps
     )
@@ -285,20 +303,30 @@ def main(argv: list[str] | None = None) -> int:
     start = time.time()
 
     for epoch in range(config.epochs):
-        train_prefix = prepare(
-            "train",
-            config.samples,
-            config.seed + epoch * EPOCH_SEED_STRIDE,
-            data_dir,
-            exclude=fingerprints_path(heldout_prefix),
-        )
-        train = Dataset(train_prefix)
+        if external_train is not None:
+            train = external_train
+        else:
+            train_prefix = prepare(
+                "train",
+                config.samples,
+                config.seed + epoch * EPOCH_SEED_STRIDE,
+                data_dir,
+                exclude=fingerprints_path(heldout_prefix),
+            )
+            train = Dataset(train_prefix)
         assert_disjoint(train, heldout)
         latest_train = train
 
         qat = epoch >= config.qat_start
         train_metrics = train_epoch(
-            model, optimizer, scheduler, train, config.batch, config.device, qat
+            model,
+            optimizer,
+            scheduler,
+            train,
+            config.batch,
+            config.device,
+            qat,
+            config.seed + epoch * EPOCH_SEED_STRIDE,
         )
         tokens_seen += int(train_metrics["trainTokens"])
 
