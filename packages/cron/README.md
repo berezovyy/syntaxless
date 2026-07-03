@@ -12,3 +12,10 @@ tokens, intents, or confidence anywhere is not. There is no silent hosted fallba
 default weights work offline, and a self-hoster supplies bytes through `parse`'s `weights` option
 or `preload`/`getEngine` config. Importing the types or the compiler downloads and initializes
 nothing; the model module is imported on the first `parse()`, `preload()`, or `getEngine()` call.
+
+## Weights format
+
+The bundled model artifact carries a `WEIGHTS_FORMAT_VERSION`. A self-hosted artifact whose version
+the runtime does not understand is a hard error (`unsupported-weights-version`) raised before any
+decode — never a silent mis-decode. The weight bytes live in a separately emitted, lazily loaded
+model chunk; the compiler entry does not inline them.

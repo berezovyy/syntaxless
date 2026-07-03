@@ -1,6 +1,6 @@
 {
   "name": "@syntaxless/cron",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Natural-language schedules to a typed intent AST and cron expressions",
   "keywords": [
     "cron",
@@ -12,7 +12,8 @@
   "license": "MIT",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,
@@ -26,12 +27,15 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "bun test",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "bun run scripts/build.ts",
+    "size:gate": "bun run scripts/size-gate.ts",
+    "check:package": "bun run scripts/check-package.ts",
     "smoke": "bun run build && bun scripts/smoke.ts",
     "test:browser": "bun run build && bun tests/browser.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "esbuild": "^0.28.2",
     "playwright": "1.62.0",
     "typescript": "5.9.3",
     "vite": "7.3.6"
