@@ -268,12 +268,16 @@ function writeManifest(state: SplitState): void {
 }
 
 function assertSplitDisjoint(states: Record<Split, SplitState>): void {
-  for (const fingerprint of states.heldout.fingerprints) {
-    if (
-      states.train.fingerprints.has(fingerprint) ||
-      states.validation.fingerprints.has(fingerprint)
-    ) {
-      throw new Error(`held-out fingerprint leaked: ${fingerprint}`);
+  for (let left = 0; left < SPLITS.length; left++) {
+    for (let right = left + 1; right < SPLITS.length; right++) {
+      const leftSplit = SPLITS[left]!;
+      const rightSplit = SPLITS[right]!;
+
+      for (const fingerprint of states[leftSplit].fingerprints) {
+        if (states[rightSplit].fingerprints.has(fingerprint)) {
+          throw new Error(`${leftSplit}/${rightSplit} fingerprint leaked: ${fingerprint}`);
+        }
+      }
     }
   }
 }

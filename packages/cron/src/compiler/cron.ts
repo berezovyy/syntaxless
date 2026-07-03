@@ -118,10 +118,30 @@ export function compile(intent: ScheduleIntent): CompileResult {
 
   if (ordinalFailure) return ordinalFailure;
 
-  if (intent.weekdays !== undefined && intent.dayOfMonth !== undefined) {
+  const selectorCount =
+    Number(intent.weekdays !== undefined) +
+    Number(intent.dayOfMonth !== undefined) +
+    Number(intent.ordinalWeekday !== undefined) +
+    Number(intent.day !== undefined);
+
+  if (selectorCount > 1) {
     return unsupported(
       "conflicting-selectors",
-      "weekdays and dayOfMonth cannot be combined in cron",
+      "multiple day selectors cannot be combined in cron",
+    );
+  }
+
+  if (intent.weekdays !== undefined && unit !== "week") {
+    return unsupported("conflicting-selectors", "weekdays require a weekly frequency");
+  }
+
+  if (
+    (intent.dayOfMonth !== undefined || intent.ordinalWeekday !== undefined) &&
+    unit !== "month"
+  ) {
+    return unsupported(
+      "conflicting-selectors",
+      "monthly day selectors require a monthly frequency",
     );
   }
 

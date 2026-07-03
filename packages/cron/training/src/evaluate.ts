@@ -38,8 +38,8 @@ export const DEFAULTS = {
   out: "packages/cron/training/results/reserved-carriers.json",
 } as const;
 
-/** Cap the failures carried into a report so one bad artifact cannot bloat it. */
-export const MAX_FAILURES = 50;
+/** Keep a few examples for every complete failure-count bucket. */
+export const MAX_FAILURES_PER_CATEGORY = 3;
 
 /** Repository root: this file lives at `packages/cron/training/src/`. */
 export function repoRoot(): string {
@@ -99,6 +99,8 @@ export interface ContractReport {
   correct: number;
   accuracy: number;
   byFamily: Record<string, Counts>;
+  /** Complete counts; unlike `failures`, these are never sample-capped. */
+  failureCounts: Record<string, number>;
   failures: ContractFailure[];
 }
 
@@ -240,17 +242,27 @@ interface Accumulator {
   total: number;
   correct: number;
   byFamily: Record<string, Counts>;
+  failureCounts: Record<string, number>;
+  sampledFailures: Record<string, number>;
   failures: ContractFailure[];
 }
 
 function emptyAccumulator(): Accumulator {
-  return { total: 0, correct: 0, byFamily: {}, failures: [] };
+  return {
+    total: 0,
+    correct: 0,
+    byFamily: {},
+    failureCounts: {},
+    sampledFailures: {},
+    failures: [],
+  };
 }
 
 function record(
   accumulator: Accumulator,
   family: string,
   correct: boolean,
+  category: string,
   failure?: ContractFailure,
 ): void {
   const counts = (accumulator.byFamily[family] ??= { total: 0, correct: 0 });
@@ -261,8 +273,16 @@ function record(
   if (correct) {
     counts.correct += 1;
     accumulator.correct += 1;
-  } else if (failure !== undefined && accumulator.failures.length < MAX_FAILURES) {
-    accumulator.failures.push(failure);
+  } else {
+    const bucket = `${family}:${category}`;
+
+    accumulator.failureCounts[bucket] = (accumulator.failureCounts[bucket] ?? 0) + 1;
+    const sampled = accumulator.sampledFailures[bucket] ?? 0;
+
+    if (failure !== undefined && sampled < MAX_FAILURES_PER_CATEGORY) {
+      accumulator.failures.push(failure);
+      accumulator.sampledFailures[bucket] = sampled + 1;
+    }
   }
 }
 
@@ -284,8 +304,71 @@ function report(
     correct: accumulator.correct,
     accuracy: accumulator.total === 0 ? 0 : accumulator.correct / accumulator.total,
     byFamily: accumulator.byFamily,
+    failureCounts: accumulator.failureCounts,
     failures: accumulator.failures,
   };
+}
+
+const WEEKDAY_ORDER = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+] as const;
+
+function canonicalStrings<T extends string>(values: readonly T[] | undefined): T[] | undefined {
+  return values === undefined ? undefined : [...new Set(values)].sort();
+}
+
+/** Canonical semantic form used for evaluation; input arrays are never mutated. */
+export function canonicalizeIntent(intent: ScheduleIntent): ScheduleIntent {
+  const weekdayRank = new Map(WEEKDAY_ORDER.map((day, index) => [day, index]));
+
+  const weekdays =
+    intent.weekdays === undefined
+      ? undefined
+      : [...new Set(intent.weekdays)].sort(
+          (left, right) => (weekdayRank.get(left) ?? 99) - (weekdayRank.get(right) ?? 99),
+        );
+
+  const exceptionWeekdays =
+    intent.exceptions?.weekdays === undefined
+      ? undefined
+      : [...new Set(intent.exceptions.weekdays)].sort(
+          (left, right) => (weekdayRank.get(left) ?? 99) - (weekdayRank.get(right) ?? 99),
+        );
+
+  const exceptionDates = canonicalStrings(intent.exceptions?.dates);
+
+  return {
+    ...intent,
+    ...(weekdays === undefined ? {} : { weekdays }),
+    ...(intent.exceptions === undefined
+      ? {}
+      : {
+          exceptions: {
+            ...(exceptionDates === undefined ? {} : { dates: exceptionDates }),
+            ...(exceptionWeekdays === undefined ? {} : { weekdays: exceptionWeekdays }),
+          },
+        }),
+  };
+}
+
+function intentDifference(expected: ScheduleIntent, actual: ScheduleIntent): string {
+  const fields = new Set([...Object.keys(expected), ...Object.keys(actual)]);
+
+  const different = [...fields].filter(
+    (field) =>
+      !isDeepStrictEqual(
+        canonicalizeIntent(expected)[field as keyof ScheduleIntent],
+        canonicalizeIntent(actual)[field as keyof ScheduleIntent],
+      ),
+  );
+
+  return different.length === 0 ? "canonical-order" : different.sort().join("+");
 }
 
 /** Map each non-whitespace token onto the gold span that covers it. */
@@ -308,11 +391,51 @@ function goldLabelFor(
 }
 
 export function parseCorpus(contents: string): GoldRecord[] {
-  return contents
+  const records = contents
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => repairObservableGold(JSON.parse(line) as GoldRecord));
+    .map((line) => repairObservableGold(JSON.parse(line) as GoldRecord))
+    .map((item) =>
+      item.intent === null ? item : { ...item, intent: canonicalizeIntent(item.intent) },
+    );
+
+  lintGoldRecords(records);
+
+  return records;
+}
+
+/** Fail before scoring when the gold contract is malformed or unobservable. */
+export function lintGoldRecords(records: readonly GoldRecord[]): void {
+  const ids = new Set<string>();
+
+  for (const item of records) {
+    if (!item.id || ids.has(item.id)) throw new Error(`duplicate or empty gold id: ${item.id}`);
+    ids.add(item.id);
+    if (!item.family || !item.text.trim()) throw new Error(`invalid gold text: ${item.id}`);
+
+    if (item.intent === null && item.expected.supported) {
+      throw new Error(`negative gold cannot expect compilation: ${item.id}`);
+    }
+
+    let end = 0;
+
+    for (const span of item.spans) {
+      if (
+        !span.label ||
+        !Number.isInteger(span.start) ||
+        !Number.isInteger(span.end) ||
+        span.start < end ||
+        span.start < 0 ||
+        span.end <= span.start ||
+        span.end > item.text.length
+      ) {
+        throw new Error(`invalid gold span: ${item.id}`);
+      }
+
+      end = span.end;
+    }
+  }
 }
 
 /** Older reserved clock rows rendered a twelve-hour clock while keeping the
@@ -400,6 +523,7 @@ export async function evaluateCorpus(
         tokenRoles,
         item.family,
         correct,
+        `role:${String(gold)}->${predicted}`,
         correct
           ? undefined
           : {
@@ -417,7 +541,7 @@ export async function evaluateCorpus(
     if (item.intent === null) {
       const rejected = !parsed.ok;
 
-      record(exactAst, item.family, rejected, {
+      record(exactAst, item.family, rejected, "negative-false-accept", {
         id: item.id,
         family: item.family,
         detail: "expected no schedule",
@@ -425,7 +549,7 @@ export async function evaluateCorpus(
         actual: parsed.ok ? parsed.intent : { ok: false, code: parsed.code },
       });
 
-      record(compiledExpression, item.family, rejected, {
+      record(compiledExpression, item.family, rejected, "negative-false-accept", {
         id: item.id,
         family: item.family,
         detail: "expected no expression",
@@ -436,15 +560,31 @@ export async function evaluateCorpus(
       continue;
     }
 
-    const astCorrect = parsed.ok && isDeepStrictEqual(parsed.intent, item.intent);
+    const canonicalExpected = canonicalizeIntent(item.intent);
+    const canonicalActual = parsed.ok ? canonicalizeIntent(parsed.intent) : null;
+    const astCorrect = parsed.ok && isDeepStrictEqual(canonicalActual, canonicalExpected);
 
-    record(exactAst, item.family, astCorrect, {
+    const astCategory = parsed.ok
+      ? `intent:${intentDifference(canonicalExpected, parsed.intent)}`
+      : `parse:${parsed.code}`;
+
+    record(exactAst, item.family, astCorrect, astCategory, {
       id: item.id,
       family: item.family,
       detail: "intent mismatch",
-      expected: item.intent,
-      actual: parsed.ok ? parsed.intent : { ok: false, code: parsed.code },
+      expected: canonicalExpected,
+      actual: parsed.ok ? canonicalActual : { ok: false, code: parsed.code },
     });
+
+    const goldCompiled = engine.compile(canonicalExpected);
+
+    if (
+      goldCompiled.supported !== item.expected.supported ||
+      (goldCompiled.supported && goldCompiled.expression !== item.expected.expression) ||
+      (!goldCompiled.supported && item.expected.expression !== null)
+    ) {
+      throw new Error(`invalid gold compiler expectation: ${item.id}`);
+    }
 
     const compiled = parsed.ok ? engine.compile(parsed.intent) : null;
 
@@ -453,13 +593,23 @@ export async function evaluateCorpus(
         compiled !== null &&
         compiled.supported &&
         compiled.expression === item.expected.expression
-      : parsed.ok && compiled !== null && !compiled.supported;
+      : parsed.ok &&
+        compiled !== null &&
+        !compiled.supported &&
+        !goldCompiled.supported &&
+        compiled.code === goldCompiled.code;
 
-    record(compiledExpression, item.family, expressionCorrect, {
+    const compileCategory = !parsed.ok
+      ? `parse:${parsed.code}`
+      : compiled?.supported
+        ? "wrong-expression"
+        : `unsupported:${compiled?.code ?? "missing"}`;
+
+    record(compiledExpression, item.family, expressionCorrect, compileCategory, {
       id: item.id,
       family: item.family,
       detail: "compiled expression mismatch",
-      expected: item.expected,
+      expected: goldCompiled,
       actual: compiled,
     });
   }

@@ -79,13 +79,15 @@ def git_revision() -> str:
         return "unknown"
 
 
-def assert_disjoint(train: Dataset, heldout: Dataset) -> None:
-    overlap = set(train.fingerprints) & set(heldout.fingerprints)
+def assert_disjoint(
+    left: Dataset, right: Dataset, left_name: str = "train", right_name: str = "heldout"
+) -> None:
+    overlap = set(left.fingerprints) & set(right.fingerprints)
     if overlap:
         sample = ", ".join(sorted(overlap)[:5])
         raise RuntimeError(
-            f"held-out leak: {len(overlap)} fingerprint(s) shared by train and "
-            f"heldout (e.g. {sample})"
+            f"split leak: {len(overlap)} fingerprint(s) shared by {left_name} and "
+            f"{right_name} (e.g. {sample})"
         )
 
 
@@ -290,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
         heldout = Dataset(heldout_prefix)
         validation = Dataset(validation_prefix)
         assert_disjoint(external_train, heldout)
+        assert_disjoint(external_train, validation, "train", "validation")
+        assert_disjoint(validation, heldout, "validation", "heldout")
         print(f"external corpus: {external_base}-{{train,validation,heldout}}")
     else:
         heldout_prefix = prepare(
@@ -358,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             train = Dataset(train_prefix)
         assert_disjoint(train, heldout)
+        assert_disjoint(train, validation, "train", "validation")
         latest_train = train
 
         qat = epoch >= config.qat_start

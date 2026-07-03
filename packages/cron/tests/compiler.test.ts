@@ -182,6 +182,22 @@ const cases: Array<{ name: string; intent: ScheduleIntent; expected: CompileResu
     expected: fail("conflicting-selectors"),
   },
   {
+    name: "daily-with-weekdays",
+    intent: {
+      frequency: { unit: "day", interval: 1 },
+      weekdays: ["monday"],
+    },
+    expected: fail("conflicting-selectors"),
+  },
+  {
+    name: "weekly-with-day-of-month",
+    intent: {
+      frequency: { unit: "week", interval: 1 },
+      dayOfMonth: 15,
+    },
+    expected: fail("conflicting-selectors"),
+  },
+  {
     name: "every-minute-at-9",
     intent: {
       frequency: { unit: "minute", interval: 1 },

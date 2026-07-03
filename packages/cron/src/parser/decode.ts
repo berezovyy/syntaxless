@@ -206,6 +206,31 @@ function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
   return null;
 }
 
+function regexEscape(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Recover an explicit, schedule-scoped day group even when the tagger assigns
+ * its token a structural role. The cue is deliberately required: an incidental
+ * mention such as "weekday prices changed" must not become a schedule. */
+function explicitDayGroup(entries: readonly Entry[]): Weekday[] | undefined {
+  const text = joinEntries(entries);
+
+  for (const [surface, weekdays] of Object.entries(WEEKDAY_GROUPS).sort(
+    ([left], [right]) => right.length - left.length,
+  )) {
+    const phrase = regexEscape(surface).replace(/\\ /g, "\\s+");
+
+    const pattern = new RegExp(
+      `\\b(?:every|each|on|weekly\\s+on|every\\s+week\\s+on|each\\s+week\\s+on)\\s+(?:1\\s+)?${phrase}\\b`,
+    );
+
+    if (pattern.test(text)) return [...weekdays];
+  }
+
+  return undefined;
+}
+
 /** Join a run of tokens the way the renderer emitted them. */
 function joinTokens(tokens: readonly RawToken[]): string {
   let text = "";
@@ -794,6 +819,21 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
 
       intent.time = { hour: Math.floor(total / 60), minute: total % 60 };
     }
+  }
+
+  const dayGroupEvidence = explicitDayGroup(entries);
+
+  if (dayGroupEvidence !== undefined) {
+    // An explicit, separate daily recurrence is genuinely contradictory. A
+    // spurious daily unit inferred from the word "weekday" is safe to repair.
+    const text = joinEntries(entries);
+
+    if (/\b(?:every|each)\s+day\b/.test(text)) {
+      throw new RangeError("decodeIntent: weekdays conflict with daily frequency");
+    }
+
+    intent.frequency.unit = "week";
+    intent.weekdays = normalizeWeekdays([...(intent.weekdays ?? []), ...dayGroupEvidence]);
   }
 
   const failure =

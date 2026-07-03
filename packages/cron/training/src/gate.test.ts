@@ -91,6 +91,16 @@ describe("decide", () => {
     expect(decision.accepted).toBe(false);
     expect(decision.failures.some((failure) => failure.startsWith("terse:"))).toBe(true);
   });
+
+  test("rejects relative improvement that remains below an absolute floor", () => {
+    const decision = decide(
+      { total: 100, correct: 30, byFamily: { terse: { total: 40, correct: 12 } } },
+      { total: 100, correct: 20, byFamily: { terse: { total: 40, correct: 10 } } },
+    );
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.failures).toContain("overall accuracy below 0.5");
+  });
 });
 
 describe("assertSameArtifact", () => {

@@ -34,6 +34,9 @@ import type { Span } from "./sentence";
 /** Two-proportion guard constants, fixed by the plan. */
 export const GUARD_Z = 1.96;
 export const GUARD_MINIMUM_SUPPORT = 30;
+/** Absolute floors prevent a relative improvement from promoting a weak model. */
+export const MIN_OVERALL_ACCURACY = 0.5;
+export const MIN_FAMILY_ACCURACY = 0.25;
 
 /** The overall promotion criterion and the terse-family bare guard. */
 export const CRITERION = "reserved-carrier-exact-intent";
@@ -191,6 +194,20 @@ export function decide(candidate: GateScores, baseline: GateScores): GateDecisio
     if (!guard.passed) failures.push(`${guard.family}: ${guard.reason ?? "failed"}`);
   }
 
+  const overallAccuracy = candidate.total === 0 ? 0 : candidate.correct / candidate.total;
+
+  if (overallAccuracy < MIN_OVERALL_ACCURACY) {
+    failures.push(`overall accuracy below ${MIN_OVERALL_ACCURACY}`);
+  }
+
+  for (const [family, counts] of Object.entries(candidate.byFamily)) {
+    const accuracy = counts.total === 0 ? 0 : counts.correct / counts.total;
+
+    if (accuracy < MIN_FAMILY_ACCURACY) {
+      failures.push(`${family}: accuracy below ${MIN_FAMILY_ACCURACY}`);
+    }
+  }
+
   const candidateBare = candidate.byFamily[BARE_FAMILY] ?? { total: 0, correct: 0 };
   const baselineBare = baseline.byFamily[BARE_FAMILY] ?? { total: 0, correct: 0 };
   const bareGuard = proportionGuard(candidateBare, baselineBare);
@@ -221,7 +238,7 @@ export interface LeakReport {
 const LEAK_SCOPE =
   "Reserved carrier fingerprints are recomputed from the Phase 07 " +
   "RESERVED_PHRASES and intersected with the Phase 08 training split. A " +
-  "missing split is reported as unchecked, never as clean.";
+  "missing split is reported as unchecked and fails promotion.";
 
 /** Map `sha256(coarse(carrier)).slice(0, 12)` back to the carrier text. */
 function carrierHashes(): Map<string, string> {
@@ -314,7 +331,10 @@ export async function runGate(options: GateOptions): Promise<GateReport> {
     const baseline = scoresOf(contractOf(baselineResult, "exactAst"));
     const decision = decide(candidate, baseline);
 
-    if (leak.checked && leak.leaked.length > 0) {
+    if (!leak.checked) {
+      decision.failures.push("training split missing; leakage check was not performed");
+      decision.accepted = false;
+    } else if (leak.leaked.length > 0) {
       decision.failures.push(
         `reserved carrier leaked into training split: ${leak.leaked.join(", ")}`,
       );

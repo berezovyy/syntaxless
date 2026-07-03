@@ -143,5 +143,8 @@ test("normalize canonicalizes and is idempotent", () => {
   expect(once).toBe("every monday at 9 am");
   expect(normalize(once)).toBe(once);
   expect(normalize("Monday\u2013Friday")).toBe("monday-friday");
+  expect(normalize("every1 weekday at 9pm")).toBe("every 1 weekday at 9 pm");
+  expect(normalize("mOndAy")).toBe("monday");
+  expect(normalize("the 15th and v2")).toBe("the 15th and v2");
   expect(() => normalize(123 as unknown as string)).toThrow(TypeError);
 });

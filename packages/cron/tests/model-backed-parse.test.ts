@@ -40,10 +40,16 @@ const phraseCases: Array<{ phrase: string; intent: ScheduleIntent }> = [
   },
   {
     phrase: "every Monday and Friday",
-    intent: { frequency: { unit: "week", interval: 1 }, weekdays: ["monday", "friday"] },
+    intent: {
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["monday", "friday"],
+    },
   },
   { phrase: "every hour", intent: { frequency: { unit: "hour", interval: 1 } } },
-  { phrase: "every 30 minutes", intent: { frequency: { unit: "minute", interval: 30 } } },
+  {
+    phrase: "every 30 minutes",
+    intent: { frequency: { unit: "minute", interval: 30 } },
+  },
   {
     phrase: "at 9",
     intent: { frequency: { unit: "day", interval: 1 }, time: { hour: 9, minute: 0 } },
@@ -72,7 +78,10 @@ const phraseCases: Array<{ phrase: string; intent: ScheduleIntent }> = [
     phrase: "Monday through Friday",
     intent: { frequency: { unit: "week", interval: 1 }, weekdays: [...WEEKDAYS] },
   },
-  { phrase: "the 15th", intent: { frequency: { unit: "month", interval: 1 }, dayOfMonth: 15 } },
+  {
+    phrase: "the 15th",
+    intent: { frequency: { unit: "month", interval: 1 }, dayOfMonth: 15 },
+  },
   {
     phrase: "first monday",
     intent: {
@@ -147,6 +156,19 @@ describe("exact lexical schedule and rejection surfaces", () => {
     expect(result.intent).toEqual({
       frequency: { unit: "month", interval: 1 },
       ordinalWeekday: { ordinal: "first", weekday: "monday" },
+    });
+  });
+
+  test("a missing space cannot silently erase an explicit weekday group", async () => {
+    const result = await parse("every1 weekday at 9");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: [...WEEKDAYS],
+      time: { hour: 9, minute: 0 },
     });
   });
 

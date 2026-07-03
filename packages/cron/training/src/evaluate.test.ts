@@ -2,7 +2,31 @@ import { describe, expect, test } from "bun:test";
 
 import { tokenize } from "../../src/model/tokenizer";
 import type { GoldRecord } from "./evaluate";
-import { repairObservableGold } from "./evaluate";
+import { canonicalizeIntent, lintGoldRecords, repairObservableGold } from "./evaluate";
+
+describe("canonicalizeIntent", () => {
+  test("normalizes semantic sets without mutating the input", () => {
+    const intent = {
+      frequency: { unit: "week" as const, interval: 1 },
+      weekdays: ["friday" as const, "monday" as const],
+      exceptions: {
+        weekdays: ["sunday" as const, "tuesday" as const],
+        dates: ["2026-12-02", "2026-01-01", "2026-12-02"],
+      },
+    };
+
+    expect(canonicalizeIntent(intent)).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["monday", "friday"],
+      exceptions: {
+        weekdays: ["tuesday", "sunday"],
+        dates: ["2026-01-01", "2026-12-02"],
+      },
+    });
+
+    expect(intent.weekdays).toEqual(["friday", "monday"]);
+  });
+});
 
 describe("repairObservableGold", () => {
   test("makes a latent PM clock observable and keeps spans aligned", () => {
@@ -56,5 +80,32 @@ describe("repairObservableGold", () => {
     };
 
     expect(repairObservableGold(explicit)).toBe(explicit);
+  });
+});
+
+describe("lintGoldRecords", () => {
+  test("rejects duplicate ids and overlapping spans", () => {
+    const record: GoldRecord = {
+      id: "same",
+      family: "negative",
+      text: "ordinary prose",
+      spans: [{ start: 0, end: 8, label: "O", clauseStart: false }],
+      intent: null,
+      expected: { supported: false, expression: null },
+    };
+
+    expect(() => lintGoldRecords([record, record])).toThrow(/duplicate/);
+
+    expect(() =>
+      lintGoldRecords([
+        {
+          ...record,
+          spans: [
+            { start: 0, end: 8, label: "O", clauseStart: false },
+            { start: 7, end: 13, label: "O", clauseStart: false },
+          ],
+        },
+      ]),
+    ).toThrow(/span/);
   });
 });
