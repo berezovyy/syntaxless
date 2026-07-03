@@ -159,7 +159,7 @@ def train_epoch(
 @torch.no_grad()
 def evaluate(
     model: Tagger, dataset: Dataset, batch_size: int, device: str
-) -> dict[str, float | int]:
+) -> dict[str, object]:
     model.eval()
     model.qat = True
 
@@ -170,6 +170,14 @@ def evaluate(
     true_positive = 0
     false_positive = 0
     false_negative = 0
+    frame_kind_names = [name.split("/", 1)[0] for name in dataset.manifest.frame_names]
+    kind_names = list(dict.fromkeys(frame_kind_names))
+    kind_index = {name: index for index, name in enumerate(kind_names)}
+    frame_kind_ids = np.asarray(
+        [kind_index[name] for name in frame_kind_names], dtype=np.int64
+    )
+    kind_totals = np.zeros(len(kind_names), dtype=np.int64)
+    kind_correct = np.zeros(len(kind_names), dtype=np.int64)
 
     for indices in dataset.batches(batch_size):
         batch = dataset.batch(indices, device)
@@ -190,15 +198,39 @@ def evaluate(
 
         label_ok = (predictions == labels) | ~mask
         boundary_ok = ((probability >= 0.5) == (batch["boundaries"] >= 0.5)) | ~mask
-        exact_sequences += int((label_ok & boundary_ok).all(dim=1).sum())
+        exact = (label_ok & boundary_ok).all(dim=1)
+        exact_sequences += int(exact.sum())
         sequences += len(indices)
+        if dataset.frames is not None and len(kind_names) > 0:
+            batch_kind_ids = frame_kind_ids[np.asarray(dataset.frames[indices])]
+            kind_totals += np.bincount(batch_kind_ids, minlength=len(kind_names))
+            kind_correct += np.bincount(
+                batch_kind_ids,
+                weights=exact.detach().cpu().numpy().astype(np.int64),
+                minlength=len(kind_names),
+            ).astype(np.int64)
 
     precision = true_positive / max(true_positive + false_positive, 1)
     recall = true_positive / max(true_positive + false_negative, 1)
     f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+    by_kind = {
+        name: {
+            "sequences": int(kind_totals[index]),
+            "exact": int(kind_correct[index]),
+            "exactRate": float(kind_correct[index] / max(kind_totals[index], 1)),
+        }
+        for index, name in enumerate(kind_names)
+    }
+    macro_kind_exact = (
+        float(np.mean([entry["exactRate"] for entry in by_kind.values()]))
+        if by_kind
+        else exact_sequences / max(sequences, 1)
+    )
     return {
         "tokenAccuracy": correct / max(total_tokens, 1),
         "exactLabelAndBoundarySequence": exact_sequences / max(sequences, 1),
+        "macroKindExactSequence": macro_kind_exact,
+        "byKind": by_kind,
         "boundaryPrecision": precision,
         "boundaryRecall": recall,
         "boundaryF1": f1,
@@ -345,8 +377,11 @@ def main(argv: list[str] | None = None) -> int:
         tokens_seen += int(train_metrics["trainTokens"])
 
         metrics = evaluate(model, validation, config.batch, config.device)
+        # Equalize checkpoint selection across sentence kinds. The global
+        # sequence metric is dominated by large Cartesian schedule lattices;
+        # macro-kind exactness makes terse and negative language count too.
         criterion = float(metrics["tokenAccuracy"]) + float(
-            metrics["exactLabelAndBoundarySequence"]
+            metrics["macroKindExactSequence"]
         )
 
         save_checkpoint(run_dir / "last.pt", model, config, epoch, criterion, metrics)
@@ -372,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
             f"epoch {epoch}: qat={qat} loss={train_metrics['trainLoss']:.4f} "
             f"tokenAcc={metrics['tokenAccuracy']:.4f} "
             f"exactSeq={metrics['exactLabelAndBoundarySequence']:.4f} "
+            f"macroKind={metrics['macroKindExactSequence']:.4f} "
             f"criterion={criterion:.4f}"
         )
         if (
@@ -399,7 +435,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report = {
         "selectionCriterion": (
-            "validation.tokenAccuracy + validation.exactLabelAndBoundarySequence"
+            "validation.tokenAccuracy + validation.macroKindExactSequence"
         ),
         "config": config.to_dict(),
         "sourceHashes": source_hashes(),

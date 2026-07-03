@@ -110,6 +110,75 @@ describe("model-backed parse parity with the Phase 04 table", () => {
   });
 });
 
+describe("exact lexical schedule and rejection surfaces", () => {
+  test.each(["MON", "mon", "mOn", "the first day of the week", "on the first day of the week"])(
+    "%s resolves to Monday after normalization",
+    async (phrase) => {
+      const result = await parse(phrase);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      expect(result.intent).toEqual({
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["monday"],
+      });
+    },
+  );
+
+  test("a bare exact clock does not depend on model confidence", async () => {
+    const result = await parse("at 9");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+      time: { hour: 9, minute: 0 },
+    });
+  });
+
+  test("an exact ordinal weekday remains monthly", async () => {
+    const result = await parse("first Monday");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "month", interval: 1 },
+      ordinalWeekday: { ordinal: "first", weekday: "monday" },
+    });
+  });
+
+  test.each([
+    "I did not mean every hour",
+    "Maybe Tuesday or Wednesday",
+    "How does an hourly schedule work?",
+    "At half past",
+    "The last Friday of",
+    "Weekdays except",
+    "Monthly on the",
+    "Nine people joined on Tuesday",
+    "The deadline moved from Monday to Friday",
+    "This report is produced every month by another system",
+    "Forget what I said about Friday",
+    "Should this happen every week?",
+    "Who changed it to Tuesday?",
+    "Why did this run at midnight?",
+    "The meeting happened Monday at nine",
+    "I finished the report last Friday",
+    "Alex arrived at half past eight",
+    "The office closes on weekends",
+    "I used to call every Sunday",
+  ])("%s is explicitly rejected", async (phrase) => {
+    const result = await parse(phrase);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result).not.toHaveProperty("intent");
+  });
+});
+
 describe("confidence bands", () => {
   const labeledWith = (text: string, roles: number[], score: number): LabeledToken[] => {
     const tokens = tokenize(text).filter((token) => token.kind !== 3);

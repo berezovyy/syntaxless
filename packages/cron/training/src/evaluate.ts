@@ -312,7 +312,49 @@ export function parseCorpus(contents: string): GoldRecord[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as GoldRecord);
+    .map((line) => repairObservableGold(JSON.parse(line) as GoldRecord));
+}
+
+/** Older reserved clock rows rendered a twelve-hour clock while keeping the
+ * sampled 24-hour intent, so `1:30 daily` could secretly mean either 01:30 or
+ * 13:30. Make the latent choice observable at evaluation time without writing
+ * another generated JSONL artifact into Git. */
+export function repairObservableGold(item: GoldRecord): GoldRecord {
+  if (
+    item.family !== "time-of-day" ||
+    item.intent?.time === undefined ||
+    /\b(?:am|pm)\b/i.test(item.text)
+  ) {
+    return item;
+  }
+
+  const minute = [...item.spans].reverse().find((span) => span.label === "MINUTE");
+
+  if (minute === undefined) return item;
+  const meridiem = item.intent.time.hour >= 12 ? "pm" : "am";
+  const insertion = minute.end;
+  const added = ` ${meridiem}`;
+
+  const spans = item.spans.map((span) =>
+    span.start >= insertion
+      ? { ...span, start: span.start + added.length, end: span.end + added.length }
+      : span,
+  );
+
+  spans.push({
+    start: insertion + 1,
+    end: insertion + added.length,
+    label: "MERIDIEM",
+    clauseStart: false,
+  });
+
+  spans.sort((left, right) => left.start - right.start);
+
+  return {
+    ...item,
+    text: `${item.text.slice(0, insertion)}${added}${item.text.slice(insertion)}`,
+    spans,
+  };
 }
 
 /**
@@ -327,8 +369,9 @@ export async function evaluateCorpus(
 ): Promise<EvaluationResult> {
   const source = resolveRepo(corpusPath);
   const contents = await readFile(source, "utf8");
-  const corpusSha256 = sha256Hex(contents);
   const records = parseCorpus(contents);
+  const effectiveContents = records.map((item) => JSON.stringify(item)).join("\n");
+  const corpusSha256 = sha256Hex(effectiveContents.length === 0 ? "" : `${effectiveContents}\n`);
 
   const familyDistribution: Record<string, number> = {};
 

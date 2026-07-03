@@ -896,6 +896,12 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
   entries["the cadence is"] = surface("GLUE");
   entries["a cycle of"] = surface("GLUE");
   entries["between runs"] = surface("EDGE");
+  entries["the recurrence interval is"] = surface("GLUE");
+  entries["a repeat interval of"] = surface("GLUE");
+  entries["runs on a"] = surface("RECUR");
+  entries["on a cadence of"] = surface("RECUR");
+  entries["cycle"] = surface("EDGE");
+  entries["apart"] = surface("EDGE");
   for (const phrase of PAST_CONNECTORS) entries[phrase] ??= surface("GLUE");
   for (const phrase of TO_CONNECTORS) entries[phrase] ??= surface("GLUE");
 

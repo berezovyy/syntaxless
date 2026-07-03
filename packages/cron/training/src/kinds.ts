@@ -314,7 +314,18 @@ const POSITIVE_CARRIERS = [
  * schedule spans and intent remain unchanged. */
 const CARRIER_BASES: Readonly<Partial<Record<KindId, readonly string[]>>> = {
   "unit-interval": ["every-unit"],
-  "n-interval": ["every-n", "interval-is", "cadence-is", "cycle-of", "between-runs"],
+  "n-interval": [
+    "every-n",
+    "interval-is",
+    "cadence-is",
+    "cycle-of",
+    "between-runs",
+    "recurrence-interval-is",
+    "repeat-interval-of",
+    "runs-on-cycle",
+    "cadence-of",
+    "spaced-apart",
+  ],
   daygroup: ["expression-0"],
   "single-weekday": ["every-day"],
   "weekday-list": ["prefix-0-full"],
@@ -1016,14 +1027,25 @@ function renderNInterval(sentence: Sentence, intent: ScheduleIntent, templateId:
     templateId === "interval-is" ||
     templateId === "cadence-is" ||
     templateId === "cycle-of" ||
-    templateId === "between-runs"
+    templateId === "between-runs" ||
+    templateId === "recurrence-interval-is" ||
+    templateId === "repeat-interval-of" ||
+    templateId === "runs-on-cycle" ||
+    templateId === "cadence-of" ||
+    templateId === "spaced-apart"
   ) {
     if (templateId === "interval-is") sentence.add("the interval is", "GLUE");
     if (templateId === "cadence-is") sentence.add("the cadence is", "GLUE");
     if (templateId === "cycle-of") sentence.add("a cycle of", "GLUE");
+    if (templateId === "recurrence-interval-is") sentence.add("the recurrence interval is", "GLUE");
+    if (templateId === "repeat-interval-of") sentence.add("a repeat interval of", "GLUE");
+    if (templateId === "runs-on-cycle") sentence.add("runs on a", "RECUR");
+    if (templateId === "cadence-of") sentence.add("on a cadence of", "RECUR");
     sentence.add(String(interval), "INTERVAL");
     sentence.add(plural(unit, interval), "GLUE");
     if (templateId === "between-runs") sentence.add("between runs", "EDGE");
+    if (templateId === "runs-on-cycle") sentence.add("cycle", "EDGE");
+    if (templateId === "spaced-apart") sentence.add("apart", "EDGE");
 
     return true;
   }
@@ -2674,6 +2696,11 @@ export const KINDS: readonly KindDef[] = [
       { id: "cadence-is", split: "train" },
       { id: "cycle-of", split: "train" },
       { id: "between-runs", split: "train" },
+      { id: "recurrence-interval-is", split: "train" },
+      { id: "repeat-interval-of", split: "train" },
+      { id: "runs-on-cycle", split: "train" },
+      { id: "cadence-of", split: "train" },
+      { id: "spaced-apart", split: "train" },
     ],
     intents: nIntervalIntents(),
     render: (sentence, intent, templateId) => renderNInterval(sentence, intent!, templateId),

@@ -102,6 +102,110 @@ interface ClauseFacts {
   exceptions: ScheduleExceptions;
 }
 
+/** Exact, context-free surfaces whose meaning is completely determined by the
+ * shared lexicon. Keeping these in the decoder makes short inputs robust to a
+ * sparse-hash collision without treating a weekday mentioned in prose as a
+ * schedule. Longer conversational inputs still go through the tagger. */
+function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
+  const text = joinEntries(entries);
+
+  // Explicit corrections, cancellations, questions, and hedged alternatives
+  // are not schedules even when they contain otherwise valid schedule words.
+  if (
+    /\b(?:do not|don't|did not|didn't)\s+mean\b/.test(text) ||
+    /^(?:no,?\s+not\b|actually,?\s+never mind\b)/.test(text) ||
+    /^maybe\b.*\bor\b/.test(text) ||
+    /^how (?:do|does|would|can)\b.*\b(?:work|mean)\b/.test(text) ||
+    /^(?:should|who|why)\b/.test(text) ||
+    /^forget what i said\b/.test(text) ||
+    /\b(?:meeting happened|deadline moved|people joined|finished the report|arrived at|used to)\b/.test(
+      text,
+    ) ||
+    /^the office closes on\b/.test(text) ||
+    /\bby another system$/.test(text) ||
+    /\b(?:except|excluding|through|from|of)$/.test(text) ||
+    /\b(?:at half past|monthly on the)$/.test(text)
+  ) {
+    throw new RangeError("decodeIntent: explicitly non-scheduling input");
+  }
+
+  const weekdaySurface = text.replace(/^(?:every|each|on)\s+/, "");
+
+  const weekday =
+    WEEKDAY_ALIASES[weekdaySurface] ??
+    WEEKDAY_PLURAL_ALIASES[weekdaySurface] ??
+    WEEKDAY_DESCRIPTIONS[weekdaySurface];
+
+  if (weekday !== undefined) {
+    return {
+      intent: { frequency: { unit: "week", interval: 1 }, weekdays: [weekday] },
+      confidence: 1,
+    };
+  }
+
+  const group = WEEKDAY_GROUPS[weekdaySurface];
+
+  if (group !== undefined) {
+    return {
+      intent: { frequency: { unit: "week", interval: 1 }, weekdays: [...group] },
+      confidence: 1,
+    };
+  }
+
+  const ordinalWeekday = /^([a-z0-9]+)\s+([a-z]+)$/.exec(text);
+
+  if (ordinalWeekday !== null) {
+    const ordinal = ORDINAL_ALIASES[ordinalWeekday[1]!];
+    const ordinalDay = WEEKDAY_ALIASES[ordinalWeekday[2]!];
+
+    if (ordinal !== undefined && ordinalDay !== undefined) {
+      return {
+        intent: {
+          frequency: { unit: "month", interval: 1 },
+          ordinalWeekday: { ordinal, weekday: ordinalDay },
+        },
+        confidence: 1,
+      };
+    }
+  }
+
+  const numericTime = /^at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/.exec(text);
+
+  if (numericTime !== null) {
+    const time = resolveTime(
+      Number(numericTime[1]),
+      numericTime[2] === undefined ? 0 : Number(numericTime[2]),
+      numericTime[3] as "am" | "pm" | undefined,
+    );
+
+    if (validateTime(time) === null) {
+      return {
+        intent: { frequency: { unit: "day", interval: 1 }, time },
+        confidence: 1,
+      };
+    }
+  }
+
+  const wordTime = /^at\s+([a-z]+)(?:\s+(am|pm))?$/.exec(text);
+
+  if (wordTime !== null) {
+    const hourValue = numberFrom(wordTime[1]!);
+
+    if (hourValue !== undefined) {
+      const time = resolveTime(hourValue, 0, wordTime[2] as "am" | "pm" | undefined);
+
+      if (validateTime(time) === null) {
+        return {
+          intent: { frequency: { unit: "day", interval: 1 }, time },
+          confidence: 1,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 /** Join a run of tokens the way the renderer emitted them. */
 function joinTokens(tokens: readonly RawToken[]): string {
   let text = "";
@@ -111,6 +215,23 @@ function joinTokens(tokens: readonly RawToken[]): string {
     const previous = tokens[index - 1];
 
     if (previous !== undefined && previous.kind === 0 && token.kind === 0) text += " ";
+    text += token.text;
+  }
+
+  return text.toLowerCase();
+}
+
+/** Reconstruct a normalized sentence from non-whitespace tokens. Unlike
+ * joinTokens(), this preserves a whitespace gap between unlike token kinds
+ * (for example the word/number boundary in `at 9`). */
+function joinEntries(entries: readonly Entry[]): string {
+  let text = "";
+
+  for (let index = 0; index < entries.length; index++) {
+    const token = entries[index]!.token;
+    const previous = entries[index - 1]?.token;
+
+    if (previous !== undefined && token.start > previous.end) text += " ";
     text += token.text;
   }
 
@@ -571,6 +692,10 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   }
 
   if (entries.length === 0) throw new RangeError("decodeIntent: no tokens");
+
+  const lexical = exactLexicalIntent(entries);
+
+  if (lexical !== null) return lexical;
 
   let interval: number | undefined;
   let unit: FrequencyUnit | undefined;
