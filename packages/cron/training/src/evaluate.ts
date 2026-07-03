@@ -152,6 +152,10 @@ interface DistLabels {
   LABELS: readonly string[];
 }
 
+interface DistEvaluation extends DistTokenizer, DistInference, DistLabels {
+  weights: WeightsArtifact;
+}
+
 /** A decoded runtime plus the provenance of the artifact it runs. */
 export interface Engine {
   artifactSha256: string;
@@ -184,11 +188,9 @@ export async function loadEngine(distDir: string, weightsModulePath?: string): P
   let temp: string | null = null;
 
   if (weightsModulePath === undefined) {
-    const bundled = await importModule<{ weights: WeightsArtifact }>(
-      join(built, "model", "weights.gen.js"),
-    );
+    const evaluation = await importModule<DistEvaluation>(join(built, "evaluation.js"));
 
-    artifact = bundled.weights;
+    artifact = evaluation.weights;
   } else {
     const modulePath = resolveRepo(weightsModulePath);
 
@@ -210,9 +212,7 @@ export async function loadEngine(distDir: string, weightsModulePath?: string): P
   }
 
   const index = await importModule<DistIndex>(join(root, "index.js"));
-  const tokenizer = await importModule<DistTokenizer>(join(root, "model", "tokenizer.js"));
-  const inference = await importModule<DistInference>(join(root, "model", "inference.js"));
-  const labels = await importModule<DistLabels>(join(root, "model", "labels.js"));
+  const evaluation = await importModule<DistEvaluation>(join(root, "evaluation.js"));
 
   const artifactSha256 = sha256Hex(artifact.q);
   const scratch = temp;
@@ -221,10 +221,10 @@ export async function loadEngine(distDir: string, weightsModulePath?: string): P
     artifactSha256,
     parse: index.parse.bind(index),
     compile: index.compile.bind(index),
-    tokenize: tokenizer.tokenize.bind(tokenizer),
-    inferTokens: inference.inferTokens.bind(inference),
+    tokenize: evaluation.tokenize.bind(evaluation),
+    inferTokens: evaluation.inferTokens.bind(evaluation),
     labelName: (id: number) => {
-      const label = labels.LABELS[id];
+      const label = evaluation.LABELS[id];
 
       if (label === undefined) throw new RangeError(`label id out of range: ${id}`);
 

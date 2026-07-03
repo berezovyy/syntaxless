@@ -227,6 +227,7 @@ def evaluate(
     """Role accuracy plus boundary precision/recall/F1 at the calibrated threshold."""
     model.eval()
     model.qat = False
+    device = next(model.parameters()).device
     correct = 0
     total_tokens = 0
     exact_sequences = 0
@@ -284,6 +285,7 @@ def freeze_parity(
     """
     model.eval()
     model.qat = False
+    device = next(model.parameters()).device
     count = min(int(max_sequences), len(dataset))
     rows_parts: list[np.ndarray] = []
     logits_parts: list[np.ndarray] = []
@@ -294,9 +296,11 @@ def freeze_parity(
         end = int(dataset.offsets[index + 1])
         rows = dataset.rows[start:end]
         neighbors = dataset.neighbors[start:end]
-        row_tensor = torch.as_tensor(rows.astype(np.int64)).unsqueeze(0)
-        valid = torch.ones(1, end - start, dtype=torch.bool)
-        neighbor_tensor = torch.as_tensor(neighbors.astype(np.int64)).unsqueeze(0)
+        row_tensor = torch.as_tensor(rows.astype(np.int64)).unsqueeze(0).to(device)
+        valid = torch.ones(1, end - start, dtype=torch.bool, device=device)
+        neighbor_tensor = (
+            torch.as_tensor(neighbors.astype(np.int64)).unsqueeze(0).to(device)
+        )
         roles, boundary = model(row_tensor, valid, neighbor_tensor)
         rows_parts.append(rows)
         logits_parts.append(roles[0].detach().cpu().numpy().astype(np.float32))
@@ -381,12 +385,28 @@ def resolve_path(value: str | Path) -> Path:
     return path if path.is_absolute() else repo_root() / path
 
 
-def load_datasets(checkpoint: dict, data_dir: Path) -> tuple[Dataset, Dataset]:
-    """Load validation and held-out shards, regenerating any that are missing."""
+def load_datasets(
+    checkpoint: dict, data_dir: Path | None
+) -> tuple[Dataset, Dataset, Path]:
+    """Load validation and held-out shards, including external corpus runs."""
+    run = checkpoint.get("config", {})
+    external_prefix = run.get("data_prefix")
+    if data_dir is None and external_prefix:
+        base = resolve_path(external_prefix)
+        validation_prefix = Path(f"{base}-validation")
+        heldout_prefix = Path(f"{base}-heldout")
+        for prefix in (validation_prefix, heldout_prefix):
+            if not Path(f"{prefix}.json").exists():
+                raise FileNotFoundError(f"external shard missing: {prefix}.json")
+        return Dataset(validation_prefix), Dataset(heldout_prefix), base
+
+    if data_dir is None:
+        data_dir = Path(checkpoint.get("checkpointDirectory", ""))
+        if not str(data_dir):
+            raise ValueError("data_dir is required for a non-external checkpoint")
     validation_prefix = data_dir / "validation"
     heldout_prefix = data_dir / "heldout"
     if not Path(f"{heldout_prefix}.json").exists():
-        run = checkpoint.get("config", {})
         prepare(
             "heldout",
             int(run.get("eval_samples", 500)),
@@ -394,7 +414,6 @@ def load_datasets(checkpoint: dict, data_dir: Path) -> tuple[Dataset, Dataset]:
             data_dir,
         )
     if not Path(f"{validation_prefix}.json").exists():
-        run = checkpoint.get("config", {})
         prepare(
             "validation",
             int(run.get("eval_samples", 500)),
@@ -402,7 +421,7 @@ def load_datasets(checkpoint: dict, data_dir: Path) -> tuple[Dataset, Dataset]:
             data_dir,
             exclude=fingerprints_path(heldout_prefix),
         )
-    return Dataset(validation_prefix), Dataset(heldout_prefix)
+    return Dataset(validation_prefix), Dataset(heldout_prefix), data_dir
 
 
 def build_artifact(
@@ -502,9 +521,9 @@ def export(
     segments, q = pack_state(state)
     artifact_sha = sha256_text(q)
 
-    if data_dir is None:
+    if data_dir is None and not checkpoint.get("config", {}).get("data_prefix"):
         data_dir = checkpoint_path.parent / "data"
-    validation, heldout = load_datasets(checkpoint, data_dir)
+    validation, heldout, resolved_data = load_datasets(checkpoint, data_dir)
 
     artifact = build_artifact(segments, q, labels, checkpoint, hidden, 0.0)
     decoded = build_decoded_model(artifact, device)
@@ -575,7 +594,7 @@ def export(
         "candidateModule": display_path(candidate_path),
         "activeModule": display_path(active_path),
         "module": display_path(candidate_path),
-        "dataDirectory": display_path(data_dir),
+        "dataDirectory": display_path(resolved_data),
         "config": checkpoint.get("config"),
         "promotion": {
             "accepted": accepted,

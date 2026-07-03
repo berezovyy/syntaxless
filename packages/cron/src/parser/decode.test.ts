@@ -235,7 +235,7 @@ describe("range and interval rules", () => {
     const intent = weekdays(["monday", "tuesday", "wednesday", "thursday", "friday"]);
     const example = renderIntent(intent, "weekday-range", noCarrier, "through");
 
-    expect(example.text).toBe("Monday through Friday");
+    expect(example.text).toBe("monday through friday");
     const labeled = labelTokens(example);
 
     expect(decodeIntent(labeled).intent).toEqual(intent);

@@ -225,5 +225,5 @@ test("labels are supplied by add() and never derived from parsing", () => {
 
   const content = example.spans.filter((span) => CONTENT_LABELS.has(span.label));
 
-  expect(content.map((span) => example.text.slice(span.start, span.end))).toEqual(["Monday"]);
+  expect(content.map((span) => example.text.slice(span.start, span.end))).toEqual(["monday"]);
 });

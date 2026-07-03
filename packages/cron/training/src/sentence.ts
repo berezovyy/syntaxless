@@ -12,6 +12,7 @@
  */
 import type { Label } from "../../src/model/labels";
 import { isStructural } from "../../src/model/labels";
+import { normalize } from "../../src/parser/normalize";
 
 export interface Span {
   start: number;
@@ -49,6 +50,13 @@ export class Sentence {
    * record the resulting UTF-16 span.
    */
   add(text: string, label: Label = "O", separator = " "): void {
+    // The shipped model never sees raw user text: parseWithModel normalizes it
+    // before tokenization. Normalize each renderer fragment before recording
+    // offsets so training features and production features share exactly the
+    // same casing, Unicode, meridiem, and terminal-punctuation policy while
+    // preserving intentional empty separators such as `2-minute`.
+    text = normalize(text);
+    if (text.length === 0) return;
     if (this.#text.length > 0) this.#text += separator;
     const start = this.#text.length;
 

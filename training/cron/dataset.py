@@ -59,6 +59,8 @@ class ShardManifest:
     feature_rows: int
     label_counts: dict[str, int]
     format: dict[str, dict[str, str]]
+    frame_names: list[str]
+    frame_counts: list[int]
 
     @classmethod
     def load(cls, prefix: Path) -> "ShardManifest":
@@ -70,6 +72,8 @@ class ShardManifest:
             feature_rows=int(parsed["featureRows"]),
             label_counts={key: int(value) for key, value in parsed["labelCounts"].items()},
             format=parsed["format"],
+            frame_names=list(parsed.get("frameNames", [])),
+            frame_counts=[int(value) for value in parsed.get("frameCounts", [])],
         )
 
 
@@ -91,6 +95,7 @@ class Dataset:
         self.kinds = self._load("kinds")
         self.neighbors = self._load("neighbors")
         self.offsets = self._load("offsets")
+        self.frames = self._load("frames") if "frames" in self.manifest.format else None
 
         self.sequences = int(self.offsets.shape[0]) - 1
         self.token_count = int(self.offsets[-1])
@@ -102,6 +107,23 @@ class Dataset:
         self.rows = self.rows.reshape(self.token_count, self.rows_per_token)
         self.neighbors = self.neighbors.reshape(self.token_count, 2)
         self.lengths = (self.offsets[1:] - self.offsets[:-1]).astype(np.int64)
+        self.frame_members: list[np.ndarray] = []
+        if self.frames is not None:
+            if self.frames.size != self.sequences:
+                raise ValueError(
+                    f"{self.prefix}: frames has {self.frames.size} values, "
+                    f"expected {self.sequences}"
+                )
+            frame_count = len(self.manifest.frame_names)
+            if frame_count == 0 or int(self.frames.max(initial=0)) >= frame_count:
+                raise ValueError(f"{self.prefix}: invalid frame ids or names")
+            self.frame_members = [
+                np.flatnonzero(self.frames == frame_id)
+                for frame_id in range(frame_count)
+            ]
+            actual_counts = [int(members.size) for members in self.frame_members]
+            if self.manifest.frame_counts and actual_counts != self.manifest.frame_counts:
+                raise ValueError(f"{self.prefix}: frame counts do not match frames shard")
 
     def _load(self, key: str) -> np.ndarray:
         spec = self.manifest.format[key]
@@ -118,18 +140,60 @@ class Dataset:
             result[key] = _sha256(Path(f"{self.prefix}{spec['suffix']}"))
         return result
 
-    def batches(self, batch_size: int, shuffle_seed: int | None = None):
+    def batches(
+        self,
+        batch_size: int,
+        shuffle_seed: int | None = None,
+        balance_frames: bool = False,
+        balance_kinds: bool = False,
+        frame_balance_power: float = 0.5,
+    ):
         """Yield batches of sequence indices, grouped by similar length.
 
         Sorting by length before chunking means only the last batch of each
         length class carries meaningful padding.
         """
-        tie_break = np.arange(self.sequences)
+        rng = np.random.default_rng(shuffle_seed)
+        selected = np.arange(self.sequences)
+        if balance_frames or balance_kinds:
+            if not self.frame_members:
+                raise ValueError(
+                    f"{self.prefix}: balanced batching requires a frames shard"
+                )
+            counts = np.asarray(
+                [members.size for members in self.frame_members], dtype=np.float64
+            )
+            masses = (
+                np.power(counts, 1.0 - frame_balance_power)
+                if balance_frames
+                else counts.copy()
+            )
+            if balance_kinds:
+                kind_frames: dict[str, list[int]] = {}
+                for frame_id, frame_name in enumerate(self.manifest.frame_names):
+                    kind_frames.setdefault(frame_name.split("/", 1)[0], []).append(
+                        frame_id
+                    )
+                # Normalize within each kind. Every kind then contributes one
+                # unit of total mass, while --balance-frames controls how that
+                # unit is distributed among the kind's wording frames.
+                for frame_ids in kind_frames.values():
+                    kind_mass = float(masses[frame_ids].sum())
+                    masses[frame_ids] /= kind_mass
+            draw_counts = rng.multinomial(self.sequences, masses / masses.sum())
+            draws: list[np.ndarray] = []
+            for count, members in zip(draw_counts, self.frame_members, strict=True):
+                if count:
+                    draws.append(rng.choice(members, size=count, replace=True))
+            selected = np.concatenate(draws)
+            rng.shuffle(selected)
+
+        tie_break = np.arange(selected.size)
         if shuffle_seed is not None:
-            permutation = np.random.default_rng(shuffle_seed).permutation(self.sequences)
-            tie_break = np.empty(self.sequences, dtype=np.int64)
-            tie_break[permutation] = np.arange(self.sequences)
-        order = np.lexsort((tie_break, self.lengths))
+            permutation = rng.permutation(selected.size)
+            tie_break = np.empty(selected.size, dtype=np.int64)
+            tie_break[permutation] = np.arange(selected.size)
+        order = selected[np.lexsort((tie_break, self.lengths[selected]))]
         for start in range(0, self.sequences, batch_size):
             yield [int(index) for index in order[start : start + batch_size]]
 

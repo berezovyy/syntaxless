@@ -10,7 +10,8 @@
  * Rule and LLM records take the identical path. The shard contract is owned
  * here and is authoritative for the Python reader: `uint16` rows (17 per
  * token), `uint8` labels/boundaries/kinds, `int16` neighbour pairs, and a
- * `uint32` sequence-offset table of length `N + 1`.
+ * `uint32` sequence-offset table of length `N + 1`, and one `uint32` wording
+ * frame id per sequence.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
@@ -41,7 +42,7 @@ export const MAX_TOKENS = 128;
  */
 export const PADDING_LABEL = LABEL_COUNT;
 
-/** The six shard files, each named by suffix and storage dtype. */
+/** Shard files, each named by suffix and storage dtype. */
 export const SHARD_FORMAT = {
   rows: { suffix: ".rows.bin", dtype: "uint16" },
   labels: { suffix: ".labels.bin", dtype: "uint8" },
@@ -49,17 +50,20 @@ export const SHARD_FORMAT = {
   kinds: { suffix: ".kinds.bin", dtype: "uint8" },
   neighbors: { suffix: ".neighbors.bin", dtype: "int16" },
   offsets: { suffix: ".offsets.bin", dtype: "uint32" },
+  frames: { suffix: ".frames.bin", dtype: "uint32" },
 } as const;
 
 export type ShardFormat = typeof SHARD_FORMAT;
 
-/** The manifest layout contract. Six fields, `labelCounts` the only aggregate. */
+/** The manifest layout contract, including sequence-level wording frames. */
 export interface FeaturizeManifest {
   fingerprints: string[];
   roleClasses: number;
   rowsPerToken: number;
   featureRows: number;
   labelCounts: Record<string, number>;
+  frameNames: string[];
+  frameCounts: number[];
   format: ShardFormat;
 }
 
@@ -76,12 +80,15 @@ export interface FeaturizedShard {
   kinds: Uint8Array;
   neighbors: Int16Array;
   offsets: Uint32Array;
+  frames: Uint32Array;
   sequences: number;
   tokens: number;
   skippedEmpty: number;
   skippedLong: number;
   labelCounts: Record<string, number>;
   fingerprints: string[];
+  frameNames: string[];
+  frameCounts: number[];
 }
 
 export interface FeaturizeSummary {
@@ -231,6 +238,10 @@ export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedSh
   const kindChunks: Uint8Array[] = [];
   const neighborChunks: Int16Array[] = [];
   const offsets: number[] = [0];
+  const frames: number[] = [];
+  const frameIds = new Map<string, number>();
+  const frameNames: string[] = [];
+  const frameCounts: number[] = [];
   const labelCounts: Record<string, number> = {};
 
   for (const label of LABELS) labelCounts[label] = 0;
@@ -260,6 +271,18 @@ export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedSh
     boundaryChunks.push(shard.boundaries);
     kindChunks.push(shard.kinds);
     neighborChunks.push(shard.neighbors);
+    const frameName = record.template ?? `${record.family}/unspecified`;
+    let frameId = frameIds.get(frameName);
+
+    if (frameId === undefined) {
+      frameId = frameNames.length;
+      frameIds.set(frameName, frameId);
+      frameNames.push(frameName);
+      frameCounts.push(0);
+    }
+
+    frames.push(frameId);
+    frameCounts[frameId]!++;
     sequences++;
     tokens += shard.tokenCount;
     offsets.push(offsets.at(-1)! + shard.tokenCount);
@@ -276,12 +299,15 @@ export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedSh
     kinds: concatUint8(kindChunks),
     neighbors: concatInt16(neighborChunks),
     offsets: Uint32Array.from(offsets),
+    frames: Uint32Array.from(frames),
     sequences,
     tokens,
     skippedEmpty,
     skippedLong,
     labelCounts,
     fingerprints: [...new Set(records.map((record) => record.fingerprint))].sort(),
+    frameNames,
+    frameCounts,
   };
 }
 
@@ -327,6 +353,7 @@ export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
     kinds: shardPath(out, "kinds"),
     neighbors: shardPath(out, "neighbors"),
     offsets: shardPath(out, "offsets"),
+    frames: shardPath(out, "frames"),
     manifest: `${out}.json`,
   };
 
@@ -336,6 +363,7 @@ export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
   writeBinary(files.kinds, shard.kinds);
   writeBinary(files.neighbors, shard.neighbors);
   writeBinary(files.offsets, shard.offsets);
+  writeBinary(files.frames, shard.frames);
 
   const manifest: FeaturizeManifest = {
     fingerprints: shard.fingerprints,
@@ -343,6 +371,8 @@ export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
     rowsPerToken: FEATURE_COUNT,
     featureRows: EMBEDDING_ROWS,
     labelCounts: shard.labelCounts,
+    frameNames: shard.frameNames,
+    frameCounts: shard.frameCounts,
     format: SHARD_FORMAT,
   };
 

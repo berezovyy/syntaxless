@@ -108,13 +108,22 @@ def train_epoch(
     device: str,
     qat: bool,
     shuffle_seed: int,
+    balance_frames: bool,
+    balance_kinds: bool,
+    frame_balance_power: float,
 ) -> dict[str, float]:
     model.train()
     model.qat = qat
     total_loss = 0.0
     total_tokens = 0
     batches = 0
-    for indices in dataset.batches(batch_size, shuffle_seed=shuffle_seed):
+    for indices in dataset.batches(
+        batch_size,
+        shuffle_seed=shuffle_seed,
+        balance_frames=balance_frames,
+        balance_kinds=balance_kinds,
+        frame_balance_power=frame_balance_power,
+    ):
         batch = dataset.batch(indices, device)
         labels = batch["labels"]
         mask = labels != -100
@@ -299,6 +308,8 @@ def main(argv: list[str] | None = None) -> int:
     tokens_seen = 0
     best_criterion: float | None = None
     best_epoch: int | None = None
+    non_improving_epochs = 0
+    stopped_early = False
     latest_train = None
     start = time.time()
 
@@ -327,6 +338,9 @@ def main(argv: list[str] | None = None) -> int:
             config.device,
             qat,
             config.seed + epoch * EPOCH_SEED_STRIDE,
+            config.balance_frames,
+            config.balance_kinds,
+            config.frame_balance_power,
         )
         tokens_seen += int(train_metrics["trainTokens"])
 
@@ -336,10 +350,14 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         save_checkpoint(run_dir / "last.pt", model, config, epoch, criterion, metrics)
-        if best_criterion is None or criterion > best_criterion:
+        improved = best_criterion is None or criterion > best_criterion
+        if improved:
             best_criterion = criterion
             best_epoch = epoch
+            non_improving_epochs = 0
             save_checkpoint(run_dir / "best.pt", model, config, epoch, criterion, metrics)
+        else:
+            non_improving_epochs += 1
 
         entry = {
             "epoch": epoch,
@@ -356,6 +374,17 @@ def main(argv: list[str] | None = None) -> int:
             f"exactSeq={metrics['exactLabelAndBoundarySequence']:.4f} "
             f"criterion={criterion:.4f}"
         )
+        if (
+            config.early_stopping_patience > 0
+            and epoch + 1 >= config.min_epochs
+            and non_improving_epochs >= config.early_stopping_patience
+        ):
+            stopped_early = True
+            print(
+                f"early stop after {epoch + 1} epochs: "
+                f"{non_improving_epochs} epochs without validation improvement"
+            )
+            break
 
     label_histogram = {
         "train": latest_train.label_counts if latest_train is not None else {},
@@ -387,6 +416,8 @@ def main(argv: list[str] | None = None) -> int:
         "parameters": counts,
         "bestCriterion": best_criterion,
         "bestEpoch": best_epoch,
+        "epochsCompleted": len(history),
+        "stoppedEarly": stopped_early,
     }
     write_report(run_dir / "report.json", report)
     print(f"best epoch {best_epoch} criterion {best_criterion}")

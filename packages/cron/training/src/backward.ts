@@ -153,13 +153,20 @@ export function assignSplit(example: KindExample): KindExample {
 function toRecord(example: KindExample, index: number): CorpusRecord {
   const split = example.split;
 
+  const fingerprint =
+    example.intent === null
+      ? createHash("sha256")
+          .update(`negative\0${coarseText(example.example.text)}`)
+          .digest("hex")
+      : fingerprintExample(example.example);
+
   return {
     id: `${split}-${String(index).padStart(6, "0")}`,
     split,
     seed: BACKWARD_SEED,
     family: example.family,
     template: example.template,
-    fingerprint: fingerprintExample(example.example),
+    fingerprint,
     text: example.example.text,
     intent: example.intent,
     spans: example.example.spans,
@@ -189,10 +196,7 @@ function countBySplit(records: readonly CorpusRecord[]): Record<Split, number> {
 /** Expand the catalog, assign splits, and write JSONL plus fingerprints. */
 export function generateBackward(options: BackwardOptions): BackwardResult {
   const wanted = options.kinds === undefined ? undefined : new Set(options.kinds);
-
-  const expanded = expandKinds().filter(
-    (example) => wanted === undefined || wanted.has(example.kind),
-  );
+  const expanded = expandKinds(wanted);
 
   if (wanted !== undefined) {
     for (const id of wanted) {
@@ -257,8 +261,7 @@ export function writeBackward(options: BackwardOptions): BackwardSummary {
   let chunk = "";
 
   try {
-    for (const expanded of iterateKinds()) {
-      if (wanted !== undefined && !wanted.has(expanded.kind)) continue;
+    for (const expanded of iterateKinds(wanted)) {
       const example = assignSplit(expanded);
 
       if (options.split !== undefined && example.split !== options.split) continue;

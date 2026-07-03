@@ -36,6 +36,7 @@ import {
   UNIT_ABBREVIATIONS,
   UNIT_INTERVAL_PREFIXES,
   WEEKDAY_ABBR,
+  WEEKDAY_ALIASES,
   WEEKDAY_DESCRIPTIONS,
   WEEKDAY_GROUPS,
   WEEKDAY_LIST_PREFIXES,
@@ -144,6 +145,12 @@ const HELD_OUT_DAYGROUPS: readonly { surface: string; weekdays: Weekday[] }[] = 
 
 const DOM_DAYS: readonly number[] = integers(1, 31);
 
+const WEEKDAY_ALIAS_ENTRIES = Object.entries(WEEKDAY_ALIASES) as Array<[string, Weekday]>;
+
+const WEEKDAY_DESCRIPTION_ENTRIES = Object.entries(WEEKDAY_DESCRIPTIONS) as Array<
+  [string, Weekday]
+>;
+
 function calendarDates(year: number): string[] {
   const result: string[] = [];
 
@@ -167,13 +174,190 @@ const MONTH_RANGES_2026: readonly { start: string; end: string }[] = integers(1,
   }),
 );
 
-const NEGATIVES: readonly string[] = [
-  "Please open the file.",
-  "Could you review the document for Alex.",
-  "The report contains 12 examples.",
-  "Sam wrote the next page.",
-  "Choose option 4 from section 2.",
-];
+const NEGATIVE_GROUPS = {
+  ordinary: [
+    "Please open the file.",
+    "Could you review the document for Alex?",
+    "The report contains twelve examples.",
+    "Sam wrote the next page.",
+    "Choose option four from section two.",
+    "Send the invoice to the finance team.",
+    "Archive this conversation.",
+    "Turn on dark mode.",
+    "Rename the project to Apollo.",
+    "Add Priya to the workspace.",
+    "The build completed successfully.",
+    "I prefer the second proposal.",
+  ],
+  incomplete: [
+    "every",
+    "every other",
+    "once per",
+    "at",
+    "at half past",
+    "on Monday at",
+    "from Tuesday through",
+    "the last Friday of",
+    "weekdays except",
+    "starting on",
+    "until the",
+    "monthly on the",
+    "repeat this every",
+    "schedule it for",
+  ],
+  ambiguous: [
+    "Monday works for me.",
+    "Friday might be better.",
+    "Morning is probably fine.",
+    "Sometime after nine would work.",
+    "Let's discuss it next week.",
+    "The first day is the hardest.",
+    "We could do this monthly.",
+    "Every option has drawbacks.",
+    "I visit often on weekends.",
+    "Nine people joined on Tuesday.",
+    "The deadline moved from Monday to Friday.",
+    "The shop is open daily.",
+    "Hourly billing is expensive.",
+    "This report is produced every month by another system.",
+  ],
+  corrective: [
+    "No, not Monday.",
+    "Forget what I said about Friday.",
+    "Cancel the weekday idea.",
+    "That time was a mistake.",
+    "I did not mean every hour.",
+    "Ignore the previous schedule.",
+    "Actually, never mind.",
+    "Do not create that recurrence.",
+    "Scratch the nine o'clock suggestion.",
+    "The monthly option is wrong.",
+    "I am correcting the date, not scheduling anything.",
+    "Stop; the schedule is still undecided.",
+  ],
+  conversational: [
+    "When would you like to meet?",
+    "Does Monday work for everyone?",
+    "What time is the appointment?",
+    "Should this happen every week?",
+    "Are weekends included?",
+    "Which Friday did you mean?",
+    "Do you want morning or afternoon?",
+    "Is this a recurring task?",
+    "Can we decide the schedule later?",
+    "Why was the reminder moved?",
+    "Who changed it to Tuesday?",
+    "Where can I see the current schedule?",
+  ],
+  quoted: [
+    "The documentation uses the example 'every Monday'.",
+    "She wrote 'at nine' in the message.",
+    "The phrase 'once a month' appears twice.",
+    "Translate 'every weekday' into French.",
+    "Explain what 'every other Friday' means.",
+    "Search for messages containing 'daily at noon'.",
+    "The button is labeled 'schedule weekly'.",
+    "Remove the words 'at midnight' from the title.",
+    "He asked whether 'Monday through Friday' was clear.",
+    "The test case named 'every hour' is failing.",
+    "Copy 'the last Friday' to the clipboard.",
+    "Bold the text 'weekdays except Friday'.",
+  ],
+  meta: [
+    "Show me the existing schedule.",
+    "Delete the current schedule.",
+    "Is there already a reminder?",
+    "Why did this run at midnight?",
+    "List all recurring jobs.",
+    "Disable scheduling for this task.",
+    "The cron expression is invalid.",
+    "This parser does not understand Tuesdays.",
+    "How does an hourly schedule work?",
+    "Compare daily and weekly recurrence.",
+    "Do not change any dates.",
+    "Keep the schedule exactly as it is.",
+  ],
+  temporal: [
+    "The meeting happened Monday at nine.",
+    "I finished the report last Friday.",
+    "We met at noon yesterday.",
+    "The server failed twice this morning.",
+    "Alex arrived at half past eight.",
+    "The office closes on weekends.",
+    "Sales increased every month last year.",
+    "The train leaves at six, according to the timetable.",
+    "I used to call every Sunday.",
+    "The alarm rang hourly during the test.",
+    "They worked Monday through Friday in June.",
+    "The invoice was due on the first of May.",
+  ],
+} as const;
+
+const NEGATIVES: readonly { category: string; text: string }[] = Object.entries(
+  NEGATIVE_GROUPS,
+).flatMap(([category, texts]) => texts.map((text) => ({ category, text })));
+
+/** Natural carriers deliberately distinct from the reserved promotion corpus. */
+const POSITIVE_CARRIERS = [
+  "set a reminder for",
+  "can you schedule this for",
+  "please make this happen",
+  "I'd like this to run",
+  "actually, change it to",
+  "instead, make the schedule",
+] as const;
+
+/** Semantically complete base frames that receive conversational carriers.
+ * Clock-only schedules deliberately cover several surface families: otherwise
+ * a frame-disjoint split can leave the model with no training example where
+ * prose is followed directly by an HOUR clause start. Carrier text is O; the
+ * schedule spans and intent remain unchanged. */
+const CARRIER_BASES: Readonly<Partial<Record<KindId, readonly string[]>>> = {
+  "unit-interval": ["every-unit"],
+  "n-interval": ["every-n", "interval-is", "cadence-is", "cycle-of", "between-runs"],
+  daygroup: ["expression-0"],
+  "single-weekday": ["every-day"],
+  "weekday-list": ["prefix-0-full"],
+  "weekday-range": ["from-to"],
+  "every-other": ["every-other"],
+  "time-of-day": [
+    "digits",
+    "hour-meridiem",
+    "spoken",
+    "24h",
+    "compact",
+    "dotted-meridiem",
+    "oclock",
+  ],
+  "day-at-time": [
+    "every-day-at",
+    "daily-at",
+    "time-daily",
+    "digits-daily",
+    "compact-daily",
+    "24h-daily",
+    "digits-every-day",
+    "digits-each-day",
+    "daily-digits",
+    "daily-basis-at",
+  ],
+  "daygroup-at-time": ["expression-0"],
+  "day-of-month": ["on-the"],
+  "day-of-month-at-time": ["the-at"],
+  "ordinal-weekday": ["the-ordinal-of"],
+  "ordinal-weekday-at-time": ["ordinal-of-each-at"],
+  bounds: ["from-to"],
+  "exception-group": ["except-weekends"],
+};
+
+function receivesCarrier(kind: KindId, template: string): boolean {
+  if (CARRIER_BASES[kind]?.includes(template)) return true;
+
+  return (
+    kind === "single-weekday" &&
+    (template.includes("-alias-") || template.includes("-description-surface-"))
+  );
+}
 
 function plural(unit: FrequencyUnit, count: number): string {
   return count === 1 ? unit : `${unit}s`;
@@ -413,6 +597,8 @@ type ClockStyle =
   | "minute-to"
   | "minute-before"
   | "dotted-meridiem"
+  | "compact-dotted-meridiem"
+  | "spaced-dotted-meridiem"
   | "oclock"
   | "sharp"
   | "on-the-dot"
@@ -588,6 +774,20 @@ function addClock(
       sentence.add(WORDS.glue.colon, "GLUE", "");
       sentence.add(paddedMinute(minute), "MINUTE", "");
       sentence.add(meridiem(hour) === "am" ? "a.m." : "p.m.", "MERIDIEM");
+      break;
+    case "compact-dotted-meridiem":
+      sentence.add(prefix, "GLUE");
+      sentence.add(String(hour12(hour)), "HOUR");
+      sentence.add(WORDS.glue.colon, "GLUE", "");
+      sentence.add(paddedMinute(minute), "MINUTE", "");
+      sentence.add(meridiem(hour) === "am" ? "a.m." : "p.m.", "MERIDIEM", "");
+      break;
+    case "spaced-dotted-meridiem":
+      sentence.add(prefix, "GLUE");
+      sentence.add(String(hour12(hour)), "HOUR");
+      sentence.add(WORDS.glue.colon, "GLUE", "");
+      sentence.add(paddedMinute(minute), "MINUTE", "");
+      sentence.add(meridiem(hour) === "am" ? "a. m." : "p. m.", "MERIDIEM");
       break;
     case "oclock":
       if (minute !== 0 || qualifierForHour(hour) === undefined) return;
@@ -765,12 +965,24 @@ function renderNInterval(sentence: Sentence, intent: ScheduleIntent, templateId:
     return true;
   }
 
-  if (templateId === "at-hyphenated" || templateId === "in-hyphenated") {
-    sentence.add(templateId === "at-hyphenated" ? WORDS.glue.at : WORDS.glue.in, "GLUE");
+  if (
+    templateId === "at-hyphenated" ||
+    templateId === "in-hyphenated" ||
+    templateId === "every-hyphenated" ||
+    templateId === "on-a-hyphenated-cycle"
+  ) {
+    if (templateId === "at-hyphenated") sentence.add(WORDS.glue.at, "GLUE");
+    else if (templateId === "in-hyphenated") sentence.add(WORDS.glue.in, "GLUE");
+    else if (templateId === "every-hyphenated") sentence.add(WORDS.recur.every, "RECUR");
+    else sentence.add("on a", "RECUR");
     sentence.add(String(interval), "INTERVAL");
     sentence.add(WORDS.glue.dash, "GLUE", "");
     sentence.add(unit, "GLUE", "");
-    sentence.add(INTERVAL_FRAME_SUFFIXES[0], "EDGE");
+
+    sentence.add(
+      templateId === "on-a-hyphenated-cycle" ? "cycle" : INTERVAL_FRAME_SUFFIXES[0],
+      "EDGE",
+    );
 
     return true;
   }
@@ -800,6 +1012,22 @@ function renderNInterval(sentence: Sentence, intent: ScheduleIntent, templateId:
     return true;
   }
 
+  if (
+    templateId === "interval-is" ||
+    templateId === "cadence-is" ||
+    templateId === "cycle-of" ||
+    templateId === "between-runs"
+  ) {
+    if (templateId === "interval-is") sentence.add("the interval is", "GLUE");
+    if (templateId === "cadence-is") sentence.add("the cadence is", "GLUE");
+    if (templateId === "cycle-of") sentence.add("a cycle of", "GLUE");
+    sentence.add(String(interval), "INTERVAL");
+    sentence.add(plural(unit, interval), "GLUE");
+    if (templateId === "between-runs") sentence.add("between runs", "EDGE");
+
+    return true;
+  }
+
   switch (templateId) {
     case "every-n":
       sentence.add(WORDS.recur.every, "RECUR");
@@ -818,6 +1046,19 @@ function renderNInterval(sentence: Sentence, intent: ScheduleIntent, templateId:
       sentence.add(WORDS.recur.every, "RECUR");
       sentence.add(String(interval), "INTERVAL");
       sentence.add(plural(unit, interval), "GLUE");
+
+      return true;
+    case "once-per-n":
+      sentence.add("once per", "RECUR");
+      sentence.add(String(interval), "INTERVAL");
+      sentence.add(plural(unit, interval), "GLUE");
+
+      return true;
+    case "every-n-on-repeat":
+      sentence.add(WORDS.recur.every, "RECUR");
+      sentence.add(String(interval), "INTERVAL");
+      sentence.add(plural(unit, interval), "GLUE");
+      sentence.add("on repeat", "EDGE");
 
       return true;
     default:
@@ -839,7 +1080,10 @@ function renderDaygroup(sentence: Sentence, intent: ScheduleIntent, templateId: 
       return false;
     }
 
-    if (expression.prefix !== "") sentence.add(expression.prefix, "RECUR");
+    if (expression.prefix !== "") {
+      sentence.add(expression.prefix, expression.prefix === "on" ? "GLUE" : "RECUR");
+    }
+
     sentence.add(expression.surface, "DAYGROUP");
 
     return true;
@@ -881,6 +1125,31 @@ function renderSingleWeekday(
   templateId: string,
 ): boolean {
   const weekday = intent.weekdays![0]!;
+  const alias = /^(every|on|bare)-alias-(\d+)$/.exec(templateId);
+
+  if (alias !== null) {
+    const entry = WEEKDAY_ALIAS_ENTRIES[Number(alias[2])];
+
+    if (entry === undefined || entry[1] !== weekday) return false;
+    if (alias[1] === "every") sentence.add(WORDS.recur.every, "RECUR");
+    if (alias[1] === "on") sentence.add(WORDS.glue.on, "GLUE");
+    sentence.add(entry[0], "WEEKDAY");
+
+    return true;
+  }
+
+  const descriptionSurface = /^(every|on|bare)-description-surface-(\d+)$/.exec(templateId);
+
+  if (descriptionSurface !== null) {
+    const entry = WEEKDAY_DESCRIPTION_ENTRIES[Number(descriptionSurface[2])];
+
+    if (entry === undefined || entry[1] !== weekday) return false;
+    if (descriptionSurface[1] === "every") sentence.add(WORDS.recur.every, "RECUR");
+    if (descriptionSurface[1] === "on") sentence.add(WORDS.glue.on, "GLUE");
+    sentence.add(entry[0], "WEEKDAY");
+
+    return true;
+  }
 
   if (templateId.startsWith("description-")) {
     const marker =
@@ -1026,6 +1295,28 @@ function renderWeekdayRange(
       sentence.add(WEEKDAY_NAME[last], "WEEKDAY");
 
       return true;
+    case "on-through":
+      sentence.add(WORDS.glue.on, "GLUE");
+      sentence.add(WEEKDAY_NAME[first], "WEEKDAY");
+      sentence.add(WORDS.range.through, "GLUE");
+      sentence.add(WEEKDAY_NAME[last], "WEEKDAY");
+
+      return true;
+    case "weekly-from-to":
+      sentence.add("weekly", "INTERVAL");
+      sentence.add(WORDS.range.from, "GLUE");
+      sentence.add(WEEKDAY_NAME[first], "WEEKDAY");
+      sentence.add(WORDS.range.to, "GLUE");
+      sentence.add(WEEKDAY_NAME[last], "WEEKDAY");
+
+      return true;
+    case "each-week-up-to-inclusive":
+      sentence.add("each week", "RECUR");
+      sentence.add(WEEKDAY_NAME[first], "WEEKDAY");
+      sentence.add("up to and including", "GLUE");
+      sentence.add(WEEKDAY_NAME[last], "WEEKDAY");
+
+      return true;
     case "dash":
       sentence.add(WEEKDAY_ABBR[first], "WEEKDAY");
       sentence.add(WORDS.glue.dash, "GLUE", "");
@@ -1161,6 +1452,8 @@ function renderTimeOfDay(sentence: Sentence, intent: ScheduleIntent, templateId:
     "minute-to",
     "minute-before",
     "dotted-meridiem",
+    "compact-dotted-meridiem",
+    "spaced-dotted-meridiem",
     "oclock",
     "sharp",
     "on-the-dot",
@@ -1214,6 +1507,38 @@ function renderDayAtTime(sentence: Sentence, intent: ScheduleIntent, templateId:
       sentence.add("daily", "INTERVAL");
 
       return true;
+    case "digits-daily":
+      addClock(sentence, time, "digits", "");
+      sentence.add("daily", "INTERVAL");
+
+      return true;
+    case "compact-daily":
+      addClock(sentence, time, "compact", "");
+      sentence.add("daily", "INTERVAL");
+
+      return true;
+    case "24h-daily":
+      addClock(sentence, time, "24h", "");
+      sentence.add("daily", "INTERVAL");
+
+      return true;
+    case "digits-every-day":
+      addClock(sentence, time, "digits", "");
+      sentence.add(WORDS.recur.every, "RECUR");
+      sentence.add(WORDS.unit.day, "GLUE");
+
+      return true;
+    case "digits-each-day":
+      addClock(sentence, time, "digits", "");
+      sentence.add(WORDS.recur.each, "RECUR");
+      sentence.add(WORDS.unit.day, "GLUE");
+
+      return true;
+    case "daily-digits":
+      sentence.add("daily", "INTERVAL");
+      addClock(sentence, time, "digits", "");
+
+      return true;
     case "daily-basis-at":
       sentence.add("on a daily basis", "INTERVAL");
       addClock(sentence, time, naturalClockStyle(time));
@@ -1230,6 +1555,24 @@ function renderDayAtTime(sentence: Sentence, intent: ScheduleIntent, templateId:
       sentence.add(WORDS.recur.every, "RECUR");
       sentence.add(WORDS.unit.day, "GLUE");
       addClock(sentence, time, alternativeClockStyle(time));
+
+      return true;
+    case "every-day-dotted":
+      sentence.add(WORDS.recur.every, "RECUR");
+      sentence.add(WORDS.unit.day, "GLUE");
+      addClock(sentence, time, "dotted-meridiem");
+
+      return true;
+    case "each-day-compact-dotted":
+      sentence.add(WORDS.recur.each, "RECUR");
+      sentence.add(WORDS.unit.day, "GLUE");
+      addClock(sentence, time, "compact-dotted-meridiem");
+
+      return true;
+    case "once-a-day-spaced-dotted":
+      sentence.add("once a", "RECUR");
+      sentence.add(WORDS.unit.day, "GLUE");
+      addClock(sentence, time, "spaced-dotted-meridiem");
 
       return true;
     default:
@@ -1308,7 +1651,11 @@ function renderDaygroupAtTime(
     }
 
     if (dynamic[1] === "time-expression") addClock(sentence, time, naturalClockStyle(time));
-    if (expression.prefix !== "") sentence.add(expression.prefix, "RECUR");
+
+    if (expression.prefix !== "") {
+      sentence.add(expression.prefix, expression.prefix === "on" ? "GLUE" : "RECUR");
+    }
+
     sentence.add(expression.surface, "DAYGROUP");
     if (dynamic[1] === "expression") addClock(sentence, time, naturalClockStyle(time));
 
@@ -1448,7 +1795,8 @@ function renderDayOfMonth(sentence: Sentence, intent: ScheduleIntent, templateId
 
       return true;
     case "every-month-word":
-      sentence.add("every month on the", "RECUR");
+      sentence.add("every month", "RECUR");
+      sentence.add("on the", "GLUE");
       sentence.add(DAY_ORDINALS[day - 1]!, "DOM");
 
       return true;
@@ -1475,13 +1823,26 @@ function renderDayOfMonth(sentence: Sentence, intent: ScheduleIntent, templateId
 
       return true;
     case "every-month-on-day":
-      sentence.add("every month on day", "RECUR");
+      sentence.add("every month", "RECUR");
+      sentence.add("on day", "GLUE");
       sentence.add(String(day), "DOM");
 
       return true;
     case "ordinal-each-month":
       addDom(sentence, day);
       sentence.add("of each month", "RECUR");
+
+      return true;
+    case "on-day-each-month":
+      sentence.add("on day", "GLUE");
+      sentence.add(String(day), "DOM");
+      sentence.add("each month", "RECUR");
+
+      return true;
+    case "once-a-month-on":
+      sentence.add("once a month", "RECUR");
+      sentence.add("on the", "GLUE");
+      addDom(sentence, day);
 
       return true;
     default:
@@ -1534,8 +1895,23 @@ function renderDayOfMonthAtTime(
 
       return true;
     case "every-month-day-at":
-      sentence.add("every month on day", "RECUR");
+      sentence.add("every month", "RECUR");
+      sentence.add("on day", "GLUE");
       sentence.add(String(day), "DOM");
+      addClock(sentence, time, naturalClockStyle(time));
+
+      return true;
+    case "on-day-each-month-at":
+      sentence.add("on day", "GLUE");
+      sentence.add(String(day), "DOM");
+      sentence.add("each month", "RECUR");
+      addClock(sentence, time, naturalClockStyle(time));
+
+      return true;
+    case "once-a-month-on-at":
+      sentence.add("once a month", "RECUR");
+      sentence.add("on the", "GLUE");
+      addDom(sentence, day);
       addClock(sentence, time, naturalClockStyle(time));
 
       return true;
@@ -1578,7 +1954,8 @@ function renderOrdinalWeekday(
 
       return true;
     case "monthly-on":
-      sentence.add("monthly on the", "RECUR");
+      sentence.add(WORDS.recur.monthly, "RECUR");
+      sentence.add("on the", "GLUE");
       sentence.add(ordinal, "ORDINAL");
       sentence.add(WEEKDAY_NAME[weekday], "WEEKDAY");
 
@@ -1635,7 +2012,8 @@ function renderOrdinalWeekdayAtTime(
 
       return true;
     case "monthly-on-at":
-      sentence.add("monthly on the", "RECUR");
+      sentence.add(WORDS.recur.monthly, "RECUR");
+      sentence.add("on the", "GLUE");
       sentence.add(ordinal, "ORDINAL");
       sentence.add(WEEKDAY_NAME[weekday], "WEEKDAY");
       addClock(sentence, time, naturalClockStyle(time));
@@ -2284,10 +2662,18 @@ export const KINDS: readonly KindDef[] = [
         split: "train" as const,
       })),
       { id: "recurring-every-n", split: "heldout" },
+      { id: "once-per-n", split: "train" },
+      { id: "every-n-on-repeat", split: "train" },
       { id: "every-abbrev", split: "train" },
       { id: "every-word-abbrev", split: "heldout" },
       { id: "at-hyphenated", split: "train" },
       { id: "in-hyphenated", split: "heldout" },
+      { id: "every-hyphenated", split: "train" },
+      { id: "on-a-hyphenated-cycle", split: "train" },
+      { id: "interval-is", split: "train" },
+      { id: "cadence-is", split: "train" },
+      { id: "cycle-of", split: "train" },
+      { id: "between-runs", split: "train" },
     ],
     intents: nIntervalIntents(),
     render: (sentence, intent, templateId) => renderNInterval(sentence, intent!, templateId),
@@ -2319,6 +2705,18 @@ export const KINDS: readonly KindDef[] = [
       { id: "description-immediately-before", split: "train" },
       { id: "description-iso", split: "train" },
       { id: "description-monday-first", split: "train" },
+      ...WEEKDAY_ALIAS_ENTRIES.flatMap((_, index) =>
+        (["every", "on", "bare"] as const).map((prefix) => ({
+          id: `${prefix}-alias-${index}`,
+          split: "train" as const,
+        })),
+      ),
+      ...WEEKDAY_DESCRIPTION_ENTRIES.flatMap((_, index) =>
+        (["every", "on", "bare"] as const).map((prefix) => ({
+          id: `${prefix}-description-surface-${index}`,
+          split: "train" as const,
+        })),
+      ),
       { id: "bare", split: "heldout" },
     ],
     intents: WEEKDAY_SEQUENCE.map((weekday) => weekly([weekday])),
@@ -2358,6 +2756,9 @@ export const KINDS: readonly KindDef[] = [
         split: "train" as const,
       })),
       { id: "from-to", split: "train" },
+      { id: "on-through", split: "train" },
+      { id: "weekly-from-to", split: "train" },
+      { id: "each-week-up-to-inclusive", split: "train" },
       { id: "dash", split: "heldout" },
       { id: "full-dash", split: "train" },
       { id: "dotted-dash", split: "train" },
@@ -2418,6 +2819,8 @@ export const KINDS: readonly KindDef[] = [
       "minute-to",
       "minute-before",
       "dotted-meridiem",
+      "compact-dotted-meridiem",
+      "spaced-dotted-meridiem",
       "oclock",
       "sharp",
       "on-the-dot",
@@ -2436,9 +2839,18 @@ export const KINDS: readonly KindDef[] = [
       { id: "once-a-day-at", split: "train" },
       { id: "time-every-day", split: "train" },
       { id: "time-daily", split: "train" },
+      { id: "digits-daily", split: "train" },
+      { id: "compact-daily", split: "train" },
+      { id: "24h-daily", split: "train" },
+      { id: "digits-every-day", split: "train" },
+      { id: "digits-each-day", split: "train" },
+      { id: "daily-digits", split: "train" },
       { id: "daily-basis-at", split: "train" },
       { id: "every-day-qualified", split: "train" },
       { id: "every-day-alternative-clock", split: "train" },
+      { id: "every-day-dotted", split: "train" },
+      { id: "each-day-compact-dotted", split: "train" },
+      { id: "once-a-day-spaced-dotted", split: "train" },
     ],
     intents: COMPOUND_CLOCKS.map((time) => daily(time)),
     render: (sentence, intent, templateId) => renderDayAtTime(sentence, intent!, templateId),
@@ -2508,6 +2920,8 @@ export const KINDS: readonly KindDef[] = [
       { id: "day-of-month", split: "train" },
       { id: "every-month-on-day", split: "train" },
       { id: "ordinal-each-month", split: "heldout" },
+      { id: "on-day-each-month", split: "train" },
+      { id: "once-a-month-on", split: "train" },
     ],
     intents: DOM_DAYS.map((dayOfMonth) => ({
       frequency: { unit: "month" as const, interval: 1 },
@@ -2525,6 +2939,8 @@ export const KINDS: readonly KindDef[] = [
       { id: "monthly-on-at", split: "heldout" },
       { id: "day-of-month-at", split: "train" },
       { id: "every-month-day-at", split: "train" },
+      { id: "on-day-each-month-at", split: "train" },
+      { id: "once-a-month-on-at", split: "train" },
     ],
     intents: DOM_DAYS.flatMap((dayOfMonth) =>
       COMPOUND_CLOCKS.map((time) => ({
@@ -2841,9 +3257,12 @@ export const KINDS: readonly KindDef[] = [
   {
     id: "negative",
     family: "negative",
-    templates: [{ id: "prose", split: "train" }],
+    templates: Object.keys(NEGATIVE_GROUPS).map((id) => ({
+      id,
+      split: "train" as const,
+    })),
     intents: NEGATIVES.map(() => null),
-    render: (sentence, _intent, templateId) => templateId === "prose",
+    render: () => true,
   },
 ];
 
@@ -2852,10 +3271,12 @@ export const KINDS: readonly KindDef[] = [
  * Templates that cannot render a given intent (day-group surface mismatch)
  * are skipped, not padded.
  */
-export function* iterateKinds(): Generator<KindExample> {
+export function* iterateKinds(wanted?: ReadonlySet<KindId>): Generator<KindExample> {
   let negativeIndex = 0;
 
   for (const kind of KINDS) {
+    if (wanted !== undefined && !wanted.has(kind.id)) continue;
+
     for (const intent of kind.intents) {
       if (intent !== null) assertValid(intent);
 
@@ -2863,14 +3284,20 @@ export function* iterateKinds(): Generator<KindExample> {
         const sentence = new Sentence();
 
         if (kind.id === "negative") {
-          sentence.add(NEGATIVES[negativeIndex]!, "O");
+          const negative = NEGATIVES[negativeIndex]!;
+
+          if (template.id !== negative.category) continue;
+          sentence.add(negative.text, "O");
           if (!kind.render(sentence, intent, template.id)) continue;
         } else {
           sentence.clause();
           if (!kind.render(sentence, intent, template.id)) continue;
         }
 
-        const name = `${kind.id}/${template.id}`;
+        const name =
+          kind.id === "negative"
+            ? `${kind.id}/${template.id}/${negativeIndex}`
+            : `${kind.id}/${template.id}`;
 
         yield {
           kind: kind.id,
@@ -2880,6 +3307,26 @@ export function* iterateKinds(): Generator<KindExample> {
           intent,
           example: finish(sentence, name),
         };
+
+        if (receivesCarrier(kind.id, template.id)) {
+          for (let carrierIndex = 0; carrierIndex < POSITIVE_CARRIERS.length; carrierIndex++) {
+            const carried = new Sentence();
+
+            carried.add(POSITIVE_CARRIERS[carrierIndex]!, "O");
+            carried.clause();
+            if (!kind.render(carried, intent, template.id)) continue;
+            const carriedName = `${kind.id}/carrier-${carrierIndex}-${template.id}`;
+
+            yield {
+              kind: kind.id,
+              family: kind.family,
+              template: carriedName,
+              split: template.split,
+              intent,
+              example: finish(carried, carriedName),
+            };
+          }
+        }
       }
 
       if (kind.id === "negative") negativeIndex++;
@@ -2888,8 +3335,8 @@ export function* iterateKinds(): Generator<KindExample> {
 }
 
 /** Eager compatibility view for callers that intentionally need every row. */
-export function expandKinds(): KindExample[] {
-  return [...iterateKinds()];
+export function expandKinds(wanted?: ReadonlySet<KindId>): KindExample[] {
+  return [...iterateKinds(wanted)];
 }
 
 /** Kind ids in catalog order. */

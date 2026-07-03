@@ -78,6 +78,7 @@ interface SplitState {
     kinds: BufferedWriter;
     neighbors: BufferedWriter;
     offsets: BufferedWriter;
+    frames: BufferedWriter;
   };
   sequences: number;
   tokens: number;
@@ -85,6 +86,9 @@ interface SplitState {
   skippedLong: number;
   labelCounts: Record<string, number>;
   fingerprints: Set<string>;
+  frameIds: Map<string, number>;
+  frameNames: string[];
+  frameCounts: number[];
 }
 
 export interface StreamingSplitSummary {
@@ -151,6 +155,7 @@ function createState(outputBase: string, split: Split): SplitState {
       kinds: new BufferedWriter(shardPath(prefix, "kinds")),
       neighbors: new BufferedWriter(shardPath(prefix, "neighbors")),
       offsets,
+      frames: new BufferedWriter(shardPath(prefix, "frames")),
     },
     sequences: 0,
     tokens: 0,
@@ -158,6 +163,9 @@ function createState(outputBase: string, split: Split): SplitState {
     skippedLong: 0,
     labelCounts: Object.fromEntries(LABELS.map((label) => [label, 0])),
     fingerprints: new Set<string>(),
+    frameIds: new Map<string, number>(),
+    frameNames: [],
+    frameCounts: [],
   };
 }
 
@@ -187,6 +195,18 @@ function appendRecord(state: SplitState, record: CorpusRecord): void {
   state.writers.boundaries.append(shard.boundaries);
   state.writers.kinds.append(shard.kinds);
   state.writers.neighbors.append(shard.neighbors);
+  const frameName = record.template ?? `${record.family}/unspecified`;
+  let frameId = state.frameIds.get(frameName);
+
+  if (frameId === undefined) {
+    frameId = state.frameNames.length;
+    state.frameIds.set(frameName, frameId);
+    state.frameNames.push(frameName);
+    state.frameCounts.push(0);
+  }
+
+  state.writers.frames.append(Uint32Array.of(frameId));
+  state.frameCounts[frameId]!++;
   state.sequences++;
   state.tokens += shard.tokenCount;
 
@@ -239,6 +259,8 @@ function writeManifest(state: SplitState): void {
     rowsPerToken: FEATURE_COUNT,
     featureRows: EMBEDDING_ROWS,
     labelCounts: state.labelCounts,
+    frameNames: state.frameNames,
+    frameCounts: state.frameCounts,
     format: SHARD_FORMAT,
   };
 

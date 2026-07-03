@@ -28,6 +28,11 @@ class Config:
     device: str = "cpu"
     device_requested: str = "auto"
     data_prefix: str | None = None
+    balance_frames: bool = False
+    balance_kinds: bool = False
+    frame_balance_power: float = 0.5
+    early_stopping_patience: int = 0
+    min_epochs: int = 1
 
     def to_dict(self) -> dict[str, object]:
         """Serialize for the report without aliasing the dataclass."""
@@ -65,6 +70,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="'auto', 'cpu', 'cuda', or any torch device string",
     )
     parser.add_argument(
+        "--balance-frames",
+        action="store_true",
+        help="temper raw sequence counts toward equal wording-frame mass",
+    )
+    parser.add_argument(
+        "--balance-kinds",
+        action="store_true",
+        help="give each sentence kind equal total mass before sampling frames",
+    )
+    parser.add_argument(
+        "--frame-balance-power",
+        type=float,
+        default=0.5,
+        help="0 preserves raw frame mass, 1 samples frames uniformly (default: 0.5)",
+    )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=0,
+        help="stop after this many non-improving epochs (0 disables)",
+    )
+    parser.add_argument(
+        "--min-epochs",
+        type=int,
+        default=1,
+        help="minimum epochs before early stopping may end the run",
+    )
+    parser.add_argument(
         "--data-prefix",
         default=None,
         help=(
@@ -87,6 +120,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
         raise ValueError("--batch must be at least 1")
     if not 2 <= args.quantization_bits <= 8:
         raise ValueError("--quantization-bits must be in [2, 8]")
+    if args.early_stopping_patience < 0:
+        raise ValueError("--early-stopping-patience must be non-negative")
+    if not 1 <= args.min_epochs <= args.epochs:
+        raise ValueError("--min-epochs must be in [1, --epochs]")
+    if not 0 <= args.frame_balance_power <= 1:
+        raise ValueError("--frame-balance-power must be in [0, 1]")
     return Config(
         run=args.run,
         seed=args.seed,
@@ -102,4 +141,9 @@ def parse_args(argv: list[str] | None = None) -> Config:
         device=resolve_device(args.device),
         device_requested=args.device,
         data_prefix=args.data_prefix,
+        balance_frames=args.balance_frames,
+        balance_kinds=args.balance_kinds,
+        frame_balance_power=args.frame_balance_power,
+        early_stopping_patience=args.early_stopping_patience,
+        min_epochs=args.min_epochs,
     )

@@ -427,8 +427,24 @@ function decodeClause(groups: readonly Group[]): ClauseFacts {
 
       case "MINUTE": {
         const value = MINUTE_IDIOMS[text] ?? numberFrom(text);
+        const previous = groups[index - 1];
+        const previousText = previous?.label === "GLUE" ? joinTokens(previous.tokens) : "";
 
-        if (value !== undefined) facts.minute = value;
+        // A bare number after "at" is an hour in ordinary English. Recover
+        // this unambiguous clock shorthand when the tagger chooses MINUTE;
+        // relative clocks ("ten past five") and values above 23 remain
+        // minutes and follow the normal validation path.
+        if (
+          value !== undefined &&
+          value <= 23 &&
+          facts.hour === undefined &&
+          /(?:^|\s)at(?:\s|$)/.test(previousText)
+        ) {
+          facts.hour = value;
+        } else if (value !== undefined) {
+          facts.minute = value;
+        }
+
         const connector = groups[index + 1];
 
         if (connector?.label === "GLUE") {

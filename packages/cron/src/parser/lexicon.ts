@@ -59,11 +59,13 @@ export const WEEKDAY_PLURAL_ALIASES: Record<string, Weekday> = {
   sundays: "sunday",
 };
 
-/** Descriptions must name a day without guessing the user's week convention.
- * Bare "first day of the week" is intentionally NOT an alias for Monday. */
+/** Descriptive weekday aliases. This package's canonical week is explicitly
+ * Monday-first (the same order used by cron rendering), so positional phrases
+ * such as "the first day of the week" are deterministic rather than guessed. */
 export const WEEKDAY_DESCRIPTIONS: Readonly<Record<string, Weekday>> = (() => {
   const entries: Record<string, Weekday> = {};
   const positions = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh"];
+  const cardinals = ["one", "two", "three", "four", "five", "six", "seven"];
 
   WEEKDAY_SEQUENCE.forEach((day, index) => {
     const previous = WEEKDAY_SEQUENCE[(index + 6) % 7]!;
@@ -78,7 +80,35 @@ export const WEEKDAY_DESCRIPTIONS: Readonly<Record<string, Weekday>> = (() => {
     entries[`the ${positions[index]} day of the ISO week`] = day;
     entries[`the ${positions[index]} day in an ISO week`] = day;
     entries[`the ${positions[index]} day of a Monday-first week`] = day;
+    entries[`the ${positions[index]} day of the week`] = day;
+    entries[`${positions[index]} day of the week`] = day;
+    entries[`day ${index + 1} of the week`] = day;
+    entries[`day ${cardinals[index]} of the week`] = day;
+    entries[`the week's ${positions[index]} day`] = day;
   });
+
+  ["first", "second", "third", "fourth", "fifth"].forEach((position, index) => {
+    const day = WEEKDAY_SEQUENCE[index]!;
+
+    entries[`the ${position} workday of the week`] = day;
+    entries[`${position} workday of the week`] = day;
+    entries[`the ${position} working day of the week`] = day;
+    entries[`the ${position} day of the working week`] = day;
+  });
+
+  entries["the start of the week"] = "monday";
+  entries["the beginning of the week"] = "monday";
+  entries["the start of the workweek"] = "monday";
+  entries["the beginning of the workweek"] = "monday";
+  entries["the first day of the weekend"] = "saturday";
+  entries["the start of the weekend"] = "saturday";
+  entries["the second day of the weekend"] = "sunday";
+  entries["the last day of the weekend"] = "sunday";
+  entries["the final day of the weekend"] = "sunday";
+  entries["the end of the weekend"] = "sunday";
+  entries["the last day of the week"] = "sunday";
+  entries["the final day of the week"] = "sunday";
+  entries["the end of the week"] = "sunday";
 
   return Object.fromEntries(
     Object.entries(entries).map(([text, day]) => [text.toLowerCase(), day]),
@@ -91,6 +121,11 @@ export const WEEKDAY_GROUPS: Record<string, Weekday[]> = {
   weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
   workday: ["monday", "tuesday", "wednesday", "thursday", "friday"],
   workdays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  "business day": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  "business days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  "working day": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  "working days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  "working week": ["monday", "tuesday", "wednesday", "thursday", "friday"],
   weekend: ["saturday", "sunday"],
   weekends: ["saturday", "sunday"],
   "weekend day": ["saturday", "sunday"],
@@ -107,7 +142,12 @@ export interface DayGroupExpression {
 }
 
 /** Complete, grammatical phrasings for the two built-in weekday groups. */
-export const DAYGROUP_EXPRESSIONS: readonly DayGroupExpression[] = ["weekday", "workday"]
+export const DAYGROUP_EXPRESSIONS: readonly DayGroupExpression[] = [
+  "weekday",
+  "workday",
+  "business day",
+  "working day",
+]
   .flatMap((surface) => [
     {
       text: `every ${surface}`,
@@ -123,7 +163,7 @@ export const DAYGROUP_EXPRESSIONS: readonly DayGroupExpression[] = ["weekday", "
     },
   ])
   .concat(
-    ["weekdays", "workdays"].flatMap((surface) => [
+    ["weekdays", "workdays", "business days", "working days"].flatMap((surface) => [
       {
         text: `on ${surface}`,
         prefix: "on",
@@ -824,6 +864,8 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
   entries["p.m."] = surface("MERIDIEM", "pm");
   entries["a.m"] = surface("MERIDIEM", "am");
   entries["p.m"] = surface("MERIDIEM", "pm");
+  entries["a. m."] = surface("MERIDIEM", "am");
+  entries["p. m."] = surface("MERIDIEM", "pm");
 
   for (const word of Object.keys(FREQUENCY_IDIOMS)) entries[word] = surface("INTERVAL");
   for (const [word, hour] of Object.entries(NAMED_HOURS)) entries[word] = surface("HOUR", hour);
@@ -850,6 +892,10 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
   for (const phrase of CLOCK_PREFIXES) entries[phrase] ??= surface("GLUE");
   for (const phrase of CLOCK_EXACT_SUFFIXES) entries[phrase] = surface("EDGE");
   for (const phrase of INTERVAL_FRAME_SUFFIXES) entries[phrase] = surface("EDGE");
+  entries["the interval is"] = surface("GLUE");
+  entries["the cadence is"] = surface("GLUE");
+  entries["a cycle of"] = surface("GLUE");
+  entries["between runs"] = surface("EDGE");
   for (const phrase of PAST_CONNECTORS) entries[phrase] ??= surface("GLUE");
   for (const phrase of TO_CONNECTORS) entries[phrase] ??= surface("GLUE");
 

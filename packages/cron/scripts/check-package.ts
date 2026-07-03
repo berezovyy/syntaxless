@@ -90,7 +90,7 @@ function assertExactPackedFiles(tarball: string): void {
   console.log(`check:package: ${actual.size} packed files verified`);
 }
 
-/** The packed entry must never carry the weight artifact; a model chunk must. */
+/** The packed entry/chunks must never inline the replaceable weight artifact. */
 function assertWeightsIsolated(extractDir: string): void {
   const weightsSource = readFileSync(join(packageRoot, "src", "model", "weights.gen.ts"), "utf8");
   const q = /"q":\s*"([^"]+)"/.exec(weightsSource)?.[1];
@@ -111,13 +111,17 @@ function assertWeightsIsolated(extractDir: string): void {
     readFileSync(join(distDir, name), "utf8").includes(needle),
   );
 
-  if (holders.length === 0) {
-    throw new Error("check:package: no model chunk holds the weight string");
+  if (holders.length > 0) {
+    throw new Error(`check:package: ${holders.join(", ")} unexpectedly inline the weight string`);
   }
 
-  console.log(
-    `check:package: weights isolated (index clean, ${holders.length} model chunk(s) hold them)`,
-  );
+  const dedicated = join(distDir, "model", "weights.gen.js");
+
+  if (!readFileSync(dedicated, "utf8").includes(needle)) {
+    throw new Error("check:package: dedicated weights module lacks the payload");
+  }
+
+  console.log("check:package: weights isolated in dist/model/weights.gen.js");
 }
 
 const CONSUMER = `import { compile, getEngine, parse } from "@syntaxless/cron";

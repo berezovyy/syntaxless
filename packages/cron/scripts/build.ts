@@ -34,7 +34,10 @@ function cleanDist(): void {
  */
 async function bundle(): Promise<void> {
   await build({
-    entryPoints: { index: join(srcDir, "index.ts") },
+    entryPoints: {
+      index: join(srcDir, "index.ts"),
+      evaluation: join(srcDir, "model", "evaluation.ts"),
+    },
     outdir: distDir,
     bundle: true,
     splitting: true,
@@ -46,7 +49,31 @@ async function bundle(): Promise<void> {
     treeShaking: true,
     entryNames: "[name]",
     chunkNames: "model-[hash]",
+    plugins: [
+      {
+        name: "external-weights",
+        setup(build) {
+          build.onResolve({ filter: /\/weights\.gen\.js$/ }, () => ({
+            path: "./model/weights.gen.js",
+            external: true,
+          }));
+        },
+      },
+    ],
     write: true,
+  });
+
+  // Keep the artifact replaceable for candidate-vs-baseline evaluation. It is
+  // still loaded lazily through the model chunk and remains outside index.js.
+  await build({
+    entryPoints: [join(srcDir, "model", "weights.gen.ts")],
+    outfile: join(distDir, "model", "weights.gen.js"),
+    bundle: false,
+    format: "esm",
+    platform: "neutral",
+    target: "es2022",
+    minify: true,
+    legalComments: "none",
   });
 }
 
