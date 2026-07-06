@@ -322,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
         feature_rows=validation.feature_rows,
         rows_per_token=validation.rows_per_token,
         role_classes=validation.role_classes,
-        hidden=32,
+        hidden=config.hidden,
         quantization_bits=config.quantization_bits,
     ).to(config.device)
     counts = parameter_counts(model)

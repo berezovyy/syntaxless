@@ -24,6 +24,7 @@ class Config:
     warmup_steps: int = 50
     qat_start: int = 1
     quantization_bits: int = 6
+    hidden: int = 32
     storage: str = "training/cron/runs"
     device: str = "cpu"
     device_requested: str = "auto"
@@ -63,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-steps", type=int, default=50)
     parser.add_argument("--qat-start", type=int, default=1)
     parser.add_argument("--quantization-bits", type=int, default=6)
+    parser.add_argument(
+        "--hidden",
+        type=int,
+        default=32,
+        help="shared model width (controlled experiments use 32, 48, or 64)",
+    )
     parser.add_argument("--storage", default="training/cron/runs")
     parser.add_argument(
         "--device",
@@ -120,6 +127,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
         raise ValueError("--batch must be at least 1")
     if not 2 <= args.quantization_bits <= 8:
         raise ValueError("--quantization-bits must be in [2, 8]")
+    if args.hidden not in (32, 48, 64):
+        raise ValueError("--hidden must be one of 32, 48, or 64")
     if args.early_stopping_patience < 0:
         raise ValueError("--early-stopping-patience must be non-negative")
     if not 1 <= args.min_epochs <= args.epochs:
@@ -137,6 +146,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         warmup_steps=args.warmup_steps,
         qat_start=args.qat_start,
         quantization_bits=args.quantization_bits,
+        hidden=args.hidden,
         storage=args.storage,
         device=resolve_device(args.device),
         device_requested=args.device,
