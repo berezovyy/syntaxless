@@ -35,6 +35,7 @@ import {
   BOUND_ALIASES,
   DAY_ORDINALS,
   DAY_RULES,
+  EXCEPTION_PREFIXES,
   FREQUENCY_IDIOMS,
   MINUTE_IDIOMS,
   MONTH_ALIASES,
@@ -515,6 +516,81 @@ function reconcileBounds(
   return explicit;
 }
 
+/** Recover exclusions from the text after an explicit exception cue. The
+ * decoder has already established that the utterance is a schedule; this
+ * helper only prevents a tagger error from dropping or changing visible
+ * exception values. */
+interface ExplicitExceptionEvidence {
+  exceptions: ScheduleExceptions;
+  /** Weekdays mentioned outside the exception clause, if any. */
+  selectorWeekdays: Weekday[];
+}
+
+function weekdaysIn(text: string): Weekday[] {
+  const weekdays = new Set<Weekday>();
+
+  for (const [surface, members] of Object.entries(WEEKDAY_GROUPS).sort(
+    ([left], [right]) => right.length - left.length,
+  )) {
+    const pattern = regexEscape(surface).replace(/\\ /g, "\\s+");
+
+    if (new RegExp(`(?:^|[^a-z])${pattern}(?:$|[^a-z])`).test(text)) {
+      for (const weekday of members) weekdays.add(weekday);
+    }
+  }
+
+  const surfaces = [
+    ...Object.entries(WEEKDAY_DESCRIPTIONS),
+    ...Object.entries(WEEKDAY_PLURAL_ALIASES),
+    ...Object.entries(WEEKDAY_ALIASES),
+  ] as Array<[string, Weekday]>;
+
+  for (const [surface, weekday] of surfaces.sort(([left], [right]) => right.length - left.length)) {
+    const pattern = regexEscape(surface).replace(/\\ /g, "\\s+");
+
+    if (new RegExp(`(?:^|[^a-z])${pattern}(?:$|[^a-z])`).test(text)) weekdays.add(weekday);
+  }
+
+  return normalizeWeekdays([...weekdays]);
+}
+
+function explicitExceptions(entries: readonly Entry[]): ExplicitExceptionEvidence | undefined {
+  const text = joinEntries(entries);
+
+  const alternatives = [...EXCEPTION_PREFIXES]
+    .sort((left, right) => right.length - left.length)
+    .map((value) => regexEscape(value).replace(/\\ /g, "\\s+"))
+    .join("|");
+
+  const cue = new RegExp(`\\b(?:${alternatives})\\b`).exec(text);
+
+  if (cue === null) return undefined;
+  const rawSuffix = text.slice(cue.index + cue[0].length);
+  const separator = /,|\b(?:every|each|daily|weekly|monthly|at)\b/.exec(rawSuffix);
+  const exceptionText = separator === null ? rawSuffix : rawSuffix.slice(0, separator.index);
+
+  const outsideText =
+    text.slice(0, cue.index) +
+    (separator === null
+      ? ""
+      : ` ${rawSuffix.slice(separator.index + Number(separator[0] === ","))}`);
+
+  const weekdays = weekdaysIn(exceptionText);
+  const dates = [...new Set(calendarDateCandidates(exceptionText).map((date) => date.iso))];
+
+  if (weekdays.length === 0 && dates.length === 0) {
+    throw new RangeError("decodeIntent: exception cue without a recognized value");
+  }
+
+  return {
+    exceptions: {
+      ...(weekdays.length === 0 ? {} : { weekdays }),
+      ...(dates.length === 0 ? {} : { dates: dates.sort() }),
+    },
+    selectorWeekdays: weekdaysIn(outsideText),
+  };
+}
+
 function splitClauses(entries: readonly Entry[]): Entry[][] {
   const clauses: Entry[][] = [];
   let current: Entry[] = [];
@@ -964,6 +1040,19 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   const boundEvidence = explicitBounds(entries);
 
   if (boundEvidence !== undefined) intent.bounds = reconcileBounds(intent.bounds, boundEvidence);
+
+  const exceptionEvidence = explicitExceptions(entries);
+
+  if (exceptionEvidence !== undefined) {
+    intent.exceptions = exceptionEvidence.exceptions;
+
+    if (exceptionEvidence.selectorWeekdays.length > 0) {
+      intent.frequency.unit = "week";
+      intent.weekdays = exceptionEvidence.selectorWeekdays;
+    } else {
+      delete intent.weekdays;
+    }
+  }
 
   const failure =
     validateInterval(intent.frequency.unit, intent.frequency.interval) ??

@@ -257,6 +257,37 @@ describe("range and interval rules", () => {
       weekdays: ["friday"],
     });
   });
+
+  test("explicit exception evidence cannot disappear behind O predictions", () => {
+    const tokens = tokenize("daily except friday and 2026-12-25").filter(
+      (token) => token.kind !== 3,
+    );
+
+    const labeled: LabeledToken[] = tokens.map((token, index) => ({
+      token,
+      role: index === 0 ? labelId.INTERVAL : labelId.O,
+      boundary: index === 0,
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled).intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+      exceptions: { weekdays: ["friday"], dates: ["2026-12-25"] },
+    });
+  });
+
+  test("an incomplete explicit exception fails instead of becoming unrestricted", () => {
+    const tokens = tokenize("daily except").filter((token) => token.kind !== 3);
+
+    const labeled: LabeledToken[] = tokens.map((token, index) => ({
+      token,
+      role: index === 0 ? labelId.INTERVAL : labelId.O,
+      boundary: index === 0,
+      score: 1,
+    }));
+
+    expect(() => decodeIntent(labeled)).toThrow(RangeError);
+  });
 });
 
 describe("confidence", () => {
