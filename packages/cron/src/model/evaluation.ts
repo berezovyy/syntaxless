@@ -8,3 +8,25 @@ export { inferTokens } from "./inference.js";
 export { LABELS } from "./labels.js";
 export { tokenize } from "./tokenizer.js";
 export { weights } from "./weights.gen.js";
+
+import { decodeIntent } from "../parser/decode.js";
+import { normalize } from "../parser/normalize.js";
+import { inferTokens } from "./inference.js";
+import { tokenize } from "./tokenizer.js";
+
+/** Decode before the public confidence floor. Internal evaluation only: this
+ * exposes whether a rejection hid a correct proposal without weakening the
+ * public parser's fail-closed contract. */
+export function decodeRaw(text: string) {
+  const tokens = tokenize(normalize(text));
+  const predictions = inferTokens(tokens);
+
+  return decodeIntent(
+    tokens.map((token, index) => ({
+      token,
+      role: predictions.labels[index]!,
+      boundary: predictions.boundaries[index]! === 1,
+      score: predictions.scores[index]!,
+    })),
+  );
+}

@@ -77,7 +77,7 @@ export interface Counts {
   correct: number;
 }
 
-export type Metric = "tokenRoles" | "exactAst" | "compiledExpression";
+export type Metric = "tokenRoles" | "rawDecode" | "exactAst" | "compiledExpression";
 
 export interface ContractFailure {
   id: string;
@@ -111,7 +111,10 @@ export interface EvaluationResult {
   familyDistribution: Record<string, number>;
   scope: string;
   contracts: ContractReport[];
+  /** Public parser acceptance after its current confidence policy. */
   selectivePrediction: RiskCoveragePoint[];
+  /** Counterfactual raw-decode curve used to select a better policy. */
+  rawSelectivePrediction: RiskCoveragePoint[];
 }
 
 export interface SelectiveOutcome {
@@ -135,7 +138,7 @@ export interface RiskCoveragePoint {
 /** Summarize confidence as operational risk rather than token probability. */
 export function riskCoverage(
   outcomes: readonly SelectiveOutcome[],
-  thresholds: readonly number[] = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95],
+  thresholds: readonly number[] = [0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95],
 ): RiskCoveragePoint[] {
   const negativeTotal = outcomes.filter((outcome) => outcome.negative).length;
 
@@ -203,6 +206,7 @@ interface DistLabels {
 
 interface DistEvaluation extends DistTokenizer, DistInference, DistLabels {
   weights: WeightsArtifact;
+  decodeRaw: (text: string) => { intent: ScheduleIntent; confidence: number };
 }
 
 /** A decoded runtime plus the provenance of the artifact it runs. */
@@ -213,6 +217,7 @@ export interface Engine {
   tokenize: (text: string) => RawToken[];
   inferTokens: (tokens: readonly RawToken[]) => { labels: Uint8Array };
   labelName: (id: number) => string;
+  decodeRaw: DistEvaluation["decodeRaw"];
   dispose: () => Promise<void>;
 }
 
@@ -279,6 +284,7 @@ export async function loadEngine(distDir: string, weightsModulePath?: string): P
 
       return label;
     },
+    decodeRaw: evaluation.decodeRaw.bind(evaluation),
     dispose: async () => {
       if (scratch !== null) await rm(scratch, { recursive: true, force: true });
     },
@@ -575,8 +581,10 @@ export async function evaluateCorpus(
 
   const tokenRoles = emptyAccumulator();
   const exactAst = emptyAccumulator();
+  const rawDecode = emptyAccumulator();
   const compiledExpression = emptyAccumulator();
   const selectiveOutcomes: SelectiveOutcome[] = [];
+  const rawSelectiveOutcomes: SelectiveOutcome[] = [];
 
   for (const item of records) {
     const tokens = engine.tokenize(item.text);
@@ -609,9 +617,32 @@ export async function evaluateCorpus(
     }
 
     const parsed = await engine.parse(item.text);
+    let raw: ReturnType<Engine["decodeRaw"]> | null = null;
+    let rawError: unknown;
+
+    try {
+      raw = engine.decodeRaw(item.text);
+    } catch (error) {
+      rawError = error;
+    }
 
     if (item.intent === null) {
       const rejected = !parsed.ok;
+
+      rawSelectiveOutcomes.push({
+        accepted: raw !== null,
+        correct: raw === null,
+        confidence: raw?.confidence ?? 0,
+        negative: true,
+      });
+
+      record(rawDecode, item.family, raw === null, "negative-false-accept", {
+        id: item.id,
+        family: item.family,
+        detail: "expected no raw schedule",
+        expected: null,
+        actual: raw?.intent ?? String(rawError),
+      });
 
       selectiveOutcomes.push({
         accepted: parsed.ok,
@@ -640,6 +671,30 @@ export async function evaluateCorpus(
     }
 
     const canonicalExpected = canonicalizeIntent(item.intent);
+    const canonicalRaw = raw === null ? null : canonicalizeIntent(raw.intent);
+    const rawCorrect = raw !== null && isDeepStrictEqual(canonicalRaw, canonicalExpected);
+
+    rawSelectiveOutcomes.push({
+      accepted: raw !== null,
+      correct: rawCorrect,
+      confidence: raw?.confidence ?? 0,
+      negative: false,
+    });
+
+    record(
+      rawDecode,
+      item.family,
+      rawCorrect,
+      raw === null ? "decode-error" : `intent:${intentDifference(canonicalExpected, raw.intent)}`,
+      {
+        id: item.id,
+        family: item.family,
+        detail: "pre-confidence intent mismatch",
+        expected: canonicalExpected,
+        actual: raw === null ? String(rawError) : canonicalRaw,
+      },
+    );
+
     const canonicalActual = parsed.ok ? canonicalizeIntent(parsed.intent) : null;
     const astCorrect = parsed.ok && isDeepStrictEqual(canonicalActual, canonicalExpected);
 
@@ -716,10 +771,12 @@ export async function evaluateCorpus(
     scope,
     contracts: [
       report("tokenRoles", tokenRoles, provenance),
+      report("rawDecode", rawDecode, provenance),
       report("exactAst", exactAst, provenance),
       report("compiledExpression", compiledExpression, provenance),
     ],
     selectivePrediction: riskCoverage(selectiveOutcomes),
+    rawSelectivePrediction: riskCoverage(rawSelectiveOutcomes),
   };
 }
 
