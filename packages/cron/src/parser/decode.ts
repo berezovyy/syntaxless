@@ -390,6 +390,131 @@ function offsetIsoDate(iso: string, days: number): string | undefined {
   ).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
+interface DateCandidate {
+  start: number;
+  end: number;
+  iso: string;
+}
+
+function calendarDateCandidates(text: string): DateCandidate[] {
+  const months = Object.keys(MONTH_ALIASES)
+    .sort((left, right) => right.length - left.length)
+    .map(regexEscape)
+    .join("|");
+
+  const ordinal = "(?:st|nd|rd|th)?";
+
+  const source =
+    `\\d{4}-\\d{2}-\\d{2}` +
+    `|(?:${months})\\s+\\d{1,2}${ordinal}(?:,)?\\s+\\d{4}` +
+    `|\\d{1,2}${ordinal}\\s+(?:${months})(?:,)?\\s+\\d{4}`;
+
+  const result: DateCandidate[] = [];
+
+  for (const match of text.matchAll(new RegExp(source, "gi"))) {
+    const iso = calendarDateFrom(match[0]);
+
+    if (iso !== undefined) {
+      result.push({ start: match.index!, end: match.index! + match[0].length, iso });
+    }
+  }
+
+  return result;
+}
+
+/** Extract only visibly schedule-scoped recurrence bounds. */
+function explicitBounds(entries: readonly Entry[]): RecurrenceBounds | undefined {
+  const text = joinEntries(entries);
+  const dates = calendarDateCandidates(text);
+
+  if (dates.length === 0) {
+    if (
+      /\b(?:every|each|daily|weekly|monthly)\b/.test(text) &&
+      /\b(?:from|starting|beginning|until|before|ending|effective|commencing|between)\b/.test(
+        text,
+      ) &&
+      /\b\d{4}-\d{2}-\d{2}\b/.test(text)
+    ) {
+      throw new RangeError("decodeIntent: invalid bound date");
+    }
+
+    return undefined;
+  }
+
+  if (/\b(?:except|excluding)\b/.test(text)) return undefined;
+
+  if (dates.length >= 2) {
+    const first = dates[0]!;
+    const second = dates[1]!;
+    const before = text.slice(Math.max(0, first.start - 32), first.start);
+    const between = text.slice(first.end, second.start);
+
+    if (
+      !/\b(?:between|from|starting|beginning)\s*$/.test(before) &&
+      !/\b(?:through|to|until|and)\b/.test(between)
+    ) {
+      return undefined;
+    }
+
+    const inclusive = /\bthrough(?:\s+and\s+including)?\b/.test(between);
+    const end = inclusive ? offsetIsoDate(second.iso, 1) : second.iso;
+
+    if (end === undefined) throw new RangeError("decodeIntent: invalid inclusive end date");
+
+    return { start: first.iso, end };
+  }
+
+  const date = dates[0]!;
+  const before = text.slice(Math.max(0, date.start - 48), date.start);
+  const after = text.slice(date.end, Math.min(text.length, date.end + 48));
+
+  if (/\b(?:ending\s+on|through\s+and\s+including)\s*$/.test(before)) {
+    const end = offsetIsoDate(date.iso, 1);
+
+    if (end === undefined) throw new RangeError("decodeIntent: invalid inclusive end date");
+
+    return { end };
+  }
+
+  if (
+    /\b(?:until|before|up\s+until|ending|ending\s+before|stopping\s+before|but\s+not\s+on\s+or\s+after)\s*$/.test(
+      before,
+    )
+  ) {
+    return { end: date.iso };
+  }
+
+  if (
+    /\b(?:from|starting|starting\s+on|starting\s+from|beginning\s+on|beginning\s+from|on\s+or\s+after|effective|effective\s+on|commencing|commencing\s+on)\s*$/.test(
+      before,
+    )
+  ) {
+    return { start: date.iso };
+  }
+
+  if (/^\s*,\s*(?:every|each|daily|weekly|monthly)\b/.test(after)) return { start: date.iso };
+
+  return undefined;
+}
+
+function reconcileBounds(
+  predicted: RecurrenceBounds | undefined,
+  explicit: RecurrenceBounds,
+): RecurrenceBounds {
+  if (
+    (predicted?.start !== undefined &&
+      explicit.start !== undefined &&
+      predicted.start !== explicit.start) ||
+    (predicted?.end !== undefined && explicit.end !== undefined && predicted.end !== explicit.end)
+  ) {
+    throw new RangeError("decodeIntent: predicted bounds conflict with explicit dates");
+  }
+
+  // The lexical cue determines which side(s) are present. Discard an extra
+  // neural side rather than preserving a bound that has no textual evidence.
+  return explicit;
+}
+
 function splitClauses(entries: readonly Entry[]): Entry[][] {
   const clauses: Entry[][] = [];
   let current: Entry[] = [];
@@ -835,6 +960,10 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
     intent.frequency.unit = "week";
     intent.weekdays = normalizeWeekdays([...(intent.weekdays ?? []), ...dayGroupEvidence]);
   }
+
+  const boundEvidence = explicitBounds(entries);
+
+  if (boundEvidence !== undefined) intent.bounds = reconcileBounds(intent.bounds, boundEvidence);
 
   const failure =
     validateInterval(intent.frequency.unit, intent.frequency.interval) ??

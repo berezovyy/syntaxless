@@ -173,6 +173,29 @@ describe("exact lexical schedule and rejection surfaces", () => {
   });
 
   test.each([
+    ["starting 2026-05-26, every day", { start: "2026-05-26" }],
+    ["ending 2027-01-20, every day", { end: "2027-01-20" }],
+    ["from 2026-02-14 through 2027-12-28, every day", { start: "2026-02-14", end: "2027-12-29" }],
+    [
+      "between March 2, 2026 and April 4, 2026 every day",
+      { start: "2026-03-02", end: "2026-04-04" },
+    ],
+  ] as const)("preserves explicit bounds in %s", async (phrase, bounds) => {
+    const result = await parse(phrase);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.intent.bounds).toEqual(bounds);
+  });
+
+  test("an invalid explicit bound fails instead of becoming an unbounded schedule", async () => {
+    const result = await parse("every day starting 2026-02-30");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("model-error");
+  });
+
+  test.each([
     "I did not mean every hour",
     "Maybe Tuesday or Wednesday",
     "How does an hourly schedule work?",

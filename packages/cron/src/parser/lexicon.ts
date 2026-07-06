@@ -579,6 +579,7 @@ export const BOUND_ALIASES: Readonly<
   "up until": "end",
   "but not on or after": "end",
   "ending on": "end-inclusive",
+  ending: "end",
   "through and including": "end-inclusive",
   between: "between",
 };

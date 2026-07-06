@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 import { tokenize } from "../../src/model/tokenizer";
 import type { GoldRecord } from "./evaluate";
-import { canonicalizeIntent, lintGoldRecords, repairObservableGold } from "./evaluate";
+import {
+  canonicalizeIntent,
+  lintGoldRecords,
+  repairInclusiveBoundGold,
+  repairObservableGold,
+} from "./evaluate";
 
 describe("canonicalizeIntent", () => {
   test("normalizes semantic sets without mutating the input", () => {
@@ -107,5 +112,26 @@ describe("lintGoldRecords", () => {
         },
       ]),
     ).toThrow(/span/);
+  });
+});
+
+describe("repairInclusiveBoundGold", () => {
+  test("turns a legacy through date into an exclusive end", () => {
+    const item: GoldRecord = {
+      id: "bounds",
+      family: "bounds",
+      text: "from 2026-01-01 through 2026-01-31, every day",
+      spans: [],
+      intent: {
+        frequency: { unit: "day", interval: 1 },
+        bounds: { start: "2026-01-01", end: "2026-01-31" },
+      },
+      expected: { supported: false, expression: null },
+    };
+
+    expect(repairInclusiveBoundGold(item).intent?.bounds).toEqual({
+      start: "2026-01-01",
+      end: "2026-02-01",
+    });
   });
 });

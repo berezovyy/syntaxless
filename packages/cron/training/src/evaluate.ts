@@ -396,6 +396,7 @@ export function parseCorpus(contents: string): GoldRecord[] {
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .map((line) => repairObservableGold(JSON.parse(line) as GoldRecord))
+    .map(repairInclusiveBoundGold)
     .map((item) =>
       item.intent === null ? item : { ...item, intent: canonicalizeIntent(item.intent) },
     );
@@ -403,6 +404,29 @@ export function parseCorpus(contents: string): GoldRecord[] {
   lintGoldRecords(records);
 
   return records;
+}
+
+/** Repair legacy held-out rows that rendered an exclusive end date after the
+ * inclusive word "through". Newly generated rows already display end - 1. */
+export function repairInclusiveBoundGold(item: GoldRecord): GoldRecord {
+  const end = item.intent?.bounds?.end;
+
+  if (item.family !== "bounds" || end === undefined || !/\bthrough\b/i.test(item.text)) return item;
+  const shown = /\bthrough\s+(\d{4}-\d{2}-\d{2})\b/i.exec(item.text)?.[1];
+
+  if (shown !== end) return item;
+  const date = new Date(`${end}T00:00:00Z`);
+
+  if (Number.isNaN(date.getTime())) return item;
+  date.setUTCDate(date.getUTCDate() + 1);
+
+  return {
+    ...item,
+    intent: {
+      ...item.intent!,
+      bounds: { ...item.intent!.bounds, end: date.toISOString().slice(0, 10) },
+    },
+  };
 }
 
 /** Fail before scoring when the gold contract is malformed or unobservable. */

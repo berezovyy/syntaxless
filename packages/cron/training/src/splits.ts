@@ -138,7 +138,10 @@ function heldoutBounds(sentence: Sentence, intent: ScheduleIntent): void {
 
     if (end !== undefined) {
       sentence.add("through", "BOUND");
-      sentence.add(end, "DOM");
+      const inclusiveEnd = new Date(`${end}T00:00:00Z`);
+
+      inclusiveEnd.setUTCDate(inclusiveEnd.getUTCDate() - 1);
+      sentence.add(inclusiveEnd.toISOString().slice(0, 10), "DOM");
     }
   } else {
     sentence.add("ending", "BOUND");
