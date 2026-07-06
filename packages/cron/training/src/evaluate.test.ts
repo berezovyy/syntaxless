@@ -7,6 +7,7 @@ import {
   lintGoldRecords,
   repairInclusiveBoundGold,
   repairObservableGold,
+  riskCoverage,
 } from "./evaluate";
 
 describe("canonicalizeIntent", () => {
@@ -132,6 +133,31 @@ describe("repairInclusiveBoundGold", () => {
     expect(repairInclusiveBoundGold(item).intent?.bounds).toEqual({
       start: "2026-01-01",
       end: "2026-02-01",
+    });
+  });
+});
+
+describe("riskCoverage", () => {
+  test("reports acceptance risk, silent changes, and negative false accepts", () => {
+    const [point] = riskCoverage(
+      [
+        { accepted: true, correct: true, confidence: 0.9, negative: false },
+        { accepted: true, correct: false, confidence: 0.8, negative: false },
+        { accepted: true, correct: false, confidence: 0.7, negative: true },
+        { accepted: false, correct: true, confidence: 0.1, negative: true },
+      ],
+      [0.5],
+    );
+
+    expect(point).toEqual({
+      threshold: 0.5,
+      total: 4,
+      accepted: 3,
+      acceptedWrong: 2,
+      coverage: 0.75,
+      risk: 2 / 3,
+      silentMeaningChangeRate: 0.5,
+      negativeFalseAcceptanceRate: 0.5,
     });
   });
 });

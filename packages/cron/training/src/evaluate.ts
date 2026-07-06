@@ -111,6 +111,53 @@ export interface EvaluationResult {
   familyDistribution: Record<string, number>;
   scope: string;
   contracts: ContractReport[];
+  selectivePrediction: RiskCoveragePoint[];
+}
+
+export interface SelectiveOutcome {
+  accepted: boolean;
+  correct: boolean;
+  confidence: number;
+  negative: boolean;
+}
+
+export interface RiskCoveragePoint {
+  threshold: number;
+  total: number;
+  accepted: number;
+  acceptedWrong: number;
+  coverage: number;
+  risk: number;
+  silentMeaningChangeRate: number;
+  negativeFalseAcceptanceRate: number;
+}
+
+/** Summarize confidence as operational risk rather than token probability. */
+export function riskCoverage(
+  outcomes: readonly SelectiveOutcome[],
+  thresholds: readonly number[] = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95],
+): RiskCoveragePoint[] {
+  const negativeTotal = outcomes.filter((outcome) => outcome.negative).length;
+
+  return thresholds.map((threshold) => {
+    const accepted = outcomes.filter(
+      (outcome) => outcome.accepted && outcome.confidence >= threshold,
+    );
+
+    const acceptedWrong = accepted.filter((outcome) => !outcome.correct).length;
+    const negativeFalseAccepts = accepted.filter((outcome) => outcome.negative).length;
+
+    return {
+      threshold,
+      total: outcomes.length,
+      accepted: accepted.length,
+      acceptedWrong,
+      coverage: accepted.length / Math.max(outcomes.length, 1),
+      risk: acceptedWrong / Math.max(accepted.length, 1),
+      silentMeaningChangeRate: acceptedWrong / Math.max(outcomes.length, 1),
+      negativeFalseAcceptanceRate: negativeFalseAccepts / Math.max(negativeTotal, 1),
+    };
+  });
 }
 
 /**
@@ -529,6 +576,7 @@ export async function evaluateCorpus(
   const tokenRoles = emptyAccumulator();
   const exactAst = emptyAccumulator();
   const compiledExpression = emptyAccumulator();
+  const selectiveOutcomes: SelectiveOutcome[] = [];
 
   for (const item of records) {
     const tokens = engine.tokenize(item.text);
@@ -565,6 +613,13 @@ export async function evaluateCorpus(
     if (item.intent === null) {
       const rejected = !parsed.ok;
 
+      selectiveOutcomes.push({
+        accepted: parsed.ok,
+        correct: rejected,
+        confidence: parsed.confidence,
+        negative: true,
+      });
+
       record(exactAst, item.family, rejected, "negative-false-accept", {
         id: item.id,
         family: item.family,
@@ -587,6 +642,13 @@ export async function evaluateCorpus(
     const canonicalExpected = canonicalizeIntent(item.intent);
     const canonicalActual = parsed.ok ? canonicalizeIntent(parsed.intent) : null;
     const astCorrect = parsed.ok && isDeepStrictEqual(canonicalActual, canonicalExpected);
+
+    selectiveOutcomes.push({
+      accepted: parsed.ok,
+      correct: astCorrect,
+      confidence: parsed.confidence,
+      negative: false,
+    });
 
     const astCategory = parsed.ok
       ? `intent:${intentDifference(canonicalExpected, parsed.intent)}`
@@ -657,6 +719,7 @@ export async function evaluateCorpus(
       report("exactAst", exactAst, provenance),
       report("compiledExpression", compiledExpression, provenance),
     ],
+    selectivePrediction: riskCoverage(selectiveOutcomes),
   };
 }
 
