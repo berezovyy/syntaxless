@@ -2525,7 +2525,10 @@ function renderFrequencyIdiom(
   intent: ScheduleIntent,
   templateId: string,
 ): boolean {
-  const phrase = Object.keys(FREQUENCY_IDIOMS)[Number(templateId.slice(6))];
+  const match = /^(idiom|run|cadence|repeat)-(\d+)$/.exec(templateId);
+
+  if (match === null) return false;
+  const phrase = Object.keys(FREQUENCY_IDIOMS)[Number(match[2])];
 
   if (phrase === undefined) return false;
   const value = FREQUENCY_IDIOMS[phrase];
@@ -2538,21 +2541,44 @@ function renderFrequencyIdiom(
     return false;
   }
 
+  if (match[1] === "run") sentence.add("run", "RECUR");
+  else if (match[1] === "cadence") sentence.add("the cadence is", "GLUE");
+  else if (match[1] === "repeat") sentence.add("repeat", "RECUR");
   sentence.add(phrase, "INTERVAL");
 
   return true;
 }
 
 function renderDayRule(sentence: Sentence, intent: ScheduleIntent, templateId: string): boolean {
-  const phrase = Object.keys(DAY_RULES)[Number(templateId.slice(5))];
+  const match = /^(rule|monthly|each-month|every-month)-(\d+)$/.exec(templateId);
+
+  if (match === null) return false;
+  const phrase = Object.keys(DAY_RULES)[Number(match[2])];
 
   if (phrase === undefined || DAY_RULES[phrase as keyof typeof DAY_RULES] !== intent.day?.type) {
     return false;
   }
 
-  sentence.add("on the", "GLUE");
-  sentence.add(phrase, "DOM");
-  sentence.add("of every month", "RECUR");
+  switch (match[1]) {
+    case "monthly":
+      sentence.add("monthly", "RECUR");
+      sentence.add("on the", "GLUE");
+      sentence.add(phrase, "DOM");
+      break;
+    case "each-month":
+      sentence.add(phrase, "DOM");
+      sentence.add("of each month", "RECUR");
+      break;
+    case "every-month":
+      sentence.add("every month", "RECUR");
+      sentence.add("on the", "GLUE");
+      sentence.add(phrase, "DOM");
+      break;
+    default:
+      sentence.add("on the", "GLUE");
+      sentence.add(phrase, "DOM");
+      sentence.add("of every month", "RECUR");
+  }
 
   return true;
 }
@@ -3248,20 +3274,24 @@ export const KINDS: readonly KindDef[] = [
   {
     id: "frequency-idiom",
     family: "interval",
-    templates: Object.keys(FREQUENCY_IDIOMS).map((_, index) => ({
-      id: `idiom-${index}`,
-      split: "train" as const,
-    })),
+    templates: Object.keys(FREQUENCY_IDIOMS).flatMap((_, index) =>
+      (["idiom", "run", "cadence", "repeat"] as const).map((frame) => ({
+        id: `${frame}-${index}`,
+        split: "train" as const,
+      })),
+    ),
     intents: frequencyIdiomIntents(),
     render: (sentence, intent, templateId) => renderFrequencyIdiom(sentence, intent!, templateId),
   },
   {
     id: "day-rule",
     family: "day-of-month",
-    templates: Object.keys(DAY_RULES).map((_, index) => ({
-      id: `rule-${index}`,
-      split: "train" as const,
-    })),
+    templates: Object.keys(DAY_RULES).flatMap((_, index) =>
+      (["rule", "monthly", "each-month", "every-month"] as const).map((frame) => ({
+        id: `${frame}-${index}`,
+        split: "train" as const,
+      })),
+    ),
     intents: ["last_day_of_month", "last_business_day"].map((type) => ({
       frequency: { unit: "month" as const, interval: 1 },
       day: { type: type as "last_day_of_month" | "last_business_day" },

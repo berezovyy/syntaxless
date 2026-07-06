@@ -137,16 +137,66 @@ export function frameKey(example: KindExample): string {
 /** Assign entire frames, globally and deterministically, rather than rows.
  * Roughly 75% of frames train, 12.5% validation, 12.5% held-out. */
 export function assignSplits(examples: readonly KindExample[]): KindExample[] {
-  return examples.map(assignSplit);
+  const plan = splitPlan(examples);
+
+  return examples.map((example) => assignSplit(example, plan));
 }
 
-export function assignSplit(example: KindExample): KindExample {
-  const bucket =
-    createHash("sha256")
-      .update(`${SPLIT_VERSION}\0${frameKey(example)}`)
-      .digest()
-      .readUInt32BE(0) % 8;
+type SplitPlan = ReadonlyMap<KindId, ReadonlyMap<string, ExampleSplit>>;
 
+function splitBucket(key: string): number {
+  return createHash("sha256").update(`${SPLIT_VERSION}\0${key}`).digest().readUInt32BE(0) % 8;
+}
+
+/** Assign frames independently inside each kind, then repair sparse kinds so
+ * train, validation, and held-out all contain at least one distinct frame. */
+function splitPlan(examples: Iterable<KindExample>): SplitPlan {
+  const keys = new Map<KindId, Set<string>>();
+
+  for (const example of examples) {
+    const set = keys.get(example.kind) ?? new Set<string>();
+
+    set.add(frameKey(example));
+    keys.set(example.kind, set);
+  }
+
+  const plan = new Map<KindId, Map<string, ExampleSplit>>();
+
+  for (const [kind, values] of keys) {
+    const ordered = [...values].sort((left, right) => {
+      const leftHash = createHash("sha256").update(left).digest("hex");
+      const rightHash = createHash("sha256").update(right).digest("hex");
+
+      return leftHash.localeCompare(rightHash);
+    });
+
+    if (ordered.length < SPLITS.length) {
+      throw new Error(`${kind}: at least ${SPLITS.length} distinct frames are required`);
+    }
+
+    const assignments = new Map<string, ExampleSplit>();
+
+    for (const key of ordered) {
+      const bucket = splitBucket(key);
+
+      assignments.set(key, bucket === 6 ? "validation" : bucket === 7 ? "heldout" : "train");
+    }
+
+    for (const [index, split] of SPLITS.entries()) {
+      if (![...assignments.values()].includes(split)) assignments.set(ordered[index]!, split);
+    }
+
+    plan.set(kind, assignments);
+  }
+
+  return plan;
+}
+
+export function assignSplit(example: KindExample, plan?: SplitPlan): KindExample {
+  const planned = plan?.get(example.kind)?.get(frameKey(example));
+
+  if (planned !== undefined) return { ...example, split: planned };
+  const bucket = splitBucket(frameKey(example));
   const split: ExampleSplit = bucket === 6 ? "validation" : bucket === 7 ? "heldout" : "train";
 
   return { ...example, split };
@@ -261,10 +311,13 @@ export function writeBackward(options: BackwardOptions): BackwardSummary {
   const bySplit: Record<Split, number> = { train: 0, validation: 0, heldout: 0 };
   let index = 0;
   let chunk = "";
+  // Only compact frame keys are retained. The catalog itself remains streamed,
+  // so millions of rendered rows are never held in memory at once.
+  const plan = splitPlan(iterateKinds(wanted));
 
   try {
     for (const expanded of iterateKinds(wanted)) {
-      const example = assignSplit(expanded);
+      const example = assignSplit(expanded, plan);
 
       if (options.split !== undefined && example.split !== options.split) continue;
       const record = toRecord(example, index++);
