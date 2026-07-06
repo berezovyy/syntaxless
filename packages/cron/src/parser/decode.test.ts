@@ -288,6 +288,54 @@ describe("range and interval rules", () => {
 
     expect(() => decodeIntent(labeled)).toThrow(RangeError);
   });
+
+  test("weekday and month selectors constrain a mistaken frequency prediction", () => {
+    const weekday = labelTokens(
+      renderIntent(
+        { frequency: { unit: "week", interval: 1 }, weekdays: ["monday"] },
+        "weekday-list",
+        noCarrier,
+        "on-days",
+      ),
+    ).map((item) => (item.role === labelId.GLUE ? item : { ...item, role: labelId.WEEKDAY }));
+
+    // Inject a spurious daily unit without removing the explicit weekday.
+    const daily = tokenize("daily").filter((token) => token.kind !== 3)[0]!;
+
+    expect(
+      decodeIntent([{ token: daily, role: labelId.INTERVAL, boundary: true, score: 1 }, ...weekday])
+        .intent.frequency.unit,
+    ).toBe("week");
+
+    const monthly = labelTokens(
+      renderIntent(
+        { frequency: { unit: "month", interval: 1 }, dayOfMonth: 15 },
+        "day-of-month",
+        noCarrier,
+        "on-the",
+      ),
+    );
+
+    expect(decodeIntent(monthly).intent.frequency.unit).toBe("month");
+  });
+
+  test("an explicit weekday list cue recovers a missed weekday role", () => {
+    const tokens = tokenize("please add days are thursday").filter((token) => token.kind !== 3);
+
+    const labeled: LabeledToken[] = tokens.map((token, index) => ({
+      token,
+      role: index === 2 ? labelId.GLUE : labelId.O,
+      boundary: index === 2,
+      score: 1,
+    }));
+
+    // Pretend the model found only a generic daily schedule in "add". The
+    // visible list cue and weekday must constrain the repaired result.
+    expect(decodeIntent(labeled).intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["thursday"],
+    });
+  });
 });
 
 describe("confidence", () => {

@@ -554,6 +554,25 @@ function weekdaysIn(text: string): Weekday[] {
   return normalizeWeekdays([...weekdays]);
 }
 
+/** Extract a weekday selector only behind an explicit recurrence/list cue.
+ * This intentionally does not turn arbitrary prose containing "Monday" into
+ * a schedule; bare short weekday inputs are handled by exactLexicalIntent. */
+function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefined {
+  const text = joinEntries(entries);
+
+  if (
+    !/\b(?:every|each|weekly\s+on|every\s+week\s+on|each\s+week\s+on|days?\s+(?:are|is))\b/.test(
+      text,
+    )
+  ) {
+    return undefined;
+  }
+
+  const weekdays = weekdaysIn(text);
+
+  return weekdays.length === 0 ? undefined : weekdays;
+}
+
 function explicitExceptions(entries: readonly Entry[]): ExplicitExceptionEvidence | undefined {
   const text = joinEntries(entries);
 
@@ -1052,6 +1071,41 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
     } else {
       delete intent.weekdays;
     }
+  } else {
+    const weekdayEvidence = explicitWeekdaySelector(entries);
+
+    if (
+      weekdayEvidence !== undefined &&
+      intent.ordinalWeekday === undefined &&
+      intent.dayOfMonth === undefined &&
+      intent.day === undefined
+    ) {
+      intent.weekdays = weekdayEvidence;
+    }
+  }
+
+  // Selector shape is a semantic constraint, not a model preference. Repair a
+  // mismatched frequency only when the decoded selector itself is explicit;
+  // contradictory independent selectors fail instead of being merged.
+  const monthlySelectors =
+    Number(intent.dayOfMonth !== undefined) +
+    Number(intent.day !== undefined) +
+    Number(intent.ordinalWeekday !== undefined);
+
+  if (monthlySelectors > 1 || (monthlySelectors > 0 && intent.weekdays !== undefined)) {
+    throw new RangeError("decodeIntent: conflicting calendar selectors");
+  }
+
+  if (monthlySelectors > 0) intent.frequency.unit = "month";
+
+  if (intent.weekdays !== undefined && intent.weekdays.length > 0) {
+    const text = joinEntries(entries);
+
+    if (/\b(?:every|each)\s+day\b/.test(text)) {
+      throw new RangeError("decodeIntent: weekdays conflict with daily frequency");
+    }
+
+    intent.frequency.unit = "week";
   }
 
   const failure =
