@@ -101,6 +101,25 @@ describe("decide", () => {
     expect(decision.accepted).toBe(false);
     expect(decision.failures).toContain("overall accuracy below 0.5");
   });
+
+  test("rejects silent meaning changes and negative false acceptance", () => {
+    const decision = decide(
+      {
+        total: 100,
+        correct: 90,
+        byFamily: { terse: { total: 40, correct: 32 } },
+        selective: {
+          silentMeaningChangeRate: 0.02,
+          negativeFalseAcceptanceRate: 0.03,
+        },
+      },
+      { total: 100, correct: 80, byFamily: { terse: { total: 40, correct: 30 } } },
+    );
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.failures).toContain("silent meaning-change rate above 0.005");
+    expect(decision.failures).toContain("negative false-acceptance rate above 0.01");
+  });
 });
 
 describe("assertSameArtifact", () => {

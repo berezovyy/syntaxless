@@ -37,6 +37,8 @@ export const GUARD_MINIMUM_SUPPORT = 30;
 /** Absolute floors prevent a relative improvement from promoting a weak model. */
 export const MIN_OVERALL_ACCURACY = 0.5;
 export const MIN_FAMILY_ACCURACY = 0.25;
+export const MAX_SILENT_MEANING_CHANGE_RATE = 0.005;
+export const MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE = 0.01;
 
 /** The overall promotion criterion and the terse-family bare guard. */
 export const CRITERION = "reserved-carrier-exact-intent";
@@ -157,6 +159,10 @@ export interface GateScores {
   total: number;
   correct: number;
   byFamily: Record<string, Counts>;
+  selective?: {
+    silentMeaningChangeRate: number;
+    negativeFalseAcceptanceRate: number;
+  };
 }
 
 export interface GateDecision {
@@ -206,6 +212,20 @@ export function decide(candidate: GateScores, baseline: GateScores): GateDecisio
     if (accuracy < MIN_FAMILY_ACCURACY) {
       failures.push(`${family}: accuracy below ${MIN_FAMILY_ACCURACY}`);
     }
+  }
+
+  if (
+    candidate.selective !== undefined &&
+    candidate.selective.silentMeaningChangeRate > MAX_SILENT_MEANING_CHANGE_RATE
+  ) {
+    failures.push(`silent meaning-change rate above ${MAX_SILENT_MEANING_CHANGE_RATE}`);
+  }
+
+  if (
+    candidate.selective !== undefined &&
+    candidate.selective.negativeFalseAcceptanceRate > MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE
+  ) {
+    failures.push(`negative false-acceptance rate above ${MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE}`);
   }
 
   const candidateBare = candidate.byFamily[BARE_FAMILY] ?? { total: 0, correct: 0 };
@@ -306,11 +326,21 @@ export interface GateReport extends GateDecision {
   leak: LeakReport;
 }
 
-function scoresOf(contract: ContractReport): GateScores {
+function scoresOf(result: EvaluationResult, contract: ContractReport): GateScores {
+  const selective = result.selectivePrediction.find((point) => point.threshold === 0.5);
+
+  if (selective === undefined) {
+    throw new Error("missing selective-prediction point at confidence 0.5");
+  }
+
   return {
     total: contract.total,
     correct: contract.correct,
     byFamily: contract.byFamily,
+    selective: {
+      silentMeaningChangeRate: selective.silentMeaningChangeRate,
+      negativeFalseAcceptanceRate: selective.negativeFalseAcceptanceRate,
+    },
   };
 }
 
@@ -327,8 +357,8 @@ export async function runGate(options: GateOptions): Promise<GateReport> {
     assertSameArtifact(candidateResult.contracts);
     assertSameArtifact(baselineResult.contracts);
 
-    const candidate = scoresOf(contractOf(candidateResult, "exactAst"));
-    const baseline = scoresOf(contractOf(baselineResult, "exactAst"));
+    const candidate = scoresOf(candidateResult, contractOf(candidateResult, "exactAst"));
+    const baseline = scoresOf(baselineResult, contractOf(baselineResult, "exactAst"));
     const decision = decide(candidate, baseline);
 
     if (!leak.checked) {
