@@ -14,9 +14,9 @@ const lengthBuckets = [1, 2, 3, 4, 6, 8, 12, Infinity];
 const numberBuckets = [0, 1, 2, 9, 12, 23, 24, 31, 59, 99, 999, 1899, 2099, Infinity];
 
 /** Number of embedding rows a token can select, including multi-hot flags. */
-export const FEATURE_COUNT = 17;
+export const FEATURE_COUNT = 32;
 /** Count of real embedding rows; `PADDING_ROW` is the sentinel outside them. */
-export const EMBEDDING_ROWS = 580;
+export const EMBEDDING_ROWS = 772;
 /** Sentinel row excluded from the embedding row-sum. */
 export const PADDING_ROW = EMBEDDING_ROWS;
 
@@ -27,6 +27,8 @@ export interface RawToken {
   /** word, number, symbol, whitespace */
   kind: 0 | 1 | 2 | 3;
   features: [identity: number, context: number];
+  /** Hashed character n-gram rows, already offset into their disjoint regions. */
+  ngrams: number[];
 }
 
 function hash(text: string): number {
@@ -37,6 +39,36 @@ function hash(text: string): number {
   }
 
   return value >>> 0;
+}
+
+const NGRAM_BUCKETS = 64;
+const NGRAMS_PER_SIZE = 5;
+const NGRAM_OFFSETS = { 2: 580, 3: 644, 4: 708 } as const;
+
+/**
+ * Keep a small, stable set of character fragments rather than one opaque word
+ * identity. Misspellings therefore retain evidence from the fragments they do
+ * share with the clean word. Rows are sorted to make the representation
+ * independent of discovery order and duplicate hash buckets are emitted once.
+ */
+function characterNgramRows(folded: string, kind: RawToken["kind"]): number[] {
+  if (kind !== 0) return [];
+  const padded = `^${folded}$`;
+  const rows: number[] = [];
+
+  for (const size of [2, 3, 4] as const) {
+    const buckets = new Set<number>();
+
+    for (let index = 0; index + size <= padded.length; index++) {
+      buckets.add(hash(padded.slice(index, index + size)) % NGRAM_BUCKETS);
+    }
+
+    const selected = [...buckets].sort((left, right) => left - right).slice(0, NGRAMS_PER_SIZE);
+
+    for (const bucket of selected) rows.push(NGRAM_OFFSETS[size] + bucket);
+  }
+
+  return rows;
 }
 
 function characterClass(character: string): number {
@@ -151,11 +183,25 @@ export function tokenize(text: string): RawToken[] {
       text: match[0],
       kind: current.kind,
       features: [current.identity, context],
+      ngrams: characterNgramRows(match[0].toLowerCase(), current.kind),
     };
   });
 }
 
-export function featureRows([identity, context]: [number, number]): number[] {
+/** Legacy artifact dimensions, kept so callers can load an older self-hosted
+ * weight file while the runtime and corpus generator use the current schema. */
+export const LEGACY_FEATURE_COUNT = 17;
+export const LEGACY_EMBEDDING_ROWS = 580;
+
+export function featureRows(
+  token: Pick<RawToken, "features" | "ngrams">,
+  layout: { featureRows: number; rowsPerToken: number } = {
+    featureRows: EMBEDDING_ROWS,
+    rowsPerToken: FEATURE_COUNT,
+  },
+): number[] {
+  const [identity, context] = token.features;
+
   // Each feature owns a disjoint region of the 580-row embedding table.
   const rows = [
     identity & 3, // Kind
@@ -173,6 +219,17 @@ export function featureRows([identity, context]: [number, number]): number[] {
 
   for (let bit = 0; bit < 8; bit++) {
     if (flags & (1 << bit)) rows.push(524 + bit);
+  }
+
+  if (layout.featureRows === EMBEDDING_ROWS && layout.rowsPerToken === FEATURE_COUNT) {
+    rows.push(...token.ngrams);
+  } else if (
+    layout.featureRows !== LEGACY_EMBEDDING_ROWS ||
+    layout.rowsPerToken !== LEGACY_FEATURE_COUNT
+  ) {
+    throw new RangeError(
+      `unsupported tokenizer layout: ${layout.featureRows} rows, ${layout.rowsPerToken} slots`,
+    );
   }
 
   return rows;

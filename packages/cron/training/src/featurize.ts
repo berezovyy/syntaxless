@@ -8,7 +8,7 @@
  * parser: a misaligned fragment is a generator bug, not a runtime condition.
  *
  * Rule and LLM records take the identical path. The shard contract is owned
- * here and is authoritative for the Python reader: `uint16` rows (17 per
+ * here and is authoritative for the Python reader: `uint16` sparse feature rows
  * token), `uint8` labels/boundaries/kinds, `int16` neighbour pairs, and a
  * `uint32` sequence-offset table of length `N + 1`, and one `uint32` wording
  * frame id per sequence.
@@ -138,7 +138,7 @@ export function featurizeRecord(
     const token = tokens[index]!;
 
     kinds[index] = token.kind;
-    rows.set(featureRows(token.features), index * FEATURE_COUNT);
+    rows.set(featureRows(token), index * FEATURE_COUNT);
 
     while (spanIndex < record.spans.length && record.spans[spanIndex]!.end <= token.start) {
       spanIndex++;

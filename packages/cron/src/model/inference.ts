@@ -98,7 +98,7 @@ function deriveNeighbors(
   for (let token = 0; token < width; token++) {
     previous[token] = last;
 
-    if (token < validCount && ((rows[token * ROWS_PER_TOKEN] ?? PADDING_ROW) & 3) !== 3) {
+    if (token < validCount && ((rows[token * ROWS_PER_TOKEN] ?? FEATURE_ROWS) & 3) !== 3) {
       last = token;
     }
   }
@@ -108,7 +108,7 @@ function deriveNeighbors(
   for (let token = width - 1; token >= 0; token--) {
     next[token] = last;
 
-    if (token < validCount && ((rows[token * ROWS_PER_TOKEN] ?? PADDING_ROW) & 3) !== 3) {
+    if (token < validCount && ((rows[token * ROWS_PER_TOKEN] ?? FEATURE_ROWS) & 3) !== 3) {
       last = token;
     }
   }
@@ -174,6 +174,8 @@ export function inferRows(
     for (let slot = 0; slot < ROWS_PER_TOKEN; slot++) {
       const row = rows[token * ROWS_PER_TOKEN + slot];
 
+      // Accept both the active artifact sentinel and the current tokenizer
+      // sentinel so frozen legacy parity fixtures remain loadable.
       if (row === undefined || row === FEATURE_ROWS || row === PADDING_ROW) continue;
 
       if (row < 0 || row >= FEATURE_ROWS) {
@@ -399,11 +401,18 @@ export function inferRows(
 
 /** Run the tagger over raw tokens without padding. */
 export function inferTokens(tokens: readonly RawToken[], debug = false): Predictions {
-  const rows = new Uint16Array(tokens.length * ROWS_PER_TOKEN).fill(PADDING_ROW);
+  const rows = new Uint16Array(tokens.length * ROWS_PER_TOKEN).fill(FEATURE_ROWS);
   let token = 0;
 
   for (const item of tokens) {
-    rows.set(featureRows(item.features), token * ROWS_PER_TOKEN);
+    rows.set(
+      featureRows(item, {
+        featureRows: FEATURE_ROWS,
+        rowsPerToken: ROWS_PER_TOKEN,
+      }),
+      token * ROWS_PER_TOKEN,
+    );
+
     token += 1;
   }
 

@@ -47,6 +47,7 @@ import {
   WORDS,
 } from "../../src/parser/lexicon.js";
 import type { FrequencyUnit, ScheduleIntent, TimeOfDay, Weekday } from "../../src/types/intent";
+import { spellingVariant } from "./noise";
 import type { RenderedExample } from "./renderer";
 import type { Family } from "./sampler";
 import { assertValid } from "./sampler";
@@ -99,6 +100,8 @@ export interface KindExample {
   split: ExampleSplit;
   intent: ScheduleIntent | null;
   example: RenderedExample;
+  /** Clean rendering used to keep paired noisy rows in exactly one split. */
+  splitExample?: RenderedExample;
 }
 
 const UNITS: readonly FrequencyUnit[] = ["minute", "hour", "day", "week", "month"];
@@ -3326,14 +3329,30 @@ export function* iterateKinds(wanted?: ReadonlySet<KindId>): Generator<KindExamp
             ? `${kind.id}/${template.id}/${negativeIndex}`
             : `${kind.id}/${template.id}`;
 
+        const cleanExample = finish(sentence, name);
+
         yield {
           kind: kind.id,
           family: kind.family,
           template: name,
           split: template.split,
           intent,
-          example: finish(sentence, name),
+          example: cleanExample,
         };
+
+        const noisy = intent === null ? undefined : spellingVariant(cleanExample, name);
+
+        if (noisy !== undefined) {
+          yield {
+            kind: kind.id,
+            family: kind.family,
+            template: `${kind.id}/noise-${noisy.noise}-${template.id}`,
+            split: template.split,
+            intent,
+            example: noisy.example,
+            splitExample: cleanExample,
+          };
+        }
 
         if (receivesCarrier(kind.id, template.id)) {
           for (let carrierIndex = 0; carrierIndex < POSITIVE_CARRIERS.length; carrierIndex++) {
@@ -3343,6 +3362,7 @@ export function* iterateKinds(wanted?: ReadonlySet<KindId>): Generator<KindExamp
             carried.clause();
             if (!kind.render(carried, intent, template.id)) continue;
             const carriedName = `${kind.id}/carrier-${carrierIndex}-${template.id}`;
+            const cleanCarried = finish(carried, carriedName);
 
             yield {
               kind: kind.id,
@@ -3350,8 +3370,22 @@ export function* iterateKinds(wanted?: ReadonlySet<KindId>): Generator<KindExamp
               template: carriedName,
               split: template.split,
               intent,
-              example: finish(carried, carriedName),
+              example: cleanCarried,
             };
+
+            const noisyCarried = spellingVariant(cleanCarried, carriedName);
+
+            if (noisyCarried !== undefined) {
+              yield {
+                kind: kind.id,
+                family: kind.family,
+                template: `${kind.id}/noise-${noisyCarried.noise}-carrier-${carrierIndex}-${template.id}`,
+                split: template.split,
+                intent,
+                example: noisyCarried.example,
+                splitExample: cleanCarried,
+              };
+            }
           }
         }
       }

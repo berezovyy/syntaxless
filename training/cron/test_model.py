@@ -11,8 +11,8 @@ import torch
 
 from model import Tagger
 
-FEATURE_ROWS = 580
-ROWS_PER_TOKEN = 17
+FEATURE_ROWS = 772
+ROWS_PER_TOKEN = 32
 ROLE_CLASSES = 15
 HIDDEN = 16
 

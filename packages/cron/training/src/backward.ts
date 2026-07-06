@@ -35,6 +35,7 @@ const GENERATOR_SOURCES: readonly string[] = [
   "backward.ts",
   "fingerprint.ts",
   "kinds.ts",
+  "noise.ts",
   "sentence.ts",
 ];
 
@@ -126,9 +127,10 @@ export function parseArgs(argv: readonly string[]): BackwardOptions {
  * Negatives have no schedule slots; group them by normalized prose instead. */
 export function frameKey(example: KindExample): string {
   if (example.intent === null) return `negative:${coarseText(example.example.text)}`;
+  const splitExample = example.splitExample ?? example.example;
 
   return JSON.stringify(
-    structuralPattern(example.example.text, example.example.spans).filter((part) => part !== "O"),
+    structuralPattern(splitExample.text, splitExample.spans).filter((part) => part !== "O"),
   );
 }
 
