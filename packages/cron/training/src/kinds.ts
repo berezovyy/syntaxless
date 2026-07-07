@@ -1383,6 +1383,11 @@ function renderEveryOther(sentence: Sentence, intent: ScheduleIntent, templateId
       sentence.add(WEEKDAY_NAME[weekday], "WEEKDAY");
 
       return true;
+    case "alternate-weekdays":
+      sentence.add(WORDS.glue.alternate, "GLUE");
+      sentence.add(WEEKDAY_PLURAL[weekday], "WEEKDAY");
+
+      return true;
     default:
       return false;
   }
@@ -2828,6 +2833,7 @@ export const KINDS: readonly KindDef[] = [
     templates: [
       { id: "every-other", split: "train" },
       { id: "every-two-weeks", split: "heldout" },
+      { id: "alternate-weekdays", split: "train" },
     ],
     intents: WEEKDAY_SEQUENCE.map((weekday) => ({
       frequency: { unit: "week" as const, interval: 2 },

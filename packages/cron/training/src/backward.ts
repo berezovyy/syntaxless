@@ -148,8 +148,11 @@ function splitBucket(key: string): number {
   return createHash("sha256").update(`${SPLIT_VERSION}\0${key}`).digest().readUInt32BE(0) % 8;
 }
 
-/** Assign frames independently inside each kind, then repair sparse kinds so
- * train, validation, and held-out all contain at least one distinct frame. */
+/** Assign equal structural frames globally, then repair sparse kinds so train,
+ * validation, and held-out all contain at least one distinct frame. A frame can
+ * occur in more than one kind (for example an explicit day-of-month and a
+ * named day rule can have the same labeled surface shape), so assigning it
+ * independently per kind would leak that frame across splits. */
 function splitPlan(examples: Iterable<KindExample>): SplitPlan {
   const keys = new Map<KindId, Set<string>>();
 
@@ -160,7 +163,7 @@ function splitPlan(examples: Iterable<KindExample>): SplitPlan {
     keys.set(example.kind, set);
   }
 
-  const plan = new Map<KindId, Map<string, ExampleSplit>>();
+  const orderedByKind = new Map<KindId, string[]>();
 
   for (const [kind, values] of keys) {
     const ordered = [...values].sort((left, right) => {
@@ -174,19 +177,87 @@ function splitPlan(examples: Iterable<KindExample>): SplitPlan {
       throw new Error(`${kind}: at least ${SPLITS.length} distinct frames are required`);
     }
 
-    const assignments = new Map<string, ExampleSplit>();
+    orderedByKind.set(kind, ordered);
+  }
 
+  const assignments = new Map<string, ExampleSplit>();
+
+  for (const ordered of orderedByKind.values()) {
     for (const key of ordered) {
+      if (assignments.has(key)) continue;
       const bucket = splitBucket(key);
 
       assignments.set(key, bucket === 6 ? "validation" : bucket === 7 ? "heldout" : "train");
     }
+  }
 
-    for (const [index, split] of SPLITS.entries()) {
-      if (![...assignments.values()].includes(split)) assignments.set(ordered[index]!, split);
+  const kindsForKey = new Map<string, KindId[]>();
+
+  for (const [kind, ordered] of orderedByKind) {
+    for (const key of ordered) {
+      const owners = kindsForKey.get(key) ?? [];
+
+      owners.push(kind);
+      kindsForKey.set(key, owners);
+    }
+  }
+
+  const count = (kind: KindId, split: ExampleSplit): number =>
+    orderedByKind.get(kind)!.filter((key) => assignments.get(key) === split).length;
+
+  // Moving a shared frame is safe only when none of its owner kinds loses its
+  // last frame in the donor split. Prefer moves that fill the same missing
+  // split for several owner kinds at once.
+  for (let pass = 0; pass < orderedByKind.size * SPLITS.length; pass++) {
+    let changed = false;
+
+    for (const [kind, ordered] of orderedByKind) {
+      for (const split of SPLITS) {
+        if (count(kind, split) !== 0) continue;
+
+        const candidates = ordered
+          .filter((key) => {
+            const donor = assignments.get(key)!;
+
+            return (
+              donor !== split && kindsForKey.get(key)!.every((owner) => count(owner, donor) > 1)
+            );
+          })
+          .sort((left, right) => {
+            const leftGain = kindsForKey
+              .get(left)!
+              .filter((owner) => count(owner, split) === 0).length;
+
+            const rightGain = kindsForKey
+              .get(right)!
+              .filter((owner) => count(owner, split) === 0).length;
+
+            return rightGain - leftGain || left.localeCompare(right);
+          });
+
+        const chosen = candidates[0];
+
+        if (chosen === undefined) {
+          throw new Error(`${kind}: cannot assign a disjoint ${split} frame`);
+        }
+
+        assignments.set(chosen, split);
+        changed = true;
+      }
     }
 
-    plan.set(kind, assignments);
+    const complete = [...orderedByKind].every(([kind]) =>
+      SPLITS.every((split) => count(kind, split) > 0),
+    );
+
+    if (complete) break;
+    if (!changed) throw new Error("cannot make all kind splits structurally disjoint");
+  }
+
+  const plan = new Map<KindId, Map<string, ExampleSplit>>();
+
+  for (const [kind, ordered] of orderedByKind) {
+    plan.set(kind, new Map(ordered.map((key) => [key, assignments.get(key)!])));
   }
 
   return plan;
