@@ -27,9 +27,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import type { CompileResult } from "../../src/compiler/cron";
+import type { Label } from "../../src/model/labels";
 import type { RawToken } from "../../src/model/tokenizer";
 import type { ParseResult } from "../../src/parser/parse";
 import type { ScheduleIntent } from "../../src/types/intent";
+import { spellingVariant } from "./noise";
 
 /** Default corpus/report locations, relative to the repository root. */
 export const DEFAULTS = {
@@ -64,7 +66,7 @@ export interface GoldRecord {
   spans: readonly {
     start: number;
     end: number;
-    label: string;
+    label: Label;
     clauseStart: boolean;
   }[];
   intent: ScheduleIntent | null;
@@ -115,6 +117,17 @@ export interface EvaluationResult {
   selectivePrediction: RiskCoveragePoint[];
   /** Counterfactual raw-decode curve used to select a better policy. */
   rawSelectivePrediction: RiskCoveragePoint[];
+  typoInvariance: TypoInvarianceReport;
+}
+
+export interface TypoInvarianceReport {
+  total: number;
+  cleanCorrect: number;
+  noisyCorrect: number;
+  pairedCorrect: number;
+  noisySilentWrong: number;
+  noisyAccuracy: number;
+  pairedAccuracy: number;
 }
 
 export interface SelectiveOutcome {
@@ -586,6 +599,16 @@ export async function evaluateCorpus(
   const selectiveOutcomes: SelectiveOutcome[] = [];
   const rawSelectiveOutcomes: SelectiveOutcome[] = [];
 
+  const typoInvariance: TypoInvarianceReport = {
+    total: 0,
+    cleanCorrect: 0,
+    noisyCorrect: 0,
+    pairedCorrect: 0,
+    noisySilentWrong: 0,
+    noisyAccuracy: 0,
+    pairedAccuracy: 0,
+  };
+
   for (const item of records) {
     const tokens = engine.tokenize(item.text);
     const predictions = engine.inferTokens(tokens);
@@ -698,6 +721,37 @@ export async function evaluateCorpus(
     const canonicalActual = parsed.ok ? canonicalizeIntent(parsed.intent) : null;
     const astCorrect = parsed.ok && isDeepStrictEqual(canonicalActual, canonicalExpected);
 
+    // Mutate only the gold-labeled schedule spans. The reserved wording never
+    // enters training; this is a paired behavioral evaluation of whether one
+    // realistic character error preserves the same meaning.
+    let noisy = undefined;
+
+    for (let attempt = 0; attempt < 64 && noisy === undefined; attempt += 1) {
+      noisy = spellingVariant(
+        {
+          ...item,
+          spans: item.spans.map((span) => ({ ...span })),
+          template: item.id,
+          style: "evaluation",
+        },
+        `${item.id}/evaluation/${attempt}`,
+      );
+    }
+
+    if (noisy !== undefined) {
+      const noisyParsed = await engine.parse(noisy.example.text);
+
+      const noisyCorrect =
+        noisyParsed.ok &&
+        isDeepStrictEqual(canonicalizeIntent(noisyParsed.intent), canonicalExpected);
+
+      typoInvariance.total += 1;
+      typoInvariance.cleanCorrect += Number(astCorrect);
+      typoInvariance.noisyCorrect += Number(noisyCorrect);
+      typoInvariance.pairedCorrect += Number(astCorrect && noisyCorrect);
+      typoInvariance.noisySilentWrong += Number(noisyParsed.ok && !noisyCorrect);
+    }
+
     selectiveOutcomes.push({
       accepted: parsed.ok,
       correct: astCorrect,
@@ -763,6 +817,9 @@ export async function evaluateCorpus(
     scope,
   };
 
+  typoInvariance.noisyAccuracy = typoInvariance.noisyCorrect / Math.max(typoInvariance.total, 1);
+  typoInvariance.pairedAccuracy = typoInvariance.pairedCorrect / Math.max(typoInvariance.total, 1);
+
   return {
     artifactSha256: engine.artifactSha256,
     corpus: source,
@@ -777,6 +834,7 @@ export async function evaluateCorpus(
     ],
     selectivePrediction: riskCoverage(selectiveOutcomes),
     rawSelectivePrediction: riskCoverage(rawSelectiveOutcomes),
+    typoInvariance,
   };
 }
 
