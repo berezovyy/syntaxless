@@ -241,6 +241,47 @@ describe("range and interval rules", () => {
     expect(decodeIntent(labeled).intent).toEqual(intent);
   });
 
+  test("explicit range evidence recovers a missed connector and endpoint", () => {
+    const tokens = tokenize("the span runs wednesday through sunday").filter(
+      (token) => token.kind !== 3,
+    );
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: token.text === "wednesday" ? labelId.WEEKDAY : labelId.O,
+      boundary: token.text === "wednesday",
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled).intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["wednesday", "thursday", "friday", "saturday", "sunday"],
+    });
+  });
+
+  test("explicit ordinal weekday evidence repairs a plain weekly decode", () => {
+    const tokens = tokenize("set it for the third friday monthly").filter(
+      (token) => token.kind !== 3,
+    );
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role:
+        token.text === "friday"
+          ? labelId.WEEKDAY
+          : token.text === "monthly"
+            ? labelId.RECUR
+            : labelId.O,
+      boundary: token.text === "friday",
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled).intent).toEqual({
+      frequency: { unit: "month", interval: 1 },
+      ordinalWeekday: { ordinal: "third", weekday: "friday" },
+    });
+  });
+
   test("every other friday multiplies the interval by two", () => {
     const tokens = tokenize("every other friday").filter((token) => token.kind !== 3);
     const roles = [labelId.RECUR, labelId.GLUE, labelId.WEEKDAY];

@@ -526,6 +526,39 @@ interface ExplicitExceptionEvidence {
   selectorWeekdays: Weekday[];
 }
 
+interface WeekdayMention {
+  start: number;
+  end: number;
+  weekday: Weekday;
+}
+
+function weekdayMentions(text: string): WeekdayMention[] {
+  const mentions: WeekdayMention[] = [];
+
+  const surfaces = [
+    ...Object.entries(WEEKDAY_DESCRIPTIONS),
+    ...Object.entries(WEEKDAY_PLURAL_ALIASES),
+    ...Object.entries(WEEKDAY_ALIASES),
+  ].sort(([left], [right]) => right.length - left.length) as Array<[string, Weekday]>;
+
+  for (const [surface, weekday] of surfaces) {
+    const pattern = regexEscape(surface).replace(/\\ /g, "\\s+");
+    const matches = text.matchAll(new RegExp(`(?:^|[^a-z])(${pattern})(?=$|[^a-z])`, "g"));
+
+    for (const match of matches) {
+      const prefix = match[0]!.length - match[1]!.length;
+      const start = match.index! + prefix;
+      const end = start + match[1]!.length;
+
+      if (!mentions.some((item) => start < item.end && end > item.start)) {
+        mentions.push({ start, end, weekday });
+      }
+    }
+  }
+
+  return mentions.sort((left, right) => left.start - right.start || left.end - right.end);
+}
+
 function weekdaysIn(text: string): Weekday[] {
   const weekdays = new Set<Weekday>();
 
@@ -539,19 +572,59 @@ function weekdaysIn(text: string): Weekday[] {
     }
   }
 
-  const surfaces = [
+  for (const mention of weekdayMentions(text)) weekdays.add(mention.weekday);
+
+  return normalizeWeekdays([...weekdays]);
+}
+
+/** Preserve an explicitly written weekday range even when the model misses
+ * its connector or second endpoint. */
+function explicitWeekdayRange(text: string): Weekday[] | undefined {
+  const mentions = weekdayMentions(text);
+
+  for (let index = 0; index + 1 < mentions.length; index++) {
+    const first = mentions[index]!;
+    const second = mentions[index + 1]!;
+    const connector = text.slice(first.end, second.start).toLowerCase().replace(/[.,]/g, "").trim();
+
+    if (isRangeConnector(connector)) return weekdayRange(first.weekday, second.weekday);
+  }
+
+  return undefined;
+}
+
+/** Recover an adjacent ordinal-weekday selector after the neural decoder has
+ * already established that the utterance is a schedule. */
+function explicitOrdinalWeekday(
+  entries: readonly Entry[],
+): ScheduleIntent["ordinalWeekday"] | undefined {
+  const text = joinEntries(entries);
+
+  const ordinals = Object.entries(ORDINAL_ALIASES).sort(
+    ([left], [right]) => right.length - left.length,
+  );
+
+  const weekdays = [
     ...Object.entries(WEEKDAY_DESCRIPTIONS),
     ...Object.entries(WEEKDAY_PLURAL_ALIASES),
     ...Object.entries(WEEKDAY_ALIASES),
-  ] as Array<[string, Weekday]>;
+  ].sort(([left], [right]) => right.length - left.length) as Array<[string, Weekday]>;
 
-  for (const [surface, weekday] of surfaces.sort(([left], [right]) => right.length - left.length)) {
-    const pattern = regexEscape(surface).replace(/\\ /g, "\\s+");
+  for (const [ordinalSurface, ordinal] of ordinals) {
+    const ordinalPattern = regexEscape(ordinalSurface).replace(/\\ /g, "\\s+");
 
-    if (new RegExp(`(?:^|[^a-z])${pattern}(?:$|[^a-z])`).test(text)) weekdays.add(weekday);
+    for (const [weekdaySurface, weekday] of weekdays) {
+      const weekdayPattern = regexEscape(weekdaySurface).replace(/\\ /g, "\\s+");
+
+      if (
+        new RegExp(`(?:^|[^a-z0-9])${ordinalPattern}\\s+${weekdayPattern}(?=$|[^a-z])`).test(text)
+      ) {
+        return { ordinal, weekday };
+      }
+    }
   }
 
-  return normalizeWeekdays([...weekdays]);
+  return undefined;
 }
 
 /** Extract a weekday selector only behind an explicit recurrence/list cue.
@@ -559,6 +632,9 @@ function weekdaysIn(text: string): Weekday[] {
  * a schedule; bare short weekday inputs are handled by exactLexicalIntent. */
 function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefined {
   const text = joinEntries(entries);
+  const range = explicitWeekdayRange(text);
+
+  if (range !== undefined) return range;
 
   if (
     !/\b(?:every|each|weekly\s+on|every\s+week\s+on|each\s+week\s+on|days?\s+(?:are|is))\b/.test(
@@ -1039,6 +1115,28 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
 
       intent.time = { hour: Math.floor(total / 60), minute: total % 60 };
     }
+  }
+
+  const ordinalEvidence = explicitOrdinalWeekday(entries);
+
+  if (ordinalEvidence !== undefined) {
+    if (
+      (intent.ordinalWeekday !== undefined &&
+        (intent.ordinalWeekday.ordinal !== ordinalEvidence.ordinal ||
+          intent.ordinalWeekday.weekday !== ordinalEvidence.weekday)) ||
+      intent.dayOfMonth !== undefined ||
+      intent.day !== undefined ||
+      (intent.weekdays !== undefined &&
+        intent.weekdays.some((weekday) => weekday !== ordinalEvidence.weekday))
+    ) {
+      throw new RangeError(
+        "decodeIntent: predicted selector conflicts with explicit ordinal weekday",
+      );
+    }
+
+    intent.frequency.unit = "month";
+    intent.ordinalWeekday = ordinalEvidence;
+    delete intent.weekdays;
   }
 
   const dayGroupEvidence = explicitDayGroup(entries);
