@@ -627,6 +627,43 @@ function explicitOrdinalWeekday(
   return undefined;
 }
 
+/** Extract a monthly calendar-day selector when both the value and monthly
+ * recurrence are explicit. Requiring both halves keeps ordinary mentions of a
+ * numbered day from becoming schedules. */
+function explicitDayOfMonth(entries: readonly Entry[]): number | undefined {
+  const text = joinEntries(entries);
+
+  if (!/\b(?:monthly|every\s+month|each\s+month)\b/.test(text)) return undefined;
+
+  const wordOrdinals = [...DAY_ORDINALS]
+    .sort((left, right) => right.length - left.length)
+    .map((value) => regexEscape(value).replace(/\ /g, "\\s+"))
+    .join("|");
+
+  const valuePattern = `(\\d{1,2})(?:st|nd|rd|th)?|(${wordOrdinals})`;
+
+  const patterns = [
+    new RegExp(`\\b(?:the\\s+)?(?:${valuePattern})\\s+day\\b`),
+    new RegExp(`\\bday\\s+(?:${valuePattern})\\b`),
+    new RegExp(`\\b(?:the\\s+)?(?:${valuePattern})\\s+of\\s+(?:every|each)?\\s*month\\b`),
+  ];
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+
+    if (match === null) continue;
+    const surface = match.slice(1).find((value) => value !== undefined);
+
+    if (surface === undefined) continue;
+    const numeric = /^\d+$/.test(surface) ? Number(surface) : DAY_ORDINALS.indexOf(surface) + 1;
+
+    if (validateDayOfMonth(numeric) === null) return numeric;
+    throw new RangeError(`decodeIntent: invalid explicit day of month: ${numeric}`);
+  }
+
+  return undefined;
+}
+
 /** Extract a weekday selector only behind an explicit recurrence/list cue.
  * This intentionally does not turn arbitrary prose containing "Monday" into
  * a schedule; bare short weekday inputs are handled by exactLexicalIntent. */
@@ -1067,6 +1104,18 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   if (ordinal !== undefined && ordinalEvidence !== undefined && weekdays.length === 0) {
     weekdays.push(ordinalEvidence.weekday);
   }
+
+  const dayOfMonthEvidence = explicitDayOfMonth(entries);
+
+  if (
+    dayOfMonth !== undefined &&
+    dayOfMonthEvidence !== undefined &&
+    dayOfMonth !== dayOfMonthEvidence
+  ) {
+    throw new RangeError("decodeIntent: predicted day conflicts with explicit day of month");
+  }
+
+  dayOfMonth ??= dayOfMonthEvidence;
 
   let resolvedUnit = unit;
 

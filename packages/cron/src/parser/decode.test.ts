@@ -282,6 +282,24 @@ describe("range and interval rules", () => {
     });
   });
 
+  test("explicit monthly day evidence recovers an all-O model decode", () => {
+    const tokens = tokenize("remind me to the 24th day, monthly").filter(
+      (token) => token.kind !== 3,
+    );
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: labelId.O,
+      boundary: false,
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled).intent).toEqual({
+      frequency: { unit: "month", interval: 1 },
+      dayOfMonth: 24,
+    });
+  });
+
   test("every other friday multiplies the interval by two", () => {
     const tokens = tokenize("every other friday").filter((token) => token.kind !== 3);
     const roles = [labelId.RECUR, labelId.GLUE, labelId.WEEKDAY];
