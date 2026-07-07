@@ -1116,6 +1116,12 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   }
 
   dayOfMonth ??= dayOfMonthEvidence;
+  const exceptionEvidence = explicitExceptions(entries);
+
+  if (exceptionEvidence?.selectorWeekdays.length) {
+    weekdays.length = 0;
+    weekdays.push(...exceptionEvidence.selectorWeekdays);
+  }
 
   let resolvedUnit = unit;
 
@@ -1210,8 +1216,6 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   const boundEvidence = explicitBounds(entries);
 
   if (boundEvidence !== undefined) intent.bounds = reconcileBounds(intent.bounds, boundEvidence);
-
-  const exceptionEvidence = explicitExceptions(entries);
 
   if (exceptionEvidence !== undefined) {
     intent.exceptions = exceptionEvidence.exceptions;

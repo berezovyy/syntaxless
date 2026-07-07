@@ -335,6 +335,23 @@ describe("range and interval rules", () => {
     });
   });
 
+  test("an explicit selector plus exception recovers an all-O decode", () => {
+    const tokens = tokenize("excluding friday, every monday").filter((token) => token.kind !== 3);
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: labelId.O,
+      boundary: false,
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled).intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["monday"],
+      exceptions: { weekdays: ["friday"] },
+    });
+  });
+
   test("an incomplete explicit exception fails instead of becoming unrestricted", () => {
     const tokens = tokenize("daily except").filter((token) => token.kind !== 3);
 
