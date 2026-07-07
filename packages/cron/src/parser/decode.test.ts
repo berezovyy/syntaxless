@@ -317,6 +317,22 @@ describe("range and interval rules", () => {
     });
   });
 
+  test("explicit cadence evidence keeps its number out of the clock", () => {
+    const tokens = tokenize("the cycle is 43 minutes").filter((token) => token.kind !== 3);
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role:
+        token.text === "43" ? labelId.MINUTE : token.text === "minutes" ? labelId.GLUE : labelId.O,
+      boundary: token.text === "43",
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled).intent).toEqual({
+      frequency: { unit: "minute", interval: 43 },
+    });
+  });
+
   test("explicit exception evidence cannot disappear behind O predictions", () => {
     const tokens = tokenize("daily except friday and 2026-12-25").filter(
       (token) => token.kind !== 3,

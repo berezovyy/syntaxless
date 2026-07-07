@@ -311,6 +311,58 @@ function weekdayRange(start: Weekday, end: Weekday): Weekday[] {
   return result;
 }
 
+interface ExplicitFrequencyEvidence {
+  unit: FrequencyUnit;
+  interval: number;
+  valueStart: number;
+  valueEnd: number;
+}
+
+/** Locate a numeric cadence behind an explicit recurrence noun or verb. The
+ * value offsets let decoding distinguish an interval number from a clock even
+ * when the neural role for that number is wrong. */
+function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence | undefined {
+  const text = joinEntries(entries);
+
+  const units = Object.keys(UNIT_ALIASES)
+    .sort((left, right) => right.length - left.length)
+    .map(regexEscape)
+    .join("|");
+
+  const pattern = new RegExp(`\\b(\\d+|[a-z]+(?:[-\\s][a-z]+)?)\\s+(${units})\\b`, "g");
+
+  for (const match of text.matchAll(pattern)) {
+    const interval = numberFrom(match[1]!);
+    const unit = UNIT_ALIASES[match[2]!];
+
+    if (interval === undefined || unit === undefined) continue;
+    const start = match.index!;
+    const prefix = text.slice(Math.max(0, start - 48), start);
+    const suffix = text.slice(start + match[0]!.length, start + match[0]!.length + 24);
+
+    if (
+      !/\b(?:every|each|once\s+per|interval(?:\s+is|\s+of)?|cadence(?:\s+is|\s+of)?|cycle(?:\s+is|\s+of)?|recurring\s+every)\s*$/.test(
+        prefix,
+      ) &&
+      !/^\s*(?:between\s+runs|apart|cycle)\b/.test(suffix)
+    ) {
+      continue;
+    }
+
+    const valueOffset = match[0]!.indexOf(match[1]!);
+    const valueStart = start + valueOffset;
+
+    return {
+      unit,
+      interval,
+      valueStart,
+      valueEnd: valueStart + match[1]!.length,
+    };
+  }
+
+  return undefined;
+}
+
 function normalizeWeekdays(days: readonly Weekday[]): Weekday[] {
   const selected = new Set(days);
 
@@ -1055,6 +1107,18 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
 
   if (lexical !== null) return lexical;
 
+  const frequencyEvidence = explicitFrequency(entries);
+
+  const decodingEntries =
+    frequencyEvidence === undefined
+      ? entries
+      : entries.map((entry) =>
+          entry.token.start >= frequencyEvidence.valueStart &&
+          entry.token.end <= frequencyEvidence.valueEnd
+            ? { ...entry, label: "INTERVAL" as const }
+            : entry,
+        );
+
   let interval: number | undefined;
   let unit: FrequencyUnit | undefined;
   let other = false;
@@ -1069,7 +1133,7 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   const bounds: RecurrenceBounds = {};
   const exceptions: ScheduleExceptions = {};
 
-  for (const clause of splitClauses(entries)) {
+  for (const clause of splitClauses(decodingEntries)) {
     const facts = decodeClause(groupClause(clause));
 
     interval ??= facts.interval;
@@ -1116,6 +1180,12 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   }
 
   dayOfMonth ??= dayOfMonthEvidence;
+
+  if (frequencyEvidence !== undefined) {
+    unit = frequencyEvidence.unit;
+    interval = frequencyEvidence.interval;
+  }
+
   const exceptionEvidence = explicitExceptions(entries);
 
   if (exceptionEvidence?.selectorWeekdays.length) {
