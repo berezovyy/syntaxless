@@ -16,7 +16,12 @@ import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { coarseText, fingerprintExample, structuralPattern } from "./fingerprint";
+import {
+  coarseText,
+  fingerprintExample,
+  fingerprintPattern,
+  structuralPattern,
+} from "./fingerprint";
 import type { CorpusRecord, Split } from "./generate";
 import { expandKinds, iterateKinds, kindIds } from "./kinds";
 import type { ExampleSplit, KindExample, KindId } from "./kinds";
@@ -62,6 +67,8 @@ export interface BackwardOptions {
 export interface BackwardResult {
   records: CorpusRecord[];
   fingerprints: string[];
+  fingerprintsBySplit: Record<Split, string[]>;
+  carrierHashesBySplit: Record<Split, string[]>;
   generatorSha256: string;
   out: string;
   fingerprintsPath: string;
@@ -70,6 +77,48 @@ export interface BackwardResult {
 }
 
 export type BackwardSummary = Omit<BackwardResult, "records">;
+
+interface SplitMetadataSets {
+  fingerprints: Record<Split, Set<string>>;
+  carrierHashes: Record<Split, Set<string>>;
+}
+
+function splitMetadataSets(): SplitMetadataSets {
+  return {
+    fingerprints: {
+      train: new Set<string>(),
+      validation: new Set<string>(),
+      heldout: new Set<string>(),
+    },
+    carrierHashes: {
+      train: new Set<string>(),
+      validation: new Set<string>(),
+      heldout: new Set<string>(),
+    },
+  };
+}
+
+function addSplitMetadata(metadata: SplitMetadataSets, record: CorpusRecord): void {
+  metadata.fingerprints[record.split].add(record.fingerprint);
+
+  for (const entry of fingerprintPattern(record.text, record.spans)) {
+    if (/^[0-9a-f]{12}$/.test(entry)) metadata.carrierHashes[record.split].add(entry);
+  }
+}
+
+function sortedSplitMetadata(metadata: SplitMetadataSets): {
+  fingerprintsBySplit: Record<Split, string[]>;
+  carrierHashesBySplit: Record<Split, string[]>;
+} {
+  return {
+    fingerprintsBySplit: Object.fromEntries(
+      SPLITS.map((split) => [split, [...metadata.fingerprints[split]].sort()]),
+    ) as Record<Split, string[]>,
+    carrierHashesBySplit: Object.fromEntries(
+      SPLITS.map((split) => [split, [...metadata.carrierHashes[split]].sort()]),
+    ) as Record<Split, string[]>,
+  };
+}
 
 function parseSplit(value: string): Split {
   if ((SPLITS as readonly string[]).includes(value)) return value as Split;
@@ -337,6 +386,10 @@ export function generateBackward(options: BackwardOptions): BackwardResult {
       : tagged.filter((example) => example.split === options.split);
 
   const records = selected.map((example, index) => toRecord(example, index));
+  const metadata = splitMetadataSets();
+
+  for (const record of records) addSplitMetadata(metadata, record);
+  const { fingerprintsBySplit, carrierHashesBySplit } = sortedSplitMetadata(metadata);
 
   mkdirSync(dirname(options.out), { recursive: true });
   const body = records.map((record) => JSON.stringify(record)).join("\n");
@@ -349,12 +402,18 @@ export function generateBackward(options: BackwardOptions): BackwardResult {
 
   writeFileSync(
     fingerprintsPath,
-    `${JSON.stringify({ fingerprints, generatorSha256: sha }, null, 2)}\n`,
+    `${JSON.stringify(
+      { fingerprints, fingerprintsBySplit, carrierHashesBySplit, generatorSha256: sha },
+      null,
+      2,
+    )}\n`,
   );
 
   return {
     records,
     fingerprints,
+    fingerprintsBySplit,
+    carrierHashesBySplit,
     generatorSha256: sha,
     out: options.out,
     fingerprintsPath,
@@ -378,6 +437,7 @@ export function writeBackward(options: BackwardOptions): BackwardSummary {
   mkdirSync(dirname(options.out), { recursive: true });
   const file = openSync(options.out, "w");
   const fingerprints = new Set<string>();
+  const metadata = splitMetadataSets();
   const byKind: Record<string, number> = {};
   const bySplit: Record<Split, number> = { train: 0, validation: 0, heldout: 0 };
   let index = 0;
@@ -395,6 +455,7 @@ export function writeBackward(options: BackwardOptions): BackwardSummary {
 
       chunk += `${JSON.stringify(record)}\n`;
       fingerprints.add(record.fingerprint);
+      addSplitMetadata(metadata, record);
       byKind[example.kind] = (byKind[example.kind] ?? 0) + 1;
       bySplit[record.split]++;
 
@@ -410,16 +471,28 @@ export function writeBackward(options: BackwardOptions): BackwardSummary {
   }
 
   const sortedFingerprints = [...fingerprints].sort();
+  const { fingerprintsBySplit, carrierHashesBySplit } = sortedSplitMetadata(metadata);
   const fingerprintsPath = `${options.out}.fingerprints.json`;
   const sha = generatorSha256();
 
   writeFileSync(
     fingerprintsPath,
-    `${JSON.stringify({ fingerprints: sortedFingerprints, generatorSha256: sha }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        fingerprints: sortedFingerprints,
+        fingerprintsBySplit,
+        carrierHashesBySplit,
+        generatorSha256: sha,
+      },
+      null,
+      2,
+    )}\n`,
   );
 
   return {
     fingerprints: sortedFingerprints,
+    fingerprintsBySplit,
+    carrierHashesBySplit,
     generatorSha256: sha,
     out: options.out,
     fingerprintsPath,

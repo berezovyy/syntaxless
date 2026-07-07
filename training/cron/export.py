@@ -52,7 +52,9 @@ DEFAULT_REPORT = "training/cron/active/export-report.json"
 DEFAULT_FIXTURES = "packages/cron/tests/fixtures"
 DEFAULT_DIST = "packages/cron/dist"
 DEFAULT_CORPUS = "packages/cron/training/data/gold/reserved-carriers.jsonl"
-DEFAULT_TRAIN_SPLIT = "packages/cron/training/data/synth/train.jsonl"
+DEFAULT_TRAIN_SPLIT = (
+    "packages/cron/training/data/synth/kinds.jsonl.fingerprints.json"
+)
 #: Files hashed into the report provenance block.
 EXPORT_SOURCES = (
     "calibrate.py",
@@ -528,8 +530,11 @@ def export(
     artifact = build_artifact(segments, q, labels, checkpoint, hidden, 0.0)
     decoded = build_decoded_model(artifact, device)
 
+    # Validation is the calibration split. Held-out remains untouched until the
+    # threshold is frozen, otherwise its reported score participates in model
+    # selection and ceases to be held out.
     calibration: Calibration = calibrate(
-        decoded, [validation, heldout], batch_size=batch_size, device=device
+        decoded, [validation], batch_size=batch_size, device=device
     )
     artifact["boundaryThreshold"] = calibration.threshold
 

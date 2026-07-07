@@ -18,18 +18,17 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { RESERVED_PHRASES } from "./background";
+import { generatorSha256 } from "./backward";
 import {
   assertSameArtifact,
   DEFAULT_SCOPE,
   evaluateCorpus,
   loadEngine,
-  parseCorpus,
   resolveRepo,
   sha256Hex,
 } from "./evaluate";
 import type { ContractReport, Counts, Engine, EvaluationResult, Metric } from "./evaluate";
-import { coarseText, fingerprintPattern } from "./fingerprint";
-import type { Span } from "./sentence";
+import { coarseText } from "./fingerprint";
 
 /** Two-proportion guard constants, fixed by the plan. */
 export const GUARD_Z = 1.96;
@@ -55,7 +54,7 @@ export const DEFAULTS = {
   candidate: "packages/cron/training/candidate/weights.gen.ts",
   baseline: "packages/cron/src/model/weights.gen.ts",
   corpus: "packages/cron/training/data/gold/reserved-carriers.jsonl",
-  trainSplit: "packages/cron/training/data/synth/train.jsonl",
+  trainSplit: "packages/cron/training/data/synth/kinds.jsonl.fingerprints.json",
   out: "packages/cron/training/results/gate.json",
 } as const;
 
@@ -252,13 +251,22 @@ export interface LeakReport {
   split: string;
   carriers: string[];
   leaked: string[];
+  splitOverlaps: Array<{
+    left: "train" | "validation";
+    right: "validation" | "heldout";
+    count: number;
+    examples: string[];
+  }>;
+  reason: string | null;
   scope: string;
 }
 
 const LEAK_SCOPE =
   "Reserved carrier fingerprints are recomputed from the Phase 07 " +
-  "RESERVED_PHRASES and intersected with the Phase 08 training split. A " +
-  "missing split is reported as unchecked and fails promotion.";
+  "RESERVED_PHRASES and intersected with the generated training carrier " +
+  "hashes. Train/validation, train/held-out, and validation/held-out frame " +
+  "fingerprints must also be disjoint. Missing, malformed, or stale metadata " +
+  "is reported as unchecked and fails promotion.";
 
 /** Map `sha256(coarse(carrier)).slice(0, 12)` back to the carrier text. */
 function carrierHashes(): Map<string, string> {
@@ -277,27 +285,106 @@ export function checkCarrierLeak(trainSplit: string): LeakReport {
   const hashes = carrierHashes();
   const carriers = [...hashes.values()].sort();
 
+  const unchecked = (reason: string): LeakReport => ({
+    checked: false,
+    split: path,
+    carriers,
+    leaked: [],
+    splitOverlaps: [],
+    reason,
+    scope: LEAK_SCOPE,
+  });
+
   if (!existsSync(path)) {
-    return { checked: false, split: path, carriers, leaked: [], scope: LEAK_SCOPE };
+    return unchecked("metadata missing");
+  }
+
+  let value: unknown;
+
+  try {
+    value = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return unchecked("metadata is not valid JSON");
+  }
+
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return unchecked("metadata is not an object");
+  }
+
+  const metadata = value as Record<string, unknown>;
+
+  if (metadata.generatorSha256 !== generatorSha256()) {
+    return unchecked("metadata generator hash is stale");
+  }
+
+  const splitNames = ["train", "validation", "heldout"] as const;
+  const fingerprints = metadata.fingerprintsBySplit;
+  const metadataCarrierHashes = metadata.carrierHashesBySplit;
+
+  if (
+    fingerprints === null ||
+    typeof fingerprints !== "object" ||
+    Array.isArray(fingerprints) ||
+    metadataCarrierHashes === null ||
+    typeof metadataCarrierHashes !== "object" ||
+    Array.isArray(metadataCarrierHashes)
+  ) {
+    return unchecked("metadata lacks per-split fingerprints or carrier hashes");
+  }
+
+  const fingerprintSets = {} as Record<(typeof splitNames)[number], Set<string>>;
+  const carrierHashSets = {} as Record<(typeof splitNames)[number], Set<string>>;
+
+  for (const split of splitNames) {
+    const splitFingerprints = (fingerprints as Record<string, unknown>)[split];
+    const splitCarriers = (metadataCarrierHashes as Record<string, unknown>)[split];
+
+    if (
+      !Array.isArray(splitFingerprints) ||
+      !splitFingerprints.every((entry) => typeof entry === "string") ||
+      !Array.isArray(splitCarriers) ||
+      !splitCarriers.every((entry) => typeof entry === "string")
+    ) {
+      return unchecked(`metadata has an invalid ${split} split`);
+    }
+
+    fingerprintSets[split] = new Set(splitFingerprints);
+    carrierHashSets[split] = new Set(splitCarriers);
   }
 
   const leaked = new Set<string>();
 
-  for (const record of parseCorpus(readFileSync(path, "utf8"))) {
-    const pattern = fingerprintPattern(record.text, record.spans as readonly Span[]);
+  for (const entry of carrierHashSets.train) {
+    const carrier = hashes.get(entry);
 
-    for (const entry of pattern) {
-      const carrier = hashes.get(entry);
-
-      if (carrier !== undefined) leaked.add(carrier);
-    }
+    if (carrier !== undefined) leaked.add(carrier);
   }
+
+  const pairs = [
+    ["train", "validation"],
+    ["train", "heldout"],
+    ["validation", "heldout"],
+  ] as const;
+
+  const splitOverlaps = pairs.map(([left, right]) => {
+    const overlap: string[] = [];
+
+    for (const fingerprint of fingerprintSets[left]) {
+      if (fingerprintSets[right].has(fingerprint)) overlap.push(fingerprint);
+    }
+
+    overlap.sort();
+
+    return { left, right, count: overlap.length, examples: overlap.slice(0, 10) };
+  });
 
   return {
     checked: true,
     split: path,
     carriers,
     leaked: [...leaked].sort(),
+    splitOverlaps,
+    reason: null,
     scope: LEAK_SCOPE,
   };
 }
@@ -369,6 +456,12 @@ export async function runGate(options: GateOptions): Promise<GateReport> {
         `reserved carrier leaked into training split: ${leak.leaked.join(", ")}`,
       );
 
+      decision.accepted = false;
+    }
+
+    for (const overlap of leak.splitOverlaps) {
+      if (overlap.count === 0) continue;
+      decision.failures.push(`${overlap.left}/${overlap.right} frame leakage: ${overlap.count}`);
       decision.accepted = false;
     }
 
