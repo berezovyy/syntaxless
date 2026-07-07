@@ -1062,6 +1062,12 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
     }
   }
 
+  const ordinalEvidence = explicitOrdinalWeekday(entries);
+
+  if (ordinal !== undefined && ordinalEvidence !== undefined && weekdays.length === 0) {
+    weekdays.push(ordinalEvidence.weekday);
+  }
+
   let resolvedUnit = unit;
 
   if (resolvedUnit === undefined) {
@@ -1116,8 +1122,6 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
       intent.time = { hour: Math.floor(total / 60), minute: total % 60 };
     }
   }
-
-  const ordinalEvidence = explicitOrdinalWeekday(entries);
 
   if (ordinalEvidence !== undefined) {
     if (

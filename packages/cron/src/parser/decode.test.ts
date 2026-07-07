@@ -267,8 +267,8 @@ describe("range and interval rules", () => {
     const labeled: LabeledToken[] = tokens.map((token) => ({
       token,
       role:
-        token.text === "friday"
-          ? labelId.WEEKDAY
+        token.text === "third"
+          ? labelId.ORDINAL
           : token.text === "monthly"
             ? labelId.RECUR
             : labelId.O,
