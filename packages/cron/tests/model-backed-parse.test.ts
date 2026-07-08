@@ -120,20 +120,94 @@ describe("model-backed parse parity with the Phase 04 table", () => {
 });
 
 describe("exact lexical schedule and rejection surfaces", () => {
-  test.each(["MON", "mon", "mOn", "the first day of the week", "on the first day of the week"])(
-    "%s resolves to Monday after normalization",
-    async (phrase) => {
-      const result = await parse(phrase);
+  test.each([
+    "MON",
+    "mon",
+    "mOn",
+    "mnday",
+    "the first day of the week",
+    "on the first day of the week",
+  ])("%s resolves to Monday after normalization", async (phrase) => {
+    const result = await parse(phrase);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["monday"],
+    });
+  });
+
+  test("an adjacent-transposition weekday typo resolves through its model role", async () => {
+    const result = await parse("firday");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["friday"],
+    });
+  });
+
+  test.each([
+    ["the cycle is 3 dasy", { frequency: { unit: "day", interval: 3 } }],
+    [
+      "the sevcond Thursday, monthly",
+      {
+        frequency: { unit: "month", interval: 1 },
+        ordinalWeekday: { ordinal: "second", weekday: "thursday" },
+      },
+    ],
+    ["the 15th dya, monthly", { frequency: { unit: "month", interval: 1 }, dayOfMonth: 15 }],
+    [
+      "2026-02-14 tgrough 2027-12-28, every day",
+      {
+        frequency: { unit: "day", interval: 1 },
+        bounds: { start: "2026-02-14", end: "2027-12-29" },
+      },
+    ],
+    [
+      "excludig Sunday, every Saturday",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["saturday"],
+        exceptions: { weekdays: ["sunday"] },
+      },
+    ],
+    [
+      "days arre Tuesday and Wednesday",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["tuesday", "wednesday"],
+      },
+    ],
+  ] satisfies ReadonlyArray<readonly [string, ScheduleIntent]>)(
+    "repairs one schedule-scoped typo in %s",
+    async (text, intent) => {
+      const result = await parse(text);
 
       expect(result.ok).toBe(true);
-      if (!result.ok) return;
-
-      expect(result.intent).toEqual({
-        frequency: { unit: "week", interval: 1 },
-        weekdays: ["monday"],
-      });
+      if (result.ok) expect(result.intent).toEqual(intent);
     },
   );
+
+  test.each([
+    "Please archive the Tursday report",
+    "The montgly report is ready",
+    "Our houtrs were reduced",
+    "The throuhg road is closed",
+    "We discussed excludig Sunday from the report",
+  ])("does not fuzzy-correct unrelated prose: %s", async (text) => {
+    expect((await parse(text)).ok).toBe(false);
+  });
+
+  test("rejects a weekday typo with two equally plausible meanings", async () => {
+    const result = await parse("excluding Thuesday, every day");
+
+    expect(result.ok).toBe(false);
+  });
 
   test("a bare exact clock does not depend on model confidence", async () => {
     const result = await parse("at 9");

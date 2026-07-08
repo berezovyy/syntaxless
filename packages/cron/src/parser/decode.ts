@@ -288,7 +288,109 @@ function numberFrom(text: string): number | undefined {
 function weekdayOf(text: string): Weekday | undefined {
   const lower = text.toLowerCase();
 
-  return WEEKDAY_ALIASES[lower] ?? WEEKDAY_PLURAL_ALIASES[lower] ?? WEEKDAY_DESCRIPTIONS[lower];
+  const exact =
+    WEEKDAY_ALIASES[lower] ?? WEEKDAY_PLURAL_ALIASES[lower] ?? WEEKDAY_DESCRIPTIONS[lower];
+
+  if (exact !== undefined) return exact;
+
+  // Callers either have a WEEKDAY model role or an explicit schedule-scoped
+  // grammar. Resolve one character edit only when every matching surface maps
+  // to the same weekday. This also covers noisy plurals (for example
+  // `mondayys`) without guessing an arbitrary word in prose.
+  return uniqueSingleEditAlias(
+    lower,
+    {
+      ...WEEKDAY_ALIASES,
+      ...WEEKDAY_PLURAL_ALIASES,
+    },
+    5,
+  );
+}
+
+/** Resolve a one-character deletion, insertion, substitution, repetition, or
+ * adjacent transposition. Multiple surface aliases are fine when they all
+ * denote the same value; disagreement is deliberately treated as ambiguous. */
+function uniqueSingleEditAlias<T>(
+  surface: string,
+  aliases: Readonly<Record<string, T>>,
+  minimumLength: number,
+): T | undefined {
+  const lower = surface.toLowerCase();
+
+  if (!/^[a-z]+$/.test(lower) || lower.length < minimumLength) return undefined;
+  const candidates = new Set<T>();
+
+  for (const [alias, value] of Object.entries(aliases)) {
+    if (
+      alias.length >= minimumLength &&
+      /^[a-z]+$/.test(alias) &&
+      isSingleEditVariant(lower, alias)
+    ) {
+      candidates.add(value);
+    }
+  }
+
+  return candidates.size === 1 ? candidates.values().next().value : undefined;
+}
+
+/** Normalize only members of a small grammar vocabulary. This is used inside
+ * already schedule-shaped phrases, never as a general-purpose spellchecker. */
+function normalizeGrammarWords(text: string, words: readonly string[], minimumLength = 4): string {
+  const aliases = Object.fromEntries(words.map((word) => [word, word]));
+
+  return normalizeGrammarAliases(text, aliases, minimumLength);
+}
+
+function normalizeGrammarAliases(
+  text: string,
+  aliases: Readonly<Record<string, string>>,
+  minimumLength = 4,
+): string {
+  return text.replace(/[a-z]+/g, (surface) => {
+    if (aliases[surface] !== undefined) return aliases[surface]!;
+
+    return uniqueSingleEditAlias(surface, aliases, minimumLength) ?? surface;
+  });
+}
+
+function isSingleEditVariant(left: string, right: string): boolean {
+  if (left === right || Math.abs(left.length - right.length) > 1) return false;
+
+  if (left.length === right.length) {
+    const differences: number[] = [];
+
+    for (let index = 0; index < left.length; index++) {
+      if (left[index] !== right[index]) differences.push(index);
+    }
+
+    if (differences.length === 1) return true;
+
+    return (
+      differences.length === 2 &&
+      differences[1] === differences[0]! + 1 &&
+      left[differences[0]!] === right[differences[1]!] &&
+      left[differences[1]!] === right[differences[0]!]
+    );
+  }
+
+  const shorter = left.length < right.length ? left : right;
+  const longer = left.length < right.length ? right : left;
+  let shortIndex = 0;
+  let longIndex = 0;
+  let skipped = false;
+
+  while (shortIndex < shorter.length && longIndex < longer.length) {
+    if (shorter[shortIndex] === longer[longIndex]) {
+      shortIndex += 1;
+      longIndex += 1;
+    } else {
+      if (skipped) return false;
+      skipped = true;
+      longIndex += 1;
+    }
+  }
+
+  return true;
 }
 
 function isRangeConnector(text: string): boolean {
@@ -299,7 +401,8 @@ function isRangeConnector(text: string): boolean {
     lower === "thru" ||
     lower === "up to and including" ||
     lower === WORDS.range.to ||
-    lower === WORDS.glue.dash
+    lower === WORDS.glue.dash ||
+    uniqueSingleEditAlias(lower, { through: true }, 4) === true
   );
 }
 
@@ -329,22 +432,28 @@ interface ExplicitFrequencyEvidence {
  * when the neural role for that number is wrong. */
 function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence | undefined {
   const text = joinEntries(entries);
-
-  const units = Object.keys(UNIT_ALIASES)
-    .sort((left, right) => right.length - left.length)
-    .map(regexEscape)
-    .join("|");
-
-  const pattern = new RegExp(`\\b(\\d+|[a-z]+(?:[-\\s][a-z]+)?)\\s+(${units})\\b`, "g");
+  const pattern = new RegExp(`\\b(\\d+|[a-z]+(?:[-\\s][a-z]+)?)\\s+([a-z]+)\\b`, "g");
 
   for (const match of text.matchAll(pattern)) {
     const interval = numberFrom(match[1]!);
-    const unit = UNIT_ALIASES[match[2]!];
+    const unit = UNIT_ALIASES[match[2]!] ?? uniqueSingleEditAlias(match[2]!, UNIT_ALIASES, 3);
 
     if (interval === undefined || unit === undefined) continue;
     const start = match.index!;
-    const prefix = text.slice(Math.max(0, start - 48), start);
-    const suffix = text.slice(start + match[0]!.length, start + match[0]!.length + 24);
+
+    const prefix = normalizeGrammarWords(text.slice(Math.max(0, start - 48), start), [
+      "every",
+      "each",
+      "interval",
+      "cadence",
+      "cycle",
+      "recurring",
+    ]);
+
+    const suffix = normalizeGrammarWords(
+      text.slice(start + match[0]!.length, start + match[0]!.length + 24),
+      ["between", "runs", "apart", "cycle"],
+    );
 
     if (
       !/\b(?:every|each|once\s+per|interval(?:\s+is|\s+of)?|cadence(?:\s+is|\s+of)?|cycle(?:\s+is|\s+of)?|recurring\s+every)\s*$/.test(
@@ -364,6 +473,23 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
       valueStart,
       valueEnd: valueStart + match[1]!.length,
     };
+  }
+
+  // Unit-interval schedules have no explicit numeric value to relabel. A
+  // recurrence cue plus a uniquely recoverable unit is still complete
+  // evidence, e.g. `evrry day`.
+  const normalized = normalizeGrammarWords(
+    text,
+    ["every", "each", ...Object.keys(UNIT_ALIASES)],
+    3,
+  );
+
+  const unitInterval = /\b(?:every|each)\s+([a-z]+)\b/.exec(normalized);
+
+  if (unitInterval !== null) {
+    const unit = UNIT_ALIASES[unitInterval[1]!];
+
+    if (unit !== undefined) return { unit, interval: 1, valueStart: -1, valueEnd: -1 };
   }
 
   return undefined;
@@ -505,8 +631,19 @@ function explicitBounds(entries: readonly Entry[]): RecurrenceBounds | undefined
   if (dates.length >= 2) {
     const first = dates[0]!;
     const second = dates[1]!;
-    const before = text.slice(Math.max(0, first.start - 32), first.start);
-    const between = text.slice(first.end, second.start);
+
+    const before = normalizeGrammarWords(text.slice(Math.max(0, first.start - 32), first.start), [
+      "between",
+      "from",
+      "starting",
+      "beginning",
+    ]);
+
+    const between = normalizeGrammarWords(text.slice(first.end, second.start), [
+      "through",
+      "until",
+      "and",
+    ]);
 
     if (
       !/\b(?:between|from|starting|beginning)\s*$/.test(before) &&
@@ -524,8 +661,29 @@ function explicitBounds(entries: readonly Entry[]): RecurrenceBounds | undefined
   }
 
   const date = dates[0]!;
-  const before = text.slice(Math.max(0, date.start - 48), date.start);
-  const after = text.slice(date.end, Math.min(text.length, date.end + 48));
+
+  const before = normalizeGrammarWords(text.slice(Math.max(0, date.start - 48), date.start), [
+    "ending",
+    "through",
+    "including",
+    "until",
+    "before",
+    "stopping",
+    "from",
+    "starting",
+    "beginning",
+    "after",
+    "effective",
+    "commencing",
+  ]);
+
+  const after = normalizeGrammarWords(text.slice(date.end, Math.min(text.length, date.end + 48)), [
+    "every",
+    "each",
+    "daily",
+    "weekly",
+    "monthly",
+  ]);
 
   if (/\b(?:ending\s+on|through\s+and\s+including)\s*$/.test(before)) {
     const end = offsetIsoDate(date.iso, 1);
@@ -590,7 +748,7 @@ interface WeekdayMention {
   weekday: Weekday;
 }
 
-function weekdayMentions(text: string): WeekdayMention[] {
+function weekdayMentions(text: string, allowFuzzy = false): WeekdayMention[] {
   const mentions: WeekdayMention[] = [];
 
   const surfaces = [
@@ -614,10 +772,22 @@ function weekdayMentions(text: string): WeekdayMention[] {
     }
   }
 
+  if (allowFuzzy) {
+    for (const match of text.matchAll(/[a-z]+/g)) {
+      const start = match.index!;
+      const end = start + match[0].length;
+
+      if (mentions.some((item) => start < item.end && end > item.start)) continue;
+      const weekday = weekdayOf(match[0]);
+
+      if (weekday !== undefined) mentions.push({ start, end, weekday });
+    }
+  }
+
   return mentions.sort((left, right) => left.start - right.start || left.end - right.end);
 }
 
-function weekdaysIn(text: string): Weekday[] {
+function weekdaysIn(text: string, allowFuzzy = false): Weekday[] {
   const weekdays = new Set<Weekday>();
 
   for (const [surface, members] of Object.entries(WEEKDAY_GROUPS).sort(
@@ -630,15 +800,15 @@ function weekdaysIn(text: string): Weekday[] {
     }
   }
 
-  for (const mention of weekdayMentions(text)) weekdays.add(mention.weekday);
+  for (const mention of weekdayMentions(text, allowFuzzy)) weekdays.add(mention.weekday);
 
   return normalizeWeekdays([...weekdays]);
 }
 
 /** Preserve an explicitly written weekday range even when the model misses
  * its connector or second endpoint. */
-function explicitWeekdayRange(text: string): Weekday[] | undefined {
-  const mentions = weekdayMentions(text);
+function explicitWeekdayRange(text: string, allowFuzzy = false): Weekday[] | undefined {
+  const mentions = weekdayMentions(text, allowFuzzy);
 
   for (let index = 0; index + 1 < mentions.length; index++) {
     const first = mentions[index]!;
@@ -682,6 +852,23 @@ function explicitOrdinalWeekday(
     }
   }
 
+  // The exact phrase scan above handles descriptive weekday expressions. For
+  // a single noisy word pair, require both an ordinal value and weekday value
+  // to resolve uniquely before preserving the explicit selector.
+  const words = [...text.matchAll(/[a-z]+/g)].map((match) => match[0]);
+
+  for (let index = 0; index + 1 < words.length; index += 1) {
+    const ordinalSurface = words[index]!;
+    const weekdaySurface = words[index + 1]!;
+
+    const ordinal =
+      ORDINAL_ALIASES[ordinalSurface] ?? uniqueSingleEditAlias(ordinalSurface, ORDINAL_ALIASES, 4);
+
+    const weekday = weekdayOf(weekdaySurface);
+
+    if (ordinal !== undefined && weekday !== undefined) return { ordinal, weekday };
+  }
+
   return undefined;
 }
 
@@ -689,7 +876,11 @@ function explicitOrdinalWeekday(
  * recurrence are explicit. Requiring both halves keeps ordinary mentions of a
  * numbered day from becoming schedules. */
 function explicitDayOfMonth(entries: readonly Entry[]): number | undefined {
-  const text = joinEntries(entries);
+  const rawText = joinEntries(entries);
+  // These substitutions are evaluated only by the strict monthly day grammar
+  // below. Neither a near-`day` word nor a near-`monthly` word is sufficient
+  // by itself to create a schedule.
+  const text = normalizeGrammarWords(rawText, ["day", "monthly", "month"], 2);
 
   if (!/\b(?:monthly|every\s+month|each\s+month)\b/.test(text)) return undefined;
 
@@ -727,19 +918,25 @@ function explicitDayOfMonth(entries: readonly Entry[]): number | undefined {
  * a schedule; bare short weekday inputs are handled by exactLexicalIntent. */
 function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefined {
   const text = joinEntries(entries);
-  const range = explicitWeekdayRange(text);
+  const range = explicitWeekdayRange(text, true);
 
   if (range !== undefined) return range;
 
+  const cueText = normalizeGrammarAliases(
+    text,
+    { day: "day", days: "day", are: "are", is: "is" },
+    2,
+  );
+
   if (
-    !/\b(?:every|each|weekly\s+on|every\s+week\s+on|each\s+week\s+on|days?\s+(?:are|is))\b/.test(
-      text,
+    !/\b(?:every|each|weekly\s+on|every\s+week\s+on|each\s+week\s+on|day\s+(?:are|is))\b/.test(
+      cueText,
     )
   ) {
     return undefined;
   }
 
-  const weekdays = weekdaysIn(text);
+  const weekdays = weekdaysIn(text, true);
 
   return weekdays.length === 0 ? undefined : weekdays;
 }
@@ -775,19 +972,37 @@ function explicitExceptions(entries: readonly Entry[]): ExplicitExceptionEvidenc
     .join("|");
 
   const cue = new RegExp(`\\b(?:${alternatives})\\b`).exec(text);
+  let cueStart = cue?.index;
+  let cueEnd = cue === null ? undefined : cue.index + cue[0].length;
 
-  if (cue === null) return undefined;
-  const rawSuffix = text.slice(cue.index + cue[0].length);
+  if (cueStart === undefined || cueEnd === undefined) {
+    const singleWordPrefixes = Object.fromEntries(
+      EXCEPTION_PREFIXES.filter((prefix) => /^[a-z]+$/.test(prefix)).map((prefix) => [
+        prefix,
+        prefix,
+      ]),
+    );
+
+    for (const word of text.matchAll(/[a-z]+/g)) {
+      if (uniqueSingleEditAlias(word[0], singleWordPrefixes, 5) === undefined) continue;
+      cueStart = word.index!;
+      cueEnd = cueStart + word[0].length;
+      break;
+    }
+  }
+
+  if (cueStart === undefined || cueEnd === undefined) return undefined;
+  const rawSuffix = text.slice(cueEnd);
   const separator = /,|\b(?:every|each|daily|weekly|monthly|at)\b/.exec(rawSuffix);
   const exceptionText = separator === null ? rawSuffix : rawSuffix.slice(0, separator.index);
 
   const outsideText =
-    text.slice(0, cue.index) +
+    text.slice(0, cueStart) +
     (separator === null
       ? ""
       : ` ${rawSuffix.slice(separator.index + Number(separator[0] === ","))}`);
 
-  const weekdays = weekdaysIn(exceptionText);
+  const weekdays = weekdaysIn(exceptionText, true);
   const dates = [...new Set(calendarDateCandidates(exceptionText).map((date) => date.iso))];
 
   if (weekdays.length === 0 && dates.length === 0) {
@@ -799,7 +1014,7 @@ function explicitExceptions(entries: readonly Entry[]): ExplicitExceptionEvidenc
       ...(weekdays.length === 0 ? {} : { weekdays }),
       ...(dates.length === 0 ? {} : { dates: dates.sort() }),
     },
-    selectorWeekdays: weekdaysIn(outsideText),
+    selectorWeekdays: weekdaysIn(outsideText, true),
   };
 }
 
@@ -1200,10 +1415,15 @@ export function decodeIntent(
   const ordinalEvidence = explicitOrdinalWeekday(entries);
   const text = joinEntries(entries);
 
+  const scheduleScopeText = normalizeGrammarAliases(text, {
+    monthly: "monthly",
+    month: "monthly",
+  });
+
   const scopedOrdinalEvidence =
     ordinalEvidence !== undefined &&
     (ordinal !== undefined ||
-      /\b(?:monthly|every\s+month|each\s+month|remind|schedule)\b/.test(text))
+      /\b(?:monthly|every\s+month|each\s+month|remind|schedule)\b/.test(scheduleScopeText))
       ? ordinalEvidence
       : undefined;
 
