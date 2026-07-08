@@ -147,6 +147,18 @@ describe("exact lexical schedule and rejection surfaces", () => {
     });
   });
 
+  test("a complete relative clock overrides a contradictory global kind", async () => {
+    const result = await parse("at half past eight");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+      time: { hour: 8, minute: 30 },
+    });
+  });
+
   test("an exact ordinal weekday remains monthly", async () => {
     const result = await parse("first Monday");
 

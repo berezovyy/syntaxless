@@ -744,6 +744,28 @@ function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefin
   return weekdays.length === 0 ? undefined : weekdays;
 }
 
+/** Recover a complete relative clock such as "half past eight". Both values
+ * are visible and finite, so a mistaken token role must not erase the hour. */
+function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined {
+  const text = joinEntries(entries);
+
+  const match =
+    /\b(half|quarter|[a-z]+|\d{1,2})\s+(past|after|to|before)\s+([a-z]+|\d{1,2})\b/.exec(text);
+
+  if (match === null) return undefined;
+  const minute = MINUTE_IDIOMS[match[1]!] ?? numberFrom(match[1]!);
+  const hour = NAMED_HOURS[match[3]!] ?? numberFrom(match[3]!);
+
+  if (minute === undefined || hour === undefined || minute > 59 || hour > 23) return undefined;
+
+  const total =
+    match[2] === "to" || match[2] === "before"
+      ? (hour * 60 - minute + 1440) % 1440
+      : (hour * 60 + minute) % 1440;
+
+  return { hour: Math.floor(total / 60), minute: total % 60 };
+}
+
 function explicitExceptions(entries: readonly Entry[]): ExplicitExceptionEvidence | undefined {
   const text = joinEntries(entries);
 
@@ -1226,6 +1248,14 @@ export function decodeIntent(
   const boundEvidence = explicitBounds(entries);
 
   if (boundEvidence !== undefined) Object.assign(bounds, boundEvidence);
+  const relativeTimeEvidence = explicitRelativeTime(entries);
+
+  if (relativeTimeEvidence !== undefined) {
+    hour = relativeTimeEvidence.hour;
+    minute = relativeTimeEvidence.minute;
+    meridiem = undefined;
+    minuteRelation = undefined;
+  }
 
   if (weekdays.length === 0 && trustedScheduleKind === "weekly") {
     const visibleWeekdays = weekdaysIn(joinEntries(entries));
@@ -1375,7 +1405,11 @@ export function decodeIntent(
     weekdaySelectorEvidence !== undefined ||
     dayGroupEvidence !== undefined ||
     boundEvidence !== undefined ||
-    exceptionEvidence !== undefined;
+    exceptionEvidence !== undefined ||
+    (intent.time !== undefined &&
+      /\b(?:at|around|noon|midnight|half\s+past|quarter\s+(?:past|to)|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/.test(
+        text,
+      ));
 
   const globalKindConsistent =
     scheduleKind !== undefined &&
