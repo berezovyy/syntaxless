@@ -73,12 +73,12 @@ describe("decide", () => {
 
   test("accepts a strict improvement when every guard passes", () => {
     const decision = decide(
-      { total: 100, correct: 85, byFamily: { terse: { total: 40, correct: 32 } } },
-      { total: 100, correct: 80, byFamily: { terse: { total: 40, correct: 30 } } },
+      { total: 100, correct: 98, byFamily: { terse: { total: 40, correct: 39 } } },
+      { total: 100, correct: 96, byFamily: { terse: { total: 40, correct: 38 } } },
     );
 
     expect(decision.accepted).toBe(true);
-    expect(decision.improvement).toBeCloseTo(0.05, 10);
+    expect(decision.improvement).toBeCloseTo(0.02, 10);
     expect(decision.failures).toEqual([]);
   });
 
@@ -99,7 +99,7 @@ describe("decide", () => {
     );
 
     expect(decision.accepted).toBe(false);
-    expect(decision.failures).toContain("overall accuracy below 0.5");
+    expect(decision.failures).toContain("overall accuracy below 0.95");
   });
 
   test("rejects silent meaning changes and negative false acceptance", () => {
@@ -111,6 +111,7 @@ describe("decide", () => {
         selective: {
           silentMeaningChangeRate: 0.02,
           negativeFalseAcceptanceRate: 0.03,
+          typoInvariance: 0.94,
         },
       },
       { total: 100, correct: 80, byFamily: { terse: { total: 40, correct: 30 } } },
@@ -119,6 +120,7 @@ describe("decide", () => {
     expect(decision.accepted).toBe(false);
     expect(decision.failures).toContain("silent meaning-change rate above 0.005");
     expect(decision.failures).toContain("negative false-acceptance rate above 0.01");
+    expect(decision.failures).toContain("typo invariance below 0.95");
   });
 });
 

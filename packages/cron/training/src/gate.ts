@@ -34,8 +34,9 @@ import { coarseText } from "./fingerprint";
 export const GUARD_Z = 1.96;
 export const GUARD_MINIMUM_SUPPORT = 30;
 /** Absolute floors prevent a relative improvement from promoting a weak model. */
-export const MIN_OVERALL_ACCURACY = 0.5;
-export const MIN_FAMILY_ACCURACY = 0.25;
+export const MIN_OVERALL_ACCURACY = 0.95;
+export const MIN_FAMILY_ACCURACY = 0.9;
+export const MIN_TYPO_INVARIANCE = 0.95;
 export const MAX_SILENT_MEANING_CHANGE_RATE = 0.005;
 export const MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE = 0.01;
 
@@ -161,6 +162,7 @@ export interface GateScores {
   selective?: {
     silentMeaningChangeRate: number;
     negativeFalseAcceptanceRate: number;
+    typoInvariance: number;
   };
 }
 
@@ -225,6 +227,13 @@ export function decide(candidate: GateScores, baseline: GateScores): GateDecisio
     candidate.selective.negativeFalseAcceptanceRate > MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE
   ) {
     failures.push(`negative false-acceptance rate above ${MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE}`);
+  }
+
+  if (
+    candidate.selective !== undefined &&
+    candidate.selective.typoInvariance < MIN_TYPO_INVARIANCE
+  ) {
+    failures.push(`typo invariance below ${MIN_TYPO_INVARIANCE}`);
   }
 
   const candidateBare = candidate.byFamily[BARE_FAMILY] ?? { total: 0, correct: 0 };
@@ -427,6 +436,7 @@ function scoresOf(result: EvaluationResult, contract: ContractReport): GateScore
     selective: {
       silentMeaningChangeRate: selective.silentMeaningChangeRate,
       negativeFalseAcceptanceRate: selective.negativeFalseAcceptanceRate,
+      typoInvariance: result.typoInvariance.pairedAccuracy,
     },
   };
 }

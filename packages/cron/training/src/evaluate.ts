@@ -32,6 +32,7 @@ import type { RawToken } from "../../src/model/tokenizer";
 import type { ParseResult } from "../../src/parser/parse";
 import type { ScheduleIntent } from "../../src/types/intent";
 import { spellingVariant } from "./noise";
+import type { SpellingNoise } from "./noise";
 
 /** Default corpus/report locations, relative to the repository root. */
 export const DEFAULTS = {
@@ -128,6 +129,21 @@ export interface TypoInvarianceReport {
   noisySilentWrong: number;
   noisyAccuracy: number;
   pairedAccuracy: number;
+  byFamily: Record<string, Counts>;
+  byNoise: Partial<Record<SpellingNoise, Counts>>;
+  /** Complete counts, grouped by family/noise/outcome. */
+  failureCounts: Record<string, number>;
+  /** Bounded examples; `failureCounts` remains complete. */
+  failures: TypoFailure[];
+}
+
+export interface TypoFailure {
+  id: string;
+  family: string;
+  noise: SpellingNoise;
+  text: string;
+  expected: ScheduleIntent;
+  actual: ScheduleIntent | { ok: false; code: string };
 }
 
 export interface SelectiveOutcome {
@@ -607,6 +623,10 @@ export async function evaluateCorpus(
     noisySilentWrong: 0,
     noisyAccuracy: 0,
     pairedAccuracy: 0,
+    byFamily: {},
+    byNoise: {},
+    failureCounts: {},
+    failures: [],
   };
 
   for (const item of records) {
@@ -750,6 +770,46 @@ export async function evaluateCorpus(
       typoInvariance.noisyCorrect += Number(noisyCorrect);
       typoInvariance.pairedCorrect += Number(astCorrect && noisyCorrect);
       typoInvariance.noisySilentWrong += Number(noisyParsed.ok && !noisyCorrect);
+
+      const family = (typoInvariance.byFamily[item.family] ??= {
+        total: 0,
+        correct: 0,
+      });
+
+      family.total += 1;
+      family.correct += Number(noisyCorrect);
+
+      const noise = (typoInvariance.byNoise[noisy.noise] ??= {
+        total: 0,
+        correct: 0,
+      });
+
+      noise.total += 1;
+      noise.correct += Number(noisyCorrect);
+
+      if (!noisyCorrect) {
+        const outcome = noisyParsed.ok
+          ? `intent:${intentDifference(canonicalExpected, noisyParsed.intent)}`
+          : `parse:${noisyParsed.code}`;
+
+        const category = `${item.family}/${noisy.noise}/${outcome}`;
+        const count = (typoInvariance.failureCounts[category] ?? 0) + 1;
+
+        typoInvariance.failureCounts[category] = count;
+
+        if (count <= MAX_FAILURES_PER_CATEGORY) {
+          typoInvariance.failures.push({
+            id: item.id,
+            family: item.family,
+            noise: noisy.noise,
+            text: noisy.example.text,
+            expected: canonicalExpected,
+            actual: noisyParsed.ok
+              ? canonicalizeIntent(noisyParsed.intent)
+              : { ok: false, code: noisyParsed.code },
+          });
+        }
+      }
     }
 
     selectiveOutcomes.push({
