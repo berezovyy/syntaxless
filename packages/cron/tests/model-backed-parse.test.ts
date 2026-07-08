@@ -209,6 +209,43 @@ describe("exact lexical schedule and rejection surfaces", () => {
     expect(result.ok).toBe(false);
   });
 
+  test.each([
+    [
+      "Please ping me every thirty minutes when the queue is active",
+      { frequency: { unit: "minute", interval: 30 } },
+    ],
+    ["Have it refresh hourly", { frequency: { unit: "hour", interval: 1 } }],
+    [
+      "Schedule maintenance for midnight every day",
+      {
+        frequency: { unit: "day", interval: 1 },
+        time: { hour: 0, minute: 0 },
+      },
+    ],
+    [
+      "Do this each day from Monday through Wednesday",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["monday", "tuesday", "wednesday"],
+      },
+    ],
+    [
+      "Please run daily excluding Friday",
+      {
+        frequency: { unit: "day", interval: 1 },
+        exceptions: { weekdays: ["friday"] },
+      },
+    ],
+  ] satisfies ReadonlyArray<readonly [string, ScheduleIntent]>)(
+    "recovers demonstrated conversational capability: %s",
+    async (text, intent) => {
+      const result = await parse(text);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.intent).toEqual(intent);
+    },
+  );
+
   test("a bare exact clock does not depend on model confidence", async () => {
     const result = await parse("at 9");
 
@@ -301,6 +338,11 @@ describe("exact lexical schedule and rejection surfaces", () => {
     "Alex arrived at half past eight",
     "The office closes on weekends",
     "I used to call every Sunday",
+    "The documentation contains the phrase ‘every day at noon’.",
+    "The 15th person arrived after three hours.",
+    "If we ran this every minute, would the server cope?",
+    "Yesterday I called her at 9pm.",
+    "Our project cycle is 3 days old",
   ])("%s is explicitly rejected", async (phrase) => {
     const result = await parse(phrase);
 

@@ -15,6 +15,7 @@
     "gen:heldout": "bun run src/generate.ts --split heldout",
     "gen:kinds": "bun run src/backward.ts",
     "evaluate": "bun run src/evaluate.ts",
+    "evaluate:human": "bun run src/human-evaluate.ts",
     "gate": "bun run src/gate.ts"
   },
   "devDependencies": {

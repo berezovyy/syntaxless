@@ -128,6 +128,17 @@ function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
     /\b(?:meeting happened|deadline moved|people joined|finished the report|arrived at|used to)\b/.test(
       text,
     ) ||
+    /\b(?:yesterday|formerly|previously|in the past)\b/.test(text) ||
+    /^if\b.*\b(?:would|could|might)\b/.test(text) ||
+    /\b(?:documentation|docs?|tutorial|example|phrase|sample|quoted?|text)\b.*(?:contains?|says?|shows?|uses?|reads?)\b.*["'‘’“”].*\b(?:every|each|daily|weekly|monthly|hourly|at)\b/.test(
+      text,
+    ) ||
+    /\b\d{1,2}(?:st|nd|rd|th)\s+(?:person|people|place|item|chapter|page|version|floor|attempt|runner|customer)\b/.test(
+      text,
+    ) ||
+    /\b(?:\d+|[a-z]+)\s+(?:minutes?|hours?|days?|weeks?|months?)\s+(?:old|long|ago|remaining)\b/.test(
+      text,
+    ) ||
     /^the office closes on\b/.test(text) ||
     /\bby another system$/.test(text) ||
     /\b(?:except|excluding|through|from|of)$/.test(text) ||
@@ -425,6 +436,8 @@ interface ExplicitFrequencyEvidence {
   interval: number;
   valueStart: number;
   valueEnd: number;
+  /** Contextual evidence still requires agreement from the global kind head. */
+  contextual?: boolean;
 }
 
 /** Locate a numeric cadence behind an explicit recurrence noun or verb. The
@@ -432,7 +445,37 @@ interface ExplicitFrequencyEvidence {
  * when the neural role for that number is wrong. */
 function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence | undefined {
   const text = joinEntries(entries);
-  const pattern = new RegExp(`\\b(\\d+|[a-z]+(?:[-\\s][a-z]+)?)\\s+([a-z]+)\\b`, "g");
+
+  const numberWords = ["oh", ...Object.keys(NUMBER_WORDS)]
+    .sort((left, right) => right.length - left.length)
+    .map(regexEscape)
+    .join("|");
+
+  const numberSurface = `(?:\\d+|(?:${numberWords})(?:[-\\s](?:${numberWords}))?)`;
+
+  // Anchor the pair to its recurrence cue first. A broad pair scan can consume
+  // `me every` and otherwise skip the overlapping `twenty minutes` pair.
+  const direct = new RegExp(
+    `\\b(?:every|each|once\\s+(?:per|every)|recurring\\s+every)\\s+(${numberSurface})\\s+([a-z]+)\\b`,
+  ).exec(text);
+
+  if (direct !== null) {
+    const interval = numberFrom(direct[1]!);
+    const unit = UNIT_ALIASES[direct[2]!] ?? uniqueSingleEditAlias(direct[2]!, UNIT_ALIASES, 3);
+
+    if (interval !== undefined && unit !== undefined) {
+      const valueStart = direct.index + direct[0].indexOf(direct[1]!);
+
+      return {
+        unit,
+        interval,
+        valueStart,
+        valueEnd: valueStart + direct[1]!.length,
+      };
+    }
+  }
+
+  const pattern = new RegExp(`\\b(${numberSurface})\\s+([a-z]+)\\b`, "g");
 
   for (const match of text.matchAll(pattern)) {
     const interval = numberFrom(match[1]!);
@@ -490,6 +533,25 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
     const unit = UNIT_ALIASES[unitInterval[1]!];
 
     if (unit !== undefined) return { unit, interval: 1, valueStart: -1, valueEnd: -1 };
+  }
+
+  const directiveAdverb =
+    /\b(?:please|have|make|let|schedule|run|send|remind|alert|ping|check|refresh|repeat|do)\b.*\b(daily|hourly|weekly)\b/.exec(
+      normalized,
+    );
+
+  if (directiveAdverb !== null) {
+    const unit = ADVERB_FREQUENCIES[directiveAdverb[1]!];
+
+    if (unit !== undefined) {
+      return {
+        unit,
+        interval: 1,
+        valueStart: -1,
+        valueEnd: -1,
+        contextual: true,
+      };
+    }
   }
 
   return undefined;
@@ -961,6 +1023,27 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
       : (hour * 60 + minute) % 1440;
 
   return { hour: Math.floor(total / 60), minute: total % 60 };
+}
+
+/** Recover an exact named clock anchor only behind a clock preposition. */
+function explicitNamedTime(entries: readonly Entry[]): TimeOfDay | undefined {
+  const text = joinEntries(entries);
+  const match = /\b(?:at|for|around)\s+(midnight|noon|midday)\b/.exec(text);
+
+  if (match === null) return undefined;
+  const hour = NAMED_HOURS[match[1]!];
+
+  return hour === undefined ? undefined : { hour, minute: 0 };
+}
+
+function dailyCueIntroducesWeekdayRange(text: string): boolean {
+  return (
+    /\b(?:every|each)\s+day\s+from\b/.test(text) && explicitWeekdayRange(text, true) !== undefined
+  );
+}
+
+function hasContradictoryDailyCue(text: string): boolean {
+  return /\b(?:every|each)\s+day\b/.test(text) && !dailyCueIntroducesWeekdayRange(text);
 }
 
 function explicitExceptions(entries: readonly Entry[]): ExplicitExceptionEvidence | undefined {
@@ -1477,6 +1560,14 @@ export function decodeIntent(
     minuteRelation = undefined;
   }
 
+  const namedTimeEvidence = explicitNamedTime(entries);
+
+  if (namedTimeEvidence !== undefined) {
+    hour = namedTimeEvidence.hour;
+    minute = namedTimeEvidence.minute;
+    meridiem = undefined;
+  }
+
   if (weekdays.length === 0 && trustedScheduleKind === "weekly") {
     const visibleWeekdays = weekdaysIn(joinEntries(entries));
 
@@ -1562,7 +1653,7 @@ export function decodeIntent(
   if (dayGroupEvidence !== undefined) {
     // An explicit, separate daily recurrence is genuinely contradictory. A
     // spurious daily unit inferred from the word "weekday" is safe to repair.
-    if (/\b(?:every|each)\s+day\b/.test(text)) {
+    if (hasContradictoryDailyCue(text)) {
       throw new RangeError("decodeIntent: weekdays conflict with daily frequency");
     }
 
@@ -1611,7 +1702,7 @@ export function decodeIntent(
   if (monthlySelectors > 0) intent.frequency.unit = "month";
 
   if (intent.weekdays !== undefined && intent.weekdays.length > 0) {
-    if (/\b(?:every|each)\s+day\b/.test(text)) {
+    if (hasContradictoryDailyCue(text)) {
       throw new RangeError("decodeIntent: weekdays conflict with daily frequency");
     }
 
@@ -1619,13 +1710,14 @@ export function decodeIntent(
   }
 
   const explicitScheduleEvidence =
-    frequencyEvidence !== undefined ||
+    (frequencyEvidence !== undefined && frequencyEvidence.contextual !== true) ||
     scopedOrdinalEvidence !== undefined ||
     dayOfMonthEvidence !== undefined ||
     weekdaySelectorEvidence !== undefined ||
     dayGroupEvidence !== undefined ||
     boundEvidence !== undefined ||
     exceptionEvidence !== undefined ||
+    namedTimeEvidence !== undefined ||
     (intent.time !== undefined &&
       /\b(?:at|around|noon|midnight|half\s+past|quarter\s+(?:past|to)|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/.test(
         text,
