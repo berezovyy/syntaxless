@@ -12,6 +12,7 @@ export { weights } from "./weights.gen.js";
 import { decodeIntent } from "../parser/decode.js";
 import { normalize } from "../parser/normalize.js";
 import { inferTokens } from "./inference.js";
+import { SCHEDULE_KINDS } from "./schedule-kinds.js";
 import { tokenize } from "./tokenizer.js";
 
 /** Decode before the public confidence floor. Internal evaluation only: this
@@ -21,6 +22,14 @@ export function decodeRaw(text: string) {
   const tokens = tokenize(normalize(text));
   const predictions = inferTokens(tokens);
 
+  const scheduleKind =
+    predictions.scheduleKind === undefined || predictions.scheduleKindScore === undefined
+      ? undefined
+      : {
+          kind: SCHEDULE_KINDS[predictions.scheduleKind]!,
+          score: predictions.scheduleKindScore,
+        };
+
   return decodeIntent(
     tokens.map((token, index) => ({
       token,
@@ -28,5 +37,6 @@ export function decodeRaw(text: string) {
       boundary: predictions.boundaries[index]! === 1,
       score: predictions.scores[index]!,
     })),
+    scheduleKind,
   );
 }

@@ -3,7 +3,12 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { coarseText } from "./fingerprint";
-import { assertHumanIsolation, parseArgs, parseHumanCorpus } from "./human-evaluate";
+import {
+  assertHumanIsolation,
+  parseArgs,
+  parseHumanCorpus,
+  selectCalibrationThreshold,
+} from "./human-evaluate";
 
 const valid = {
   version: 1,
@@ -56,6 +61,43 @@ describe("human evaluation CLI", () => {
   test("defaults to development and validates partitions", () => {
     expect(parseArgs([]).partition).toBe("development");
     expect(() => parseArgs(["--partition", "mystery"])).toThrow(/invalid human partition/);
+  });
+
+  test("selects maximum coverage that satisfies both safety limits", () => {
+    const base = {
+      total: 100,
+      acceptedWrong: 0,
+      silentMeaningChangeRate: 0,
+    };
+
+    const selected = selectCalibrationThreshold([
+      {
+        ...base,
+        threshold: 0.4,
+        accepted: 90,
+        coverage: 0.9,
+        risk: 0.01,
+        negativeFalseAcceptanceRate: 0,
+      },
+      {
+        ...base,
+        threshold: 0.5,
+        accepted: 80,
+        coverage: 0.8,
+        risk: 0,
+        negativeFalseAcceptanceRate: 0,
+      },
+      {
+        ...base,
+        threshold: 0.6,
+        accepted: 70,
+        coverage: 0.7,
+        risk: 0,
+        negativeFalseAcceptanceRate: 0,
+      },
+    ]);
+
+    expect(selected?.threshold).toBe(0.5);
   });
 });
 

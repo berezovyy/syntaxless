@@ -13,7 +13,15 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { CompileFailureCode } from "../../src/compiler/cron";
 import type { ScheduleIntent } from "../../src/types/intent";
-import { canonicalizeIntent, loadEngine, repoRoot, resolveRepo, sha256Hex } from "./evaluate";
+import {
+  canonicalizeIntent,
+  loadEngine,
+  repoRoot,
+  resolveRepo,
+  riskCoverage,
+  sha256Hex,
+} from "./evaluate";
+import type { RiskCoveragePoint, SelectiveOutcome } from "./evaluate";
 
 export const HUMAN_CORPUS_VERSION = 1;
 export const MIN_OVERALL_ACCURACY = 0.95;
@@ -82,6 +90,9 @@ export interface HumanEvaluationReport {
   negativeFalseAcceptanceRate: number;
   silentMeaningChanges: number;
   silentMeaningChangeRate: number;
+  selectivePrediction: RiskCoveragePoint[];
+  rawSelectivePrediction: RiskCoveragePoint[];
+  calibrationThreshold: RiskCoveragePoint | null;
   promotion: {
     eligible: boolean;
     passed: boolean;
@@ -213,6 +224,24 @@ function addFailureCount(
   counts[category] = (counts[category] ?? 0) + 1;
 }
 
+/** Pick maximum safe coverage on calibration data; never optimize this on the
+ * development or reserved acceptance partitions. */
+export function selectCalibrationThreshold(
+  points: readonly RiskCoveragePoint[],
+): RiskCoveragePoint | null {
+  return (
+    points
+      .filter(
+        (point) =>
+          point.risk <= MAX_SILENT_MEANING_CHANGE_RATE &&
+          point.negativeFalseAcceptanceRate <= MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE,
+      )
+      .sort(
+        (left, right) => right.coverage - left.coverage || left.threshold - right.threshold,
+      )[0] ?? null
+  );
+}
+
 function differentIntentFields(expected: ScheduleIntent, actual: ScheduleIntent): string {
   const left = canonicalizeIntent(expected);
   const right = canonicalizeIntent(actual);
@@ -255,6 +284,8 @@ export async function evaluateHumanCorpus(
   let negativeTotal = 0;
   let negativeFalseAccepts = 0;
   let silentMeaningChanges = 0;
+  const selectiveOutcomes: SelectiveOutcome[] = [];
+  const rawSelectiveOutcomes: SelectiveOutcome[] = [];
 
   try {
     // Lint every partition's gold contract without parsing reserved acceptance
@@ -283,6 +314,14 @@ export async function evaluateHumanCorpus(
 
     for (const item of records) {
       const parsed = await engine.parse(item.text);
+      let raw: ReturnType<typeof engine.decodeRaw> | null = null;
+
+      try {
+        raw = engine.decodeRaw(item.text);
+      } catch {
+        // Decoder rejection is a safe abstention in the raw policy curve.
+      }
+
       let correct = false;
       let category = "correct";
       let actual: unknown = parsed;
@@ -324,6 +363,27 @@ export async function evaluateHumanCorpus(
       }
 
       correctTotal += Number(correct);
+
+      selectiveOutcomes.push({
+        accepted: parsed.ok,
+        correct,
+        confidence: parsed.confidence,
+        negative: item.intent === null,
+      });
+
+      const rawCorrect =
+        item.intent === null
+          ? raw === null
+          : raw !== null &&
+            isDeepStrictEqual(canonicalizeIntent(raw.intent), canonicalizeIntent(item.intent));
+
+      rawSelectiveOutcomes.push({
+        accepted: raw !== null,
+        correct: rawCorrect,
+        confidence: raw?.confidence ?? 0,
+        negative: item.intent === null,
+      });
+
       addCount(byFamily, item.family, correct);
       for (const capability of item.capabilities) addCount(byCapability, capability, correct);
 
@@ -361,6 +421,11 @@ export async function evaluateHumanCorpus(
   const accuracy = correctTotal / total;
   const silentMeaningChangeRate = silentMeaningChanges / total;
   const negativeFalseAcceptanceRate = negativeFalseAccepts / Math.max(negativeTotal, 1);
+  const selectivePrediction = riskCoverage(selectiveOutcomes);
+  const rawSelectivePrediction = riskCoverage(rawSelectiveOutcomes);
+
+  const calibrationThreshold =
+    options.partition === "calibration" ? selectCalibrationThreshold(rawSelectivePrediction) : null;
 
   if (accuracy < MIN_OVERALL_ACCURACY) {
     promotionFailures.push(`overall accuracy below ${MIN_OVERALL_ACCURACY}`);
@@ -410,6 +475,9 @@ export async function evaluateHumanCorpus(
     negativeFalseAcceptanceRate,
     silentMeaningChanges,
     silentMeaningChangeRate,
+    selectivePrediction,
+    rawSelectivePrediction,
+    calibrationThreshold,
     promotion: {
       eligible,
       passed: eligible && promotionFailures.length === 0,
