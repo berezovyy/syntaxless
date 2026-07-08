@@ -9,6 +9,7 @@ import { weights } from "../src/model/weights.gen.ts";
 const FIXTURES = join(import.meta.dir, "fixtures");
 const ROWS_PER_TOKEN = weights.rowsPerToken;
 const ROLE_CLASSES = weights.roleClasses;
+const SCHEDULE_KIND_CLASSES: number = weights.scheduleKindClasses ?? 0;
 const BOUNDARY_THRESHOLD = weights.boundaryThreshold;
 const TOLERANCE = 1e-3;
 
@@ -23,6 +24,11 @@ const offsets = new Uint32Array(arrayBuffer(join(FIXTURES, "parity.offsets.bin")
 const fixtureLogits = new Float32Array(arrayBuffer(join(FIXTURES, "parity.logits.bin")));
 const fixtureBoundaries = new Float32Array(arrayBuffer(join(FIXTURES, "parity.boundaries.bin")));
 
+const fixtureScheduleKinds =
+  SCHEDULE_KIND_CLASSES === 0
+    ? new Float32Array()
+    : new Float32Array(arrayBuffer(join(FIXTURES, "parity.schedule-kinds.bin")));
+
 const sequences = offsets.length - 1;
 const tokens = sequences >= 0 ? offsets[sequences]! : 0;
 
@@ -31,13 +37,20 @@ interface Predictions {
   boundaries: Uint8Array;
   logits: Float32Array;
   boundaryLogits: Float32Array;
+  scheduleKindLogits: Float32Array;
 }
 
-function append(target: Predictions, source: Predictions, base: number): void {
-  target.labels.set(source.labels, base);
-  target.boundaries.set(source.boundaries, base);
-  target.logits.set(source.logits, base * ROLE_CLASSES);
-  target.boundaryLogits.set(source.boundaryLogits, base);
+function append(
+  target: Predictions,
+  source: Predictions,
+  tokenBase: number,
+  sequence: number,
+): void {
+  target.labels.set(source.labels, tokenBase);
+  target.boundaries.set(source.boundaries, tokenBase);
+  target.logits.set(source.logits, tokenBase * ROLE_CLASSES);
+  target.boundaryLogits.set(source.boundaryLogits, tokenBase);
+  target.scheduleKindLogits.set(source.scheduleKindLogits, sequence * SCHEDULE_KIND_CLASSES);
 }
 
 /** Run one fixture sequence, optionally padding its tail to `padTo` tokens. */
@@ -56,6 +69,7 @@ function predictSequence(sequence: number, padTo = 0): Predictions {
     boundaries: result.boundaries.subarray(0, length),
     logits: result.logits!.subarray(0, length * ROLE_CLASSES),
     boundaryLogits: result.boundaryLogits!.subarray(0, length),
+    scheduleKindLogits: result.scheduleKindLogits ?? new Float32Array(),
   };
 }
 
@@ -65,10 +79,11 @@ function predictAll(padTo = 0): Predictions {
     boundaries: new Uint8Array(tokens),
     logits: new Float32Array(tokens * ROLE_CLASSES),
     boundaryLogits: new Float32Array(tokens),
+    scheduleKindLogits: new Float32Array(sequences * SCHEDULE_KIND_CLASSES),
   };
 
   for (let sequence = 0; sequence < sequences; sequence++) {
-    append(total, predictSequence(sequence, padTo), offsets[sequence]!);
+    append(total, predictSequence(sequence, padTo), offsets[sequence]!, sequence);
   }
 
   return total;
@@ -81,6 +96,16 @@ function maximumLogitError(computed: Predictions, reference: Float32Array): numb
     const error = Math.abs(computed.logits[index]! - reference[index]!);
 
     if (error > maximum) maximum = error;
+  }
+
+  return maximum;
+}
+
+function maximumArrayError(computed: Float32Array, reference: Float32Array): number {
+  let maximum = 0;
+
+  for (let index = 0; index < reference.length; index++) {
+    maximum = Math.max(maximum, Math.abs(computed[index]! - reference[index]!));
   }
 
   return maximum;
@@ -136,6 +161,7 @@ describe("inference parity fixture", () => {
     expect(rows.length).toBe(tokens * ROWS_PER_TOKEN);
     expect(fixtureLogits.length).toBe(tokens * ROLE_CLASSES);
     expect(fixtureBoundaries.length).toBe(tokens);
+    expect(fixtureScheduleKinds.length).toBe(sequences * SCHEDULE_KIND_CLASSES);
   });
 
   test("reproduces the frozen logits and boundaries", () => {
@@ -147,6 +173,10 @@ describe("inference parity fixture", () => {
 
     console.log(`full fixture max logit error: ${error}`);
     expect(error).toBeLessThan(TOLERANCE);
+
+    expect(maximumArrayError(computed.scheduleKindLogits, fixtureScheduleKinds)).toBeLessThan(
+      TOLERANCE,
+    );
   });
 
   test("short input keeps zero mismatches and a small logit error", () => {
@@ -198,6 +228,13 @@ describe("inference parity fixture", () => {
       error = Math.max(
         error,
         Math.abs(padded.boundaryLogits[index]! - short.boundaryLogits[index]!),
+      );
+    }
+
+    for (let index = 0; index < short.scheduleKindLogits.length; index++) {
+      error = Math.max(
+        error,
+        Math.abs(padded.scheduleKindLogits[index]! - short.scheduleKindLogits[index]!),
       );
     }
 
