@@ -80,7 +80,9 @@ def collect_logits(
     with torch.no_grad():
         for indices in dataset.batches(batch_size):
             batch = dataset.batch(indices, device)
-            _, boundary = model(batch["rows"], batch["valid"], batch["neighbors"])
+            _, boundary, _ = model(
+                batch["rows"], batch["valid"], batch["neighbors"]
+            )
             logits.append(boundary.detach().cpu().numpy().reshape(-1))
             targets.append(batch["boundaries"].detach().cpu().numpy().reshape(-1))
             masks.append((batch["labels"] != -100).detach().cpu().numpy().reshape(-1))

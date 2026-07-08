@@ -11,6 +11,7 @@
 import { decodeWeights } from "./decode.js";
 import type { WeightsArtifact } from "./decode.js";
 import { LABEL_COUNT, LABELS } from "./labels.js";
+import { SCHEDULE_KINDS } from "./schedule-kinds.js";
 import { featureRows, PADDING_ROW } from "./tokenizer.js";
 import type { RawToken } from "./tokenizer.js";
 import { weights } from "./weights.gen.js";
@@ -20,6 +21,7 @@ const HIDDEN = ARTIFACT.hidden;
 const FEATURE_ROWS = ARTIFACT.featureRows;
 const ROWS_PER_TOKEN = ARTIFACT.rowsPerToken;
 const ROLE_CLASSES = ARTIFACT.roleClasses;
+const SCHEDULE_KIND_CLASSES = ARTIFACT.scheduleKindClasses ?? 0;
 const BOUNDARY_THRESHOLD = ARTIFACT.boundaryThreshold;
 const LAYER_NORM_EPSILON = 1e-5;
 
@@ -32,6 +34,15 @@ if (
   ARTIFACT.labels.some((label, id) => label !== LABELS[id])
 ) {
   throw new Error("weights label vocabulary does not match labels.ts");
+}
+
+if (
+  SCHEDULE_KIND_CLASSES > 0 &&
+  (SCHEDULE_KIND_CLASSES !== SCHEDULE_KINDS.length ||
+    ARTIFACT.scheduleKindLabels?.some((label, id) => label !== SCHEDULE_KINDS[id]) ||
+    ARTIFACT.scheduleKindLabels?.length !== SCHEDULE_KINDS.length)
+) {
+  throw new Error("weights schedule-kind vocabulary does not match runtime");
 }
 
 const tensors = decodeWeights(ARTIFACT);
@@ -68,6 +79,12 @@ const ROLE_HEAD_BIAS = requireTensor("role_head.bias");
 const BOUNDARY_HEAD_WEIGHT = requireTensor("boundary_head.weight");
 const BOUNDARY_HEAD_BIAS = requireTensor("boundary_head.bias");
 
+const SCHEDULE_KIND_HEAD_WEIGHT =
+  SCHEDULE_KIND_CLASSES === 0 ? undefined : requireTensor("schedule_kind_head.weight");
+
+const SCHEDULE_KIND_HEAD_BIAS =
+  SCHEDULE_KIND_CLASSES === 0 ? undefined : requireTensor("schedule_kind_head.bias");
+
 /** Per-token model output. Padding positions are included for `inferRows`. */
 export interface Predictions {
   labels: Uint8Array;
@@ -75,6 +92,9 @@ export interface Predictions {
   scores: Float32Array;
   logits?: Float32Array;
   boundaryLogits?: Float32Array;
+  scheduleKind?: number;
+  scheduleKindScore?: number;
+  scheduleKindLogits?: Float32Array;
 }
 
 function sigmoid(value: number): number {
@@ -391,11 +411,54 @@ export function inferRows(
     scores[token] = 1 / total - Math.exp(secondValue - best) / total;
   }
 
+  let scheduleKind: number | undefined;
+  let scheduleKindScore: number | undefined;
+  let scheduleKindLogits: Float32Array | undefined;
+
+  if (
+    SCHEDULE_KIND_CLASSES > 0 &&
+    SCHEDULE_KIND_HEAD_WEIGHT !== undefined &&
+    SCHEDULE_KIND_HEAD_BIAS !== undefined
+  ) {
+    scheduleKindLogits = new Float32Array(SCHEDULE_KIND_CLASSES);
+    let best = -Infinity;
+    let second = -Infinity;
+    let bestIndex = 0;
+
+    for (let kind = 0; kind < SCHEDULE_KIND_CLASSES; kind++) {
+      let value = SCHEDULE_KIND_HEAD_BIAS[kind]!;
+
+      for (let hidden = 0; hidden < HIDDEN; hidden++) {
+        value += SCHEDULE_KIND_HEAD_WEIGHT[kind * HIDDEN + hidden]! * pooled[hidden]!;
+      }
+
+      scheduleKindLogits[kind] = value;
+
+      if (value > best) {
+        second = best;
+        best = value;
+        bestIndex = kind;
+      } else if (value > second) {
+        second = value;
+      }
+    }
+
+    let total = 0;
+
+    for (const value of scheduleKindLogits) total += Math.exp(value - best);
+    scheduleKind = bestIndex;
+    scheduleKindScore = 1 / total - Math.exp(second - best) / total;
+  }
+
   return {
     labels,
     boundaries,
     scores,
+    ...(scheduleKind === undefined || scheduleKindScore === undefined
+      ? {}
+      : { scheduleKind, scheduleKindScore }),
     ...(debug ? { logits, boundaryLogits } : {}),
+    ...(debug && scheduleKindLogits !== undefined ? { scheduleKindLogits } : {}),
   };
 }
 

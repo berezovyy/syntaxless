@@ -21,11 +21,12 @@ from torch.nn import functional as F
 import config as config_module
 from config import Config
 from dataset import Dataset, fingerprints_path, prepare, repo_root
-from model import Tagger, parameter_counts
+from model import SCHEDULE_KIND_NAMES, Tagger, parameter_counts
 from report import write_report
 
 #: Weights the boundary term against the role term.
 BOUNDARY_LOSS_WEIGHT = 1.0
+SCHEDULE_KIND_LOSS_WEIGHT = 0.35
 #: Seed stride between regenerated training splits; large enough to never alias.
 EPOCH_SEED_STRIDE = 1_000_003
 #: Validation and heldout derive from the run seed with fixed offsets.
@@ -131,7 +132,9 @@ def train_epoch(
         mask = labels != -100
 
         optimizer.zero_grad(set_to_none=True)
-        roles, boundary = model(batch["rows"], batch["valid"], batch["neighbors"])
+        roles, boundary, schedule_kind = model(
+            batch["rows"], batch["valid"], batch["neighbors"]
+        )
         role_loss = F.cross_entropy(
             roles.reshape(-1, roles.shape[-1]), labels.reshape(-1), ignore_index=-100
         )
@@ -139,7 +142,14 @@ def train_epoch(
             boundary, batch["boundaries"], reduction="none"
         )
         boundary_loss = (boundary_loss * mask).sum() / mask.sum().clamp(min=1)
-        loss = role_loss + BOUNDARY_LOSS_WEIGHT * boundary_loss
+        schedule_kind_loss = F.cross_entropy(
+            schedule_kind, batch["schedule_kinds"]
+        )
+        loss = (
+            role_loss
+            + BOUNDARY_LOSS_WEIGHT * boundary_loss
+            + SCHEDULE_KIND_LOSS_WEIGHT * schedule_kind_loss
+        )
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), CLIP_NORM)
         optimizer.step()
@@ -172,6 +182,7 @@ def evaluate(
     true_positive = 0
     false_positive = 0
     false_negative = 0
+    schedule_kind_correct = 0
     frame_kind_names = [name.split("/", 1)[0] for name in dataset.manifest.frame_names]
     kind_names = list(dict.fromkeys(frame_kind_names))
     kind_index = {name: index for index, name in enumerate(kind_names)}
@@ -185,7 +196,12 @@ def evaluate(
         batch = dataset.batch(indices, device)
         labels = batch["labels"]
         mask = labels != -100
-        roles, boundary = model(batch["rows"], batch["valid"], batch["neighbors"])
+        roles, boundary, schedule_kind = model(
+            batch["rows"], batch["valid"], batch["neighbors"]
+        )
+        schedule_kind_correct += int(
+            (schedule_kind.argmax(dim=-1) == batch["schedule_kinds"]).sum()
+        )
 
         predictions = roles.argmax(dim=-1)
         correct += int(((predictions == labels) & mask).sum())
@@ -232,6 +248,7 @@ def evaluate(
         "tokenAccuracy": correct / max(total_tokens, 1),
         "exactLabelAndBoundarySequence": exact_sequences / max(sequences, 1),
         "macroKindExactSequence": macro_kind_exact,
+        "scheduleKindAccuracy": schedule_kind_correct / max(sequences, 1),
         "byKind": by_kind,
         "boundaryPrecision": precision,
         "boundaryRecall": recall,
@@ -263,6 +280,8 @@ def save_checkpoint(
             "roleClasses": model.role_classes,
             "rowsPerToken": model.rows_per_token,
             "featureRows": model.feature_rows,
+            "scheduleKindClasses": model.schedule_kind_classes,
+            "scheduleKindLabels": list(SCHEDULE_KIND_NAMES),
         },
         path,
     )
@@ -322,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         feature_rows=validation.feature_rows,
         rows_per_token=validation.rows_per_token,
         role_classes=validation.role_classes,
+        schedule_kind_classes=len(SCHEDULE_KIND_NAMES),
         hidden=config.hidden,
         quantization_bits=config.quantization_bits,
     ).to(config.device)
@@ -385,8 +405,10 @@ def main(argv: list[str] | None = None) -> int:
         # Equalize checkpoint selection across sentence kinds. The global
         # sequence metric is dominated by large Cartesian schedule lattices;
         # macro-kind exactness makes terse and negative language count too.
-        criterion = float(metrics["tokenAccuracy"]) + float(
-            metrics["macroKindExactSequence"]
+        criterion = (
+            float(metrics["tokenAccuracy"])
+            + float(metrics["macroKindExactSequence"])
+            + 0.25 * float(metrics["scheduleKindAccuracy"])
         )
 
         save_checkpoint(run_dir / "last.pt", model, config, epoch, criterion, metrics)
@@ -440,7 +462,8 @@ def main(argv: list[str] | None = None) -> int:
 
     report = {
         "selectionCriterion": (
-            "validation.tokenAccuracy + validation.macroKindExactSequence"
+            "validation.tokenAccuracy + validation.macroKindExactSequence + "
+            "0.25 * validation.scheduleKindAccuracy"
         ),
         "config": config.to_dict(),
         "sourceHashes": source_hashes(),

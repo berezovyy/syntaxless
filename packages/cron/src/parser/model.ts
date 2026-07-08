@@ -15,6 +15,8 @@
 import { getEngine } from "../model/engine.js";
 import type { EngineConfig } from "../model/engine.js";
 import type { Predictions } from "../model/inference.js";
+import { SCHEDULE_KINDS } from "../model/schedule-kinds.js";
+import type { ScheduleKind } from "../model/schedule-kinds.js";
 import { tokenize } from "../model/tokenizer.js";
 import type { RawToken } from "../model/tokenizer.js";
 import { classifyConfidence } from "./confidence.js";
@@ -52,11 +54,14 @@ export function labelTokensFromPredictions(
  * {@link parseWithModel} so the role-validation and confidence mapping are pure
  * and testable without running the engine.
  */
-export function resultFromLabeledTokens(labeled: readonly LabeledToken[]): ParseResult {
+export function resultFromLabeledTokens(
+  labeled: readonly LabeledToken[],
+  scheduleKind?: { kind: ScheduleKind; score: number },
+): ParseResult {
   let decoded;
 
   try {
-    decoded = decodeIntent(labeled);
+    decoded = decodeIntent(labeled, scheduleKind);
   } catch (error) {
     if (error instanceof UnknownRoleError) {
       return {
@@ -147,5 +152,13 @@ export async function parseWithModel(
   const tokens = tokenize(normalized);
   const predictions = engine.inferTokens(tokens);
 
-  return resultFromLabeledTokens(labelTokensFromPredictions(tokens, predictions));
+  const scheduleKind =
+    predictions.scheduleKind === undefined || predictions.scheduleKindScore === undefined
+      ? undefined
+      : {
+          kind: SCHEDULE_KINDS[predictions.scheduleKind]!,
+          score: predictions.scheduleKindScore,
+        };
+
+  return resultFromLabeledTokens(labelTokensFromPredictions(tokens, predictions), scheduleKind);
 }

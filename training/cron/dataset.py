@@ -24,6 +24,45 @@ NUMPY_DTYPES: dict[str, type[np.generic]] = {
     "float32": np.float32,
 }
 
+SCHEDULE_KIND_NAMES = (
+    "none",
+    "interval",
+    "daily",
+    "weekly",
+    "monthly",
+    "ordinal",
+    "bounded",
+    "exception",
+    "ambiguous",
+)
+SCHEDULE_KIND_INDEX = {name: index for index, name in enumerate(SCHEDULE_KIND_NAMES)}
+
+
+def schedule_kind_for_frame(frame_name: str) -> int:
+    """Map a detailed generator kind onto the compact utterance-level head."""
+    parts = frame_name.split("/")
+    kind = parts[0]
+    if kind == "negative":
+        category = parts[1] if len(parts) > 1 else "ordinary"
+        return SCHEDULE_KIND_INDEX[
+            "ambiguous"
+            if category in {"incomplete", "ambiguous", "conversational"}
+            else "none"
+        ]
+    if kind.startswith("bounds"):
+        return SCHEDULE_KIND_INDEX["bounded"]
+    if "exception" in kind:
+        return SCHEDULE_KIND_INDEX["exception"]
+    if kind.startswith("ordinal-weekday"):
+        return SCHEDULE_KIND_INDEX["ordinal"]
+    if kind.startswith("day-of-month") or kind.startswith("day-rule"):
+        return SCHEDULE_KIND_INDEX["monthly"]
+    if kind in {"unit-interval", "n-interval", "interval-at-time", "frequency-idiom"}:
+        return SCHEDULE_KIND_INDEX["interval"]
+    if kind in {"time-of-day", "day-at-time"}:
+        return SCHEDULE_KIND_INDEX["daily"]
+    return SCHEDULE_KIND_INDEX["weekly"]
+
 #: Length buckets. A batch pads to the smallest bucket covering its longest
 #: member, so short sequences never pay for a long neighbour.
 BUCKETS: tuple[int, ...] = (8, 16, 24, 32, 48, 64, 96, 128)
@@ -108,6 +147,10 @@ class Dataset:
         self.neighbors = self.neighbors.reshape(self.token_count, 2)
         self.lengths = (self.offsets[1:] - self.offsets[:-1]).astype(np.int64)
         self.frame_members: list[np.ndarray] = []
+        self.frame_schedule_kinds = np.asarray(
+            [schedule_kind_for_frame(name) for name in self.manifest.frame_names],
+            dtype=np.int64,
+        )
         if self.frames is not None:
             if self.frames.size != self.sequences:
                 raise ValueError(
@@ -240,6 +283,11 @@ class Dataset:
             "labels": torch.as_tensor(labels),
             "boundaries": torch.as_tensor(boundaries),
             "kinds": torch.as_tensor(kinds),
+            "schedule_kinds": torch.as_tensor(
+                self.frame_schedule_kinds[np.asarray(self.frames[indices])]
+                if self.frames is not None
+                else np.zeros(count, dtype=np.int64)
+            ),
         }
         if device is not None:
             tensors = {key: value.to(device) for key, value in tensors.items()}

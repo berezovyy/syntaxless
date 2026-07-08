@@ -20,7 +20,7 @@ from export import (
     pack_state,
     quantize_parameter,
 )
-from model import Tagger
+from model import SCHEDULE_KIND_NAMES, Tagger
 
 FEATURE_ROWS = 40
 ROWS_PER_TOKEN = 5
@@ -29,12 +29,13 @@ HIDDEN = 8
 ATOL = 1e-4
 
 
-def build_model() -> Tagger:
+def build_model(schedule_kind_classes: int = len(SCHEDULE_KIND_NAMES)) -> Tagger:
     torch.manual_seed(0)
     return Tagger(
         feature_rows=FEATURE_ROWS,
         rows_per_token=ROWS_PER_TOKEN,
         role_classes=ROLE_CLASSES,
+        schedule_kind_classes=schedule_kind_classes,
         hidden=HIDDEN,
         quantization_bits=6,
     ).eval()
@@ -96,6 +97,8 @@ def test_round_trip_reproduces_quantized_parameters() -> None:
         "featureRows": FEATURE_ROWS,
         "rowsPerToken": ROWS_PER_TOKEN,
         "roleClasses": ROLE_CLASSES,
+        "scheduleKindClasses": len(SCHEDULE_KIND_NAMES),
+        "scheduleKindLabels": list(SCHEDULE_KIND_NAMES),
     }
     artifact = build_artifact(segments, q, ["O"] * ROLE_CLASSES, checkpoint, HIDDEN, 0.0)
     decoded = decode_artifact(artifact)
@@ -113,6 +116,8 @@ def test_round_trip_reproduces_reference_logits() -> None:
         "featureRows": FEATURE_ROWS,
         "rowsPerToken": ROWS_PER_TOKEN,
         "roleClasses": ROLE_CLASSES,
+        "scheduleKindClasses": len(SCHEDULE_KIND_NAMES),
+        "scheduleKindLabels": list(SCHEDULE_KIND_NAMES),
     }
     artifact = build_artifact(segments, q, ["O"] * ROLE_CLASSES, checkpoint, HIDDEN, 0.0)
 
@@ -124,14 +129,35 @@ def test_round_trip_reproduces_reference_logits() -> None:
 
     batch = make_batch()
     with torch.no_grad():
-        reference_roles, reference_boundary = reference_model(*batch)
-        decoded_roles, decoded_boundary = decoded_model(*batch)
+        reference_roles, reference_boundary, reference_kind = reference_model(*batch)
+        decoded_roles, decoded_boundary, decoded_kind = decoded_model(*batch)
 
     role_error = float((reference_roles - decoded_roles).abs().max())
     boundary_error = float((reference_boundary - decoded_boundary).abs().max())
+    kind_error = float((reference_kind - decoded_kind).abs().max())
     assert role_error <= ATOL, f"role logit error {role_error} exceeds {ATOL}"
     assert boundary_error <= ATOL, f"boundary logit error {boundary_error} exceeds {ATOL}"
-    print(f"logit round-trip: ok (role {role_error:.2e}, boundary {boundary_error:.2e})")
+    assert kind_error <= ATOL, f"schedule-kind logit error {kind_error} exceeds {ATOL}"
+    print(
+        "logit round-trip: ok "
+        f"(role {role_error:.2e}, boundary {boundary_error:.2e}, kind {kind_error:.2e})"
+    )
+
+
+def test_legacy_artifact_without_schedule_kind_head() -> None:
+    model = build_model(schedule_kind_classes=0)
+    segments, q = pack_state(model.state_dict())
+    checkpoint = {
+        "featureRows": FEATURE_ROWS,
+        "rowsPerToken": ROWS_PER_TOKEN,
+        "roleClasses": ROLE_CLASSES,
+    }
+    artifact = build_artifact(segments, q, ["O"] * ROLE_CLASSES, checkpoint, HIDDEN, 0.0)
+    decoded = build_decoded_model(artifact)
+    with torch.no_grad():
+        _, _, schedule_kind = decoded(*make_batch())
+    assert schedule_kind.numel() == 0
+    print("legacy artifact without schedule-kind head: ok")
 
 
 def test_zero_tensor_gets_a_finite_scale() -> None:
@@ -147,5 +173,6 @@ if __name__ == "__main__":
     test_symbols_stay_in_int6_range()
     test_round_trip_reproduces_quantized_parameters()
     test_round_trip_reproduces_reference_logits()
+    test_legacy_artifact_without_schedule_kind_head()
     test_zero_tensor_gets_a_finite_scale()
     print("test_export: all checks passed")

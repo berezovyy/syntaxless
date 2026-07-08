@@ -19,6 +19,19 @@ from torch import nn
 from torch.nn import functional as F
 
 
+SCHEDULE_KIND_NAMES = (
+    "none",
+    "interval",
+    "daily",
+    "weekly",
+    "monthly",
+    "ordinal",
+    "bounded",
+    "exception",
+    "ambiguous",
+)
+
+
 def fake_quantize(weight: torch.Tensor, bits: int) -> torch.Tensor:
     """Symmetric per-tensor int-`bits` quantization with a straight-through pass.
 
@@ -88,6 +101,7 @@ class Tagger(nn.Module):
         feature_rows: int,
         rows_per_token: int,
         role_classes: int,
+        schedule_kind_classes: int = 0,
         hidden: int = 32,
         kernel_size: int = 3,
         quantization_bits: int = 6,
@@ -96,6 +110,7 @@ class Tagger(nn.Module):
         self.feature_rows = feature_rows
         self.rows_per_token = rows_per_token
         self.role_classes = role_classes
+        self.schedule_kind_classes = schedule_kind_classes
         self.hidden = hidden
         self.kernel_size = kernel_size
         self.quantization_bits = quantization_bits
@@ -112,6 +127,11 @@ class Tagger(nn.Module):
         self.head_gate = QLinear(2 * hidden, hidden, quantization_bits)
         self.role_head = QLinear(hidden, role_classes, quantization_bits)
         self.boundary_head = QLinear(hidden, 1, quantization_bits)
+        self.schedule_kind_head = (
+            QLinear(hidden, schedule_kind_classes, quantization_bits)
+            if schedule_kind_classes > 0
+            else None
+        )
         self._qat = False
 
     @property
@@ -141,7 +161,7 @@ class Tagger(nn.Module):
 
     def forward(
         self, rows: torch.Tensor, valid: torch.Tensor, neighbors: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         batch, width, _ = rows.shape
         embedding_weight = self.embedding.weight
         if self.qat:
@@ -173,7 +193,12 @@ class Tagger(nn.Module):
 
         roles = self.role_head(gated)
         boundary = self.boundary_head(gated).squeeze(-1)
-        return roles, boundary
+        schedule_kind = (
+            self.schedule_kind_head(pooled[:, 0, :])
+            if self.schedule_kind_head is not None
+            else pooled.new_empty((batch, 0))
+        )
+        return roles, boundary, schedule_kind
 
 
 def parameter_counts(model: nn.Module) -> dict[str, int]:

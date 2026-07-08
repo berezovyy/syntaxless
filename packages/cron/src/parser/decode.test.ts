@@ -443,6 +443,47 @@ describe("confidence", () => {
     expect(decoded.intent).toEqual(intent);
     expect(decoded.confidence).toBeCloseTo(0.05);
   });
+
+  test("includes utterance-level schedule-kind confidence", () => {
+    const intent: ScheduleIntent = { frequency: { unit: "day", interval: 3 } };
+
+    const decoded = decodeIntent(labelTokens(renderPhrase(intent)), {
+      kind: "interval",
+      score: 0.72,
+    });
+
+    expect(decoded.intent).toEqual(intent);
+    expect(decoded.confidence).toBeCloseTo(0.72);
+  });
+});
+
+describe("global schedule-kind safety", () => {
+  test("rejects a confident global kind that contradicts token semantics", () => {
+    const labeled = labelTokens(renderPhrase({ frequency: { unit: "day", interval: 3 } }));
+
+    expect(() => decodeIntent(labeled, { kind: "weekly", score: 0.9 })).toThrow(
+      "conflicts with global weekly kind",
+    );
+  });
+
+  test("a confident negative kind rejects schedule-like token predictions", () => {
+    const labeled = labelTokens(renderPhrase({ frequency: { unit: "day", interval: 3 } }));
+
+    expect(() => decodeIntent(labeled, { kind: "none", score: 0.9 })).toThrow(
+      "global schedule kind is none",
+    );
+  });
+
+  test("an uncertain global kind does not override explicit token evidence", () => {
+    const intent: ScheduleIntent = { frequency: { unit: "day", interval: 3 } };
+
+    const decoded = decodeIntent(labelTokens(renderPhrase(intent)), {
+      kind: "weekly",
+      score: 0.2,
+    });
+
+    expect(decoded.intent).toEqual(intent);
+  });
 });
 
 describe("decodeIntent rejects corrupt input", () => {

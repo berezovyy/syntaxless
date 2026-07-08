@@ -28,7 +28,7 @@ import torch
 
 from calibrate import Calibration, calibrate
 from dataset import Dataset, fingerprints_path, prepare, repo_root
-from model import Tagger, parameter_counts
+from model import SCHEDULE_KIND_NAMES, Tagger, parameter_counts
 
 #: The shipped format is int6 by contract.
 QUANTIZATION_BITS = 6
@@ -213,6 +213,7 @@ def build_decoded_model(artifact: dict, device: str = "cpu") -> Tagger:
         feature_rows=int(artifact["featureRows"]),
         rows_per_token=int(artifact["rowsPerToken"]),
         role_classes=int(artifact["roleClasses"]),
+        schedule_kind_classes=int(artifact.get("scheduleKindClasses", 0)),
         hidden=int(artifact["hidden"]),
         quantization_bits=QUANTIZATION_BITS,
     ).to(device)
@@ -234,12 +235,21 @@ def evaluate(
     total_tokens = 0
     exact_sequences = 0
     sequences = 0
+    schedule_kind_correct = 0
+    schedule_kind_total = 0
     true_positive = false_positive = false_negative = 0
     for indices in dataset.batches(batch_size):
         batch = dataset.batch(indices, device)
         labels = batch["labels"]
         mask = labels != -100
-        roles, boundary = model(batch["rows"], batch["valid"], batch["neighbors"])
+        roles, boundary, schedule_kind = model(
+            batch["rows"], batch["valid"], batch["neighbors"]
+        )
+        if schedule_kind.shape[-1] > 0:
+            schedule_kind_correct += int(
+                (schedule_kind.argmax(dim=-1) == batch["schedule_kinds"]).sum()
+            )
+            schedule_kind_total += len(indices)
         predictions = roles.argmax(dim=-1)
         correct += int(((predictions == labels) & mask).sum())
         total_tokens += int(mask.sum())
@@ -258,7 +268,7 @@ def evaluate(
     precision = true_positive / max(true_positive + false_positive, 1)
     recall = true_positive / max(true_positive + false_negative, 1)
     f1 = 2 * precision * recall / max(precision + recall, 1e-12)
-    return {
+    metrics = {
         "tokenAccuracy": correct / max(total_tokens, 1),
         "exactLabelAndBoundarySequence": exact_sequences / max(sequences, 1),
         "boundaryPrecision": precision,
@@ -270,6 +280,9 @@ def evaluate(
         "boundaryFalsePositive": false_positive,
         "boundaryFalseNegative": false_negative,
     }
+    if schedule_kind_total > 0:
+        metrics["scheduleKindAccuracy"] = schedule_kind_correct / schedule_kind_total
+    return metrics
 
 
 @torch.no_grad()
@@ -292,6 +305,7 @@ def freeze_parity(
     rows_parts: list[np.ndarray] = []
     logits_parts: list[np.ndarray] = []
     boundaries_parts: list[np.ndarray] = []
+    schedule_kind_parts: list[np.ndarray] = []
     offsets = [0]
     for index in range(count):
         start = int(dataset.offsets[index])
@@ -303,10 +317,14 @@ def freeze_parity(
         neighbor_tensor = (
             torch.as_tensor(neighbors.astype(np.int64)).unsqueeze(0).to(device)
         )
-        roles, boundary = model(row_tensor, valid, neighbor_tensor)
+        roles, boundary, schedule_kind = model(row_tensor, valid, neighbor_tensor)
         rows_parts.append(rows)
         logits_parts.append(roles[0].detach().cpu().numpy().astype(np.float32))
         boundaries_parts.append(boundary[0].detach().cpu().numpy().astype(np.float32))
+        if schedule_kind.shape[-1] > 0:
+            schedule_kind_parts.append(
+                schedule_kind[0].detach().cpu().numpy().astype(np.float32)
+            )
         offsets.append(offsets[-1] + (end - start))
 
     rows_all = np.concatenate(rows_parts, axis=0).astype(np.uint16)
@@ -321,11 +339,19 @@ def freeze_parity(
         "logits": ("parity.logits.bin", logits_all.tobytes()),
         "boundaries": ("parity.boundaries.bin", boundaries_all.tobytes()),
     }
+    if schedule_kind_parts:
+        schedule_kinds_all = np.stack(schedule_kind_parts).astype(np.float32)
+        files["scheduleKinds"] = (
+            "parity.schedule-kinds.bin",
+            schedule_kinds_all.tobytes(),
+        )
     summary = {
         "sequences": count,
         "tokens": int(offsets_all[-1]),
         "roleClasses": int(logits_all.shape[1]),
     }
+    if schedule_kind_parts:
+        summary["scheduleKindClasses"] = len(SCHEDULE_KIND_NAMES)
     summary["files"] = {}
     for key, (name, payload) in files.items():
         write_bytes_atomic(fixtures_dir / name, payload)
@@ -434,7 +460,7 @@ def build_artifact(
     hidden: int,
     threshold: float,
 ) -> dict:
-    return {
+    artifact = {
         "version": FORMAT_VERSION,
         "hidden": hidden,
         "featureRows": int(checkpoint["featureRows"]),
@@ -446,6 +472,11 @@ def build_artifact(
         "q": q,
         "segments": segments,
     }
+    schedule_kind_classes = int(checkpoint.get("scheduleKindClasses", 0))
+    if schedule_kind_classes > 0:
+        artifact["scheduleKindClasses"] = schedule_kind_classes
+        artifact["scheduleKindLabels"] = list(checkpoint["scheduleKindLabels"])
+    return artifact
 
 
 GATE_PACKAGE = "@syntaxless/cron-training"
@@ -518,6 +549,13 @@ def export(
         raise ValueError(
             f"labels.ts has {len(labels)} labels but the checkpoint has {role_classes}"
         )
+    schedule_kind_classes = int(checkpoint.get("scheduleKindClasses", 0))
+    schedule_kind_labels = list(checkpoint.get("scheduleKindLabels", []))
+    if schedule_kind_classes > 0 and (
+        schedule_kind_classes != len(SCHEDULE_KIND_NAMES)
+        or schedule_kind_labels != list(SCHEDULE_KIND_NAMES)
+    ):
+        raise ValueError("checkpoint schedule-kind vocabulary does not match runtime")
     hidden = int(state["embedding.weight"].shape[1])
 
     segments, q = pack_state(state)
@@ -575,6 +613,8 @@ def export(
         "rowsPerToken": int(checkpoint["rowsPerToken"]),
         "roleClasses": role_classes,
         "labels": labels,
+        "scheduleKindClasses": schedule_kind_classes,
+        "scheduleKindLabels": schedule_kind_labels,
         "calibration": calibration.to_dict(),
         "segments": segments,
         "datasetDigests": {

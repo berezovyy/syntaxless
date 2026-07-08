@@ -19,6 +19,7 @@ import {
  */
 import { isStructural, LABEL_COUNT, labelFromId } from "../model/labels.js";
 import type { Label } from "../model/labels.js";
+import type { ScheduleKind } from "../model/schedule-kinds.js";
 import type { RawToken } from "../model/tokenizer.js";
 import type {
   DaySpec,
@@ -63,6 +64,11 @@ export interface LabeledToken {
 export interface DecodedIntent {
   intent: ScheduleIntent;
   confidence: number;
+}
+
+export interface ScheduleKindEvidence {
+  kind: ScheduleKind;
+  score: number;
 }
 
 /** An out-of-range predicted role id. Never mapped to `O`. */
@@ -1083,7 +1089,10 @@ function resolveTime(
  * for an out-of-range role id and `RangeError` for an unrecognized or
  * out-of-bounds schedule.
  */
-export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
+export function decodeIntent(
+  labeled: readonly LabeledToken[],
+  scheduleKind?: ScheduleKindEvidence,
+): DecodedIntent {
   const entries: Entry[] = [];
 
   for (const item of labeled) {
@@ -1106,6 +1115,13 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   const lexical = exactLexicalIntent(entries);
 
   if (lexical !== null) return lexical;
+
+  const trustedScheduleKind =
+    scheduleKind !== undefined && scheduleKind.score >= 0.5 ? scheduleKind.kind : undefined;
+
+  if (trustedScheduleKind === "none" || trustedScheduleKind === "ambiguous") {
+    throw new RangeError(`decodeIntent: global schedule kind is ${trustedScheduleKind}`);
+  }
 
   const frequencyEvidence = explicitFrequency(entries);
 
@@ -1191,6 +1207,12 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   if (exceptionEvidence?.selectorWeekdays.length) {
     weekdays.length = 0;
     weekdays.push(...exceptionEvidence.selectorWeekdays);
+  }
+
+  if (weekdays.length === 0 && trustedScheduleKind === "weekly") {
+    const visibleWeekdays = weekdaysIn(joinEntries(entries));
+
+    if (visibleWeekdays.length > 0) weekdays.push(...visibleWeekdays);
   }
 
   let resolvedUnit = unit;
@@ -1333,6 +1355,23 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
     intent.frequency.unit = "week";
   }
 
+  if (trustedScheduleKind !== undefined) {
+    const consistent =
+      trustedScheduleKind === "interval" ||
+      (trustedScheduleKind === "daily" && intent.frequency.unit === "day") ||
+      (trustedScheduleKind === "weekly" && intent.frequency.unit === "week") ||
+      (trustedScheduleKind === "monthly" && intent.frequency.unit === "month") ||
+      (trustedScheduleKind === "ordinal" && intent.ordinalWeekday !== undefined) ||
+      (trustedScheduleKind === "bounded" && intent.bounds !== undefined) ||
+      (trustedScheduleKind === "exception" && intent.exceptions !== undefined);
+
+    if (!consistent) {
+      throw new RangeError(
+        `decodeIntent: token intent conflicts with global ${trustedScheduleKind} kind`,
+      );
+    }
+  }
+
   const failure =
     validateInterval(intent.frequency.unit, intent.frequency.interval) ??
     validateTime(intent.time) ??
@@ -1347,6 +1386,10 @@ export function decodeIntent(labeled: readonly LabeledToken[]): DecodedIntent {
   for (const entry of entries) {
     if (entry.label === "O" || isStructural(entry.label)) continue;
     confidence = Math.min(confidence, entry.score);
+  }
+
+  if (scheduleKind !== undefined) {
+    confidence = Math.min(confidence, Math.max(0, Math.min(1, scheduleKind.score)));
   }
 
   return { intent, confidence };

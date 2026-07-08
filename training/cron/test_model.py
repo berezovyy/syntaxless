@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import torch
 
-from model import Tagger
+from dataset import SCHEDULE_KIND_NAMES as DATASET_SCHEDULE_KIND_NAMES
+from dataset import schedule_kind_for_frame
+from model import SCHEDULE_KIND_NAMES, Tagger
 
 FEATURE_ROWS = 772
 ROWS_PER_TOKEN = 32
@@ -46,6 +48,7 @@ def build_model() -> Tagger:
         feature_rows=FEATURE_ROWS,
         rows_per_token=ROWS_PER_TOKEN,
         role_classes=ROLE_CLASSES,
+        schedule_kind_classes=len(SCHEDULE_KIND_NAMES),
         hidden=HIDDEN,
     )
 
@@ -60,8 +63,8 @@ def test_padding_neutrality() -> None:
     for qat in (False, True):
         model.qat = qat
         with torch.no_grad():
-            base_roles, base_boundary = model(*base)
-            padded_roles, padded_boundary = model(*padded)
+            base_roles, base_boundary, base_kind = model(*base)
+            padded_roles, padded_boundary, padded_kind = model(*padded)
         assert torch.allclose(
             base_roles[0, :content],
             padded_roles[0, :content],
@@ -74,6 +77,9 @@ def test_padding_neutrality() -> None:
             atol=1e-5,
             rtol=1e-4,
         ), f"boundary logits changed under padding (qat={qat})"
+        assert torch.allclose(base_kind, padded_kind, atol=1e-5, rtol=1e-4), (
+            f"schedule-kind logits changed under padding (qat={qat})"
+        )
     print(f"padding neutrality: ok (content={content}, padded width {padded[0].shape[1]})")
 
 
@@ -81,7 +87,7 @@ def test_finite_gradients() -> None:
     model = build_model().train()
     model.qat = True
     batch = make_batch(8, 5, seed=11)
-    roles, boundary = model(*batch)
+    roles, boundary, schedule_kind = model(*batch)
 
     target = torch.randint(0, ROLE_CLASSES, roles.shape[:-1])
     role_loss = torch.nn.functional.cross_entropy(
@@ -90,7 +96,9 @@ def test_finite_gradients() -> None:
     boundary_loss = torch.nn.functional.binary_cross_entropy_with_logits(
         boundary, torch.zeros_like(boundary)
     )
-    (role_loss + boundary_loss).backward()
+    kind_target = torch.randint(0, schedule_kind.shape[-1], schedule_kind.shape[:-1])
+    kind_loss = torch.nn.functional.cross_entropy(schedule_kind, kind_target)
+    (role_loss + boundary_loss + kind_loss).backward()
 
     checked = 0
     for name, parameter in model.named_parameters():
@@ -102,7 +110,26 @@ def test_finite_gradients() -> None:
     print(f"finite qat gradients: ok ({checked} tensors)")
 
 
+def test_schedule_kind_taxonomy() -> None:
+    assert DATASET_SCHEDULE_KIND_NAMES == SCHEDULE_KIND_NAMES
+    expected = {
+        "n-interval/every-n": "interval",
+        "time-of-day/digits": "daily",
+        "weekday-range/through": "weekly",
+        "day-of-month/on-the": "monthly",
+        "ordinal-weekday/the-ordinal": "ordinal",
+        "bounds/from-to": "bounded",
+        "exception-days/except": "exception",
+        "negative/ordinary/0": "none",
+        "negative/ambiguous/0": "ambiguous",
+    }
+    for frame, name in expected.items():
+        assert schedule_kind_for_frame(frame) == SCHEDULE_KIND_NAMES.index(name)
+    print("schedule-kind taxonomy: ok")
+
+
 if __name__ == "__main__":
     test_padding_neutrality()
     test_finite_gradients()
+    test_schedule_kind_taxonomy()
     print("test_model: all checks passed")
