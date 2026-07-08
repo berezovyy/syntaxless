@@ -36,7 +36,6 @@ const SPLITS: readonly Split[] = ["train", "validation", "heldout"];
 
 const GENERATOR_SOURCES: readonly string[] = [
   "../../src/parser/lexicon.ts",
-  "../../src/parser/decode.ts",
   "backward.ts",
   "fingerprint.ts",
   "kinds.ts",
