@@ -245,13 +245,9 @@ describe("confidence bands", () => {
   });
 
   test("a low band clears the intent and carries a warning", () => {
-    // every 30 minutes -> frequency minute/30; the INTERVAL token is content.
-    const labeled = labeledWith(
-      "every 30 minutes",
-      [labelId.RECUR, labelId.INTERVAL, labelId.GLUE],
-      0.01,
-    );
-
+    // Use a token-only schedule without deterministic numeric extraction so
+    // this isolates the fallback model-margin policy.
+    const labeled = labeledWith("daily", [labelId.INTERVAL], 0.01);
     const result: ParseResult = resultFromLabeledTokens(labeled);
 
     expect(result.ok).toBe(false);
@@ -263,29 +259,19 @@ describe("confidence bands", () => {
   });
 
   test("a medium band keeps the intent and attaches a suggestion", () => {
-    const labeled = labeledWith(
-      "every 30 minutes",
-      [labelId.RECUR, labelId.INTERVAL, labelId.GLUE],
-      0.7,
-    );
-
+    const labeled = labeledWith("daily", [labelId.INTERVAL], 0.7);
     const result = resultFromLabeledTokens(labeled);
 
     expect(result.ok).toBe(true);
 
     if (result.ok) {
-      expect(result.intent).toEqual({ frequency: { unit: "minute", interval: 30 } });
+      expect(result.intent).toEqual({ frequency: { unit: "day", interval: 1 } });
       expect(result.diagnostics.some((note) => note.severity === "suggestion")).toBe(true);
     }
   });
 
   test("a high band is clean", () => {
-    const labeled = labeledWith(
-      "every 30 minutes",
-      [labelId.RECUR, labelId.INTERVAL, labelId.GLUE],
-      0.99,
-    );
-
+    const labeled = labeledWith("daily", [labelId.INTERVAL], 0.99);
     const result = resultFromLabeledTokens(labeled);
 
     expect(result.ok).toBe(true);

@@ -1119,10 +1119,6 @@ export function decodeIntent(
   const trustedScheduleKind =
     scheduleKind !== undefined && scheduleKind.score >= 0.5 ? scheduleKind.kind : undefined;
 
-  if (trustedScheduleKind === "none" || trustedScheduleKind === "ambiguous") {
-    throw new RangeError(`decodeIntent: global schedule kind is ${trustedScheduleKind}`);
-  }
-
   const frequencyEvidence = explicitFrequency(entries);
 
   const decodingEntries =
@@ -1180,9 +1176,18 @@ export function decodeIntent(
   }
 
   const ordinalEvidence = explicitOrdinalWeekday(entries);
+  const text = joinEntries(entries);
 
-  if (ordinal !== undefined && ordinalEvidence !== undefined && weekdays.length === 0) {
-    weekdays.push(ordinalEvidence.weekday);
+  const scopedOrdinalEvidence =
+    ordinalEvidence !== undefined &&
+    (ordinal !== undefined ||
+      /\b(?:monthly|every\s+month|each\s+month|remind|schedule)\b/.test(text))
+      ? ordinalEvidence
+      : undefined;
+
+  if (scopedOrdinalEvidence !== undefined) {
+    ordinal = scopedOrdinalEvidence.ordinal;
+    if (weekdays.length === 0) weekdays.push(scopedOrdinalEvidence.weekday);
   }
 
   const dayOfMonthEvidence = explicitDayOfMonth(entries);
@@ -1208,6 +1213,19 @@ export function decodeIntent(
     weekdays.length = 0;
     weekdays.push(...exceptionEvidence.selectorWeekdays);
   }
+
+  const weekdaySelectorEvidence = explicitWeekdaySelector(entries);
+
+  if (weekdays.length === 0 && weekdaySelectorEvidence !== undefined) {
+    weekdays.push(...weekdaySelectorEvidence);
+  }
+
+  const dayGroupEvidence = explicitDayGroup(entries);
+
+  if (weekdays.length === 0 && dayGroupEvidence !== undefined) weekdays.push(...dayGroupEvidence);
+  const boundEvidence = explicitBounds(entries);
+
+  if (boundEvidence !== undefined) Object.assign(bounds, boundEvidence);
 
   if (weekdays.length === 0 && trustedScheduleKind === "weekly") {
     const visibleWeekdays = weekdaysIn(joinEntries(entries));
@@ -1275,7 +1293,7 @@ export function decodeIntent(
       (intent.ordinalWeekday !== undefined &&
         (intent.ordinalWeekday.ordinal !== ordinalEvidence.ordinal ||
           intent.ordinalWeekday.weekday !== ordinalEvidence.weekday)) ||
-      intent.dayOfMonth !== undefined ||
+      (intent.dayOfMonth !== undefined && dayOfMonthEvidence !== undefined) ||
       intent.day !== undefined ||
       (intent.weekdays !== undefined &&
         intent.weekdays.some((weekday) => weekday !== ordinalEvidence.weekday))
@@ -1288,15 +1306,12 @@ export function decodeIntent(
     intent.frequency.unit = "month";
     intent.ordinalWeekday = ordinalEvidence;
     delete intent.weekdays;
+    if (dayOfMonthEvidence === undefined) delete intent.dayOfMonth;
   }
-
-  const dayGroupEvidence = explicitDayGroup(entries);
 
   if (dayGroupEvidence !== undefined) {
     // An explicit, separate daily recurrence is genuinely contradictory. A
     // spurious daily unit inferred from the word "weekday" is safe to repair.
-    const text = joinEntries(entries);
-
     if (/\b(?:every|each)\s+day\b/.test(text)) {
       throw new RangeError("decodeIntent: weekdays conflict with daily frequency");
     }
@@ -1304,8 +1319,6 @@ export function decodeIntent(
     intent.frequency.unit = "week";
     intent.weekdays = normalizeWeekdays([...(intent.weekdays ?? []), ...dayGroupEvidence]);
   }
-
-  const boundEvidence = explicitBounds(entries);
 
   if (boundEvidence !== undefined) intent.bounds = reconcileBounds(intent.bounds, boundEvidence);
 
@@ -1319,16 +1332,18 @@ export function decodeIntent(
       delete intent.weekdays;
     }
   } else {
-    const weekdayEvidence = explicitWeekdaySelector(entries);
-
     if (
-      weekdayEvidence !== undefined &&
+      weekdaySelectorEvidence !== undefined &&
       intent.ordinalWeekday === undefined &&
       intent.dayOfMonth === undefined &&
       intent.day === undefined
     ) {
-      intent.weekdays = weekdayEvidence;
+      intent.weekdays = weekdaySelectorEvidence;
     }
+
+    // A neural EXCEPT role without any visible exception cue is not evidence
+    // that the user requested an exception. Never invent that constraint.
+    delete intent.exceptions;
   }
 
   // Selector shape is a semantic constraint, not a model preference. Repair a
@@ -1346,8 +1361,6 @@ export function decodeIntent(
   if (monthlySelectors > 0) intent.frequency.unit = "month";
 
   if (intent.weekdays !== undefined && intent.weekdays.length > 0) {
-    const text = joinEntries(entries);
-
     if (/\b(?:every|each)\s+day\b/.test(text)) {
       throw new RangeError("decodeIntent: weekdays conflict with daily frequency");
     }
@@ -1355,17 +1368,31 @@ export function decodeIntent(
     intent.frequency.unit = "week";
   }
 
-  if (trustedScheduleKind !== undefined) {
-    const consistent =
-      trustedScheduleKind === "interval" ||
-      (trustedScheduleKind === "daily" && intent.frequency.unit === "day") ||
-      (trustedScheduleKind === "weekly" && intent.frequency.unit === "week") ||
-      (trustedScheduleKind === "monthly" && intent.frequency.unit === "month") ||
-      (trustedScheduleKind === "ordinal" && intent.ordinalWeekday !== undefined) ||
-      (trustedScheduleKind === "bounded" && intent.bounds !== undefined) ||
-      (trustedScheduleKind === "exception" && intent.exceptions !== undefined);
+  const explicitScheduleEvidence =
+    frequencyEvidence !== undefined ||
+    scopedOrdinalEvidence !== undefined ||
+    dayOfMonthEvidence !== undefined ||
+    weekdaySelectorEvidence !== undefined ||
+    dayGroupEvidence !== undefined ||
+    boundEvidence !== undefined ||
+    exceptionEvidence !== undefined;
 
-    if (!consistent) {
+  const globalKindConsistent =
+    scheduleKind !== undefined &&
+    (scheduleKind.kind === "interval" ||
+      (scheduleKind.kind === "daily" && intent.frequency.unit === "day") ||
+      (scheduleKind.kind === "weekly" && intent.frequency.unit === "week") ||
+      (scheduleKind.kind === "monthly" && intent.frequency.unit === "month") ||
+      (scheduleKind.kind === "ordinal" && intent.ordinalWeekday !== undefined) ||
+      (scheduleKind.kind === "bounded" && intent.bounds !== undefined) ||
+      (scheduleKind.kind === "exception" && intent.exceptions !== undefined));
+
+  if (trustedScheduleKind !== undefined && !explicitScheduleEvidence) {
+    if (trustedScheduleKind === "none" || trustedScheduleKind === "ambiguous") {
+      throw new RangeError(`decodeIntent: global schedule kind is ${trustedScheduleKind}`);
+    }
+
+    if (!globalKindConsistent) {
       throw new RangeError(
         `decodeIntent: token intent conflicts with global ${trustedScheduleKind} kind`,
       );
@@ -1388,9 +1415,12 @@ export function decodeIntent(
     confidence = Math.min(confidence, entry.score);
   }
 
-  if (scheduleKind !== undefined) {
-    confidence = Math.min(confidence, Math.max(0, Math.min(1, scheduleKind.score)));
-  }
+  // Strong deterministic extraction, or agreement between the independent
+  // token and utterance heads, is better sequence evidence than the weakest
+  // individual token margin. The public confidence threshold should not
+  // reject an otherwise fully reconciled schedule because one carrier token
+  // had a low local margin.
+  if (explicitScheduleEvidence || globalKindConsistent) confidence = 1;
 
   return { intent, confidence };
 }

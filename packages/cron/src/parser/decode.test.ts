@@ -282,6 +282,29 @@ describe("range and interval rules", () => {
     });
   });
 
+  test("explicit ordinal weekday evidence overrides a spurious numeric-day role", () => {
+    const tokens = tokenize("remind me to the fourth Monday, monthly").filter(
+      (token) => token.kind !== 3,
+    );
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role:
+        token.text === "fourth"
+          ? labelId.DOM
+          : token.text.toLowerCase() === "monday"
+            ? labelId.WEEKDAY
+            : labelId.O,
+      boundary: token.text === "fourth",
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled).intent).toEqual({
+      frequency: { unit: "month", interval: 1 },
+      ordinalWeekday: { ordinal: "fourth", weekday: "monday" },
+    });
+  });
+
   test("explicit monthly day evidence recovers an all-O model decode", () => {
     const tokens = tokenize("remind me to the 24th day, monthly").filter(
       (token) => token.kind !== 3,
@@ -381,6 +404,23 @@ describe("range and interval rules", () => {
     expect(() => decodeIntent(labeled)).toThrow(RangeError);
   });
 
+  test("a predicted exception without a visible cue cannot invent a constraint", () => {
+    const tokens = tokenize("please every week monday").filter((token) => token.kind !== 3);
+    const roles = [labelId.EXCEPT, labelId.RECUR, labelId.GLUE, labelId.WEEKDAY];
+
+    const labeled: LabeledToken[] = tokens.map((token, index) => ({
+      token,
+      role: roles[index]!,
+      boundary: index === 1,
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled).intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["monday"],
+    });
+  });
+
   test("weekday and month selectors constrain a mistaken frequency prediction", () => {
     const weekday = labelTokens(
       renderIntent(
@@ -432,11 +472,12 @@ describe("range and interval rules", () => {
 
 describe("confidence", () => {
   test("is the weakest margin among content tokens", () => {
-    const intent: ScheduleIntent = { frequency: { unit: "day", interval: 3 } };
+    const intent: ScheduleIntent = { frequency: { unit: "day", interval: 1 } };
+    const token = tokenize("daily")[0]!;
 
-    const labeled = labelTokens(renderPhrase(intent)).map((item) =>
-      item.role === labelId.INTERVAL ? { ...item, score: 0.05 } : item,
-    );
+    const labeled: LabeledToken[] = [
+      { token, role: labelId.INTERVAL, boundary: true, score: 0.05 },
+    ];
 
     const decoded = decodeIntent(labeled);
 
@@ -444,7 +485,7 @@ describe("confidence", () => {
     expect(decoded.confidence).toBeCloseTo(0.05);
   });
 
-  test("includes utterance-level schedule-kind confidence", () => {
+  test("does not treat an uncalibrated kind margin as sequence confidence", () => {
     const intent: ScheduleIntent = { frequency: { unit: "day", interval: 3 } };
 
     const decoded = decodeIntent(labelTokens(renderPhrase(intent)), {
@@ -453,13 +494,20 @@ describe("confidence", () => {
     });
 
     expect(decoded.intent).toEqual(intent);
-    expect(decoded.confidence).toBeCloseTo(0.72);
+    expect(decoded.confidence).toBe(1);
   });
 });
 
 describe("global schedule-kind safety", () => {
   test("rejects a confident global kind that contradicts token semantics", () => {
-    const labeled = labelTokens(renderPhrase({ frequency: { unit: "day", interval: 3 } }));
+    const labeled = tokenize("please run daily")
+      .filter((token) => token.kind !== 3)
+      .map((token) => ({
+        token,
+        role: token.text === "daily" ? labelId.INTERVAL : labelId.O,
+        boundary: token.text === "daily",
+        score: 1,
+      }));
 
     expect(() => decodeIntent(labeled, { kind: "weekly", score: 0.9 })).toThrow(
       "conflicts with global weekly kind",
@@ -467,7 +515,14 @@ describe("global schedule-kind safety", () => {
   });
 
   test("a confident negative kind rejects schedule-like token predictions", () => {
-    const labeled = labelTokens(renderPhrase({ frequency: { unit: "day", interval: 3 } }));
+    const labeled = tokenize("please run daily")
+      .filter((token) => token.kind !== 3)
+      .map((token) => ({
+        token,
+        role: token.text === "daily" ? labelId.INTERVAL : labelId.O,
+        boundary: token.text === "daily",
+        score: 1,
+      }));
 
     expect(() => decodeIntent(labeled, { kind: "none", score: 0.9 })).toThrow(
       "global schedule kind is none",
