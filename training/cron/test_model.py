@@ -122,6 +122,7 @@ def test_schedule_kind_taxonomy() -> None:
         "exception-days/except": "exception",
         "negative/ordinary/0": "none",
         "negative/ambiguous/0": "ambiguous",
+        "negative/multiple/0": "ambiguous",
     }
     for frame, name in expected.items():
         assert schedule_kind_for_frame(frame) == SCHEDULE_KIND_NAMES.index(name)

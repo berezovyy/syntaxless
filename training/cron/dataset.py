@@ -46,7 +46,7 @@ def schedule_kind_for_frame(frame_name: str) -> int:
         category = parts[1] if len(parts) > 1 else "ordinary"
         return SCHEDULE_KIND_INDEX[
             "ambiguous"
-            if category in {"incomplete", "ambiguous", "conversational"}
+            if category in {"incomplete", "ambiguous", "conversational", "multiple"}
             else "none"
         ]
     if kind.startswith("bounds"):
@@ -189,6 +189,7 @@ class Dataset:
         shuffle_seed: int | None = None,
         balance_frames: bool = False,
         balance_kinds: bool = False,
+        balance_schedule_kinds: bool = False,
         frame_balance_power: float = 0.5,
     ):
         """Yield batches of sequence indices, grouped by similar length.
@@ -198,7 +199,7 @@ class Dataset:
         """
         rng = np.random.default_rng(shuffle_seed)
         selected = np.arange(self.sequences)
-        if balance_frames or balance_kinds:
+        if balance_frames or balance_kinds or balance_schedule_kinds:
             if not self.frame_members:
                 raise ValueError(
                     f"{self.prefix}: balanced batching requires a frames shard"
@@ -223,6 +224,13 @@ class Dataset:
                 for frame_ids in kind_frames.values():
                     kind_mass = float(masses[frame_ids].sum())
                     masses[frame_ids] /= kind_mass
+            if balance_schedule_kinds:
+                schedule_frames: dict[int, list[int]] = {}
+                for frame_id, schedule_kind in enumerate(self.frame_schedule_kinds):
+                    schedule_frames.setdefault(int(schedule_kind), []).append(frame_id)
+                for frame_ids in schedule_frames.values():
+                    class_mass = float(masses[frame_ids].sum())
+                    masses[frame_ids] /= class_mass
             draw_counts = rng.multinomial(self.sequences, masses / masses.sum())
             draws: list[np.ndarray] = []
             for count, members in zip(draw_counts, self.frame_members, strict=True):

@@ -64,6 +64,18 @@ export interface LabeledToken {
 export interface DecodedIntent {
   intent: ScheduleIntent;
   confidence: number;
+  /** Inspectable sequence-level inputs used to derive `confidence`. */
+  evidence: SequenceConfidenceEvidence;
+}
+
+export interface SequenceConfidenceEvidence {
+  tokenMargin: number;
+  scheduleKind?: ScheduleKind;
+  scheduleKindMargin?: number;
+  scheduleKindAgreement: boolean;
+  explicitScheduleEvidence: boolean;
+  /** Present only when deterministic language evidence was reconciled. */
+  lexiconAgreement?: boolean;
 }
 
 export interface ScheduleKindEvidence {
@@ -109,6 +121,56 @@ interface ClauseFacts {
   exceptions: ScheduleExceptions;
 }
 
+function exactEvidence(): SequenceConfidenceEvidence {
+  return {
+    tokenMargin: 1,
+    scheduleKindAgreement: true,
+    explicitScheduleEvidence: true,
+    lexiconAgreement: true,
+  };
+}
+
+function explicitlyNonScheduling(text: string): boolean {
+  const requestQuestion =
+    /^(?:can|could|would|will)\s+you\b.*\b(?:remind|schedule|set|run|send|make|have|trigger|notify|ping)\b/.test(
+      text,
+    );
+
+  const informationalQuestion =
+    /\?$/.test(text) &&
+    !requestQuestion &&
+    /^(?:am|are|can|could|did|do|does|how|is|should|was|were|what|when|where|which|who|why|will|would)\b/.test(
+      text,
+    );
+
+  const uncertainAlternative =
+    /\b(?:maybe|perhaps|possibly|unsure|not sure)\b.*\b(?:or|whether)\b/.test(text) ||
+    /\beither\b.*\bor\b/.test(text);
+
+  const competingCorrection =
+    /\b(?:not|instead of)\b.*\b(?:but|rather|instead)\b/.test(text) ||
+    /\b(?:change|move|switch)\b.*\bfrom\b.*\bto\b/.test(text);
+
+  const metaQuotation =
+    /\b(?:article|documentation|docs?|example|message|phrase|sample|sentence|text|tutorial)\b.*\b(?:contains?|mentions?|reads?|says?|shows?|uses?|wrote)\b.*["'‘’“”].*\b(?:at|daily|each|every|hourly|monthly|weekly)\b/.test(
+      text,
+    );
+
+  const historical =
+    /\b(?:formerly|previously|yesterday|used to)\b/.test(text) ||
+    /\b(?:happened|occurred|ran|was scheduled|were scheduled)\b.*\b(?:at|daily|each|every|hourly|monthly|weekly)\b/.test(
+      text,
+    );
+
+  return (
+    informationalQuestion ||
+    uncertainAlternative ||
+    competingCorrection ||
+    metaQuotation ||
+    historical
+  );
+}
+
 /** Exact, context-free surfaces whose meaning is completely determined by the
  * shared lexicon. Keeping these in the decoder makes short inputs robust to a
  * sparse-hash collision without treating a weekday mentioned in prose as a
@@ -119,6 +181,7 @@ function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
   // Explicit corrections, cancellations, questions, and hedged alternatives
   // are not schedules even when they contain otherwise valid schedule words.
   if (
+    explicitlyNonScheduling(text) ||
     /\b(?:do not|don't|did not|didn't)\s+mean\b/.test(text) ||
     /^(?:no,?\s+not\b|actually,?\s+never mind\b)/.test(text) ||
     /^maybe\b.*\bor\b/.test(text) ||
@@ -158,6 +221,7 @@ function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
     return {
       intent: { frequency: { unit: "week", interval: 1 }, weekdays: [weekday] },
       confidence: 1,
+      evidence: exactEvidence(),
     };
   }
 
@@ -167,6 +231,7 @@ function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
     return {
       intent: { frequency: { unit: "week", interval: 1 }, weekdays: [...group] },
       confidence: 1,
+      evidence: exactEvidence(),
     };
   }
 
@@ -183,6 +248,7 @@ function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
           ordinalWeekday: { ordinal, weekday: ordinalDay },
         },
         confidence: 1,
+        evidence: exactEvidence(),
       };
     }
   }
@@ -200,6 +266,7 @@ function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
       return {
         intent: { frequency: { unit: "day", interval: 1 }, time },
         confidence: 1,
+        evidence: exactEvidence(),
       };
     }
   }
@@ -216,6 +283,7 @@ function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
         return {
           intent: { frequency: { unit: "day", interval: 1 }, time },
           confidence: 1,
+          evidence: exactEvidence(),
         };
       }
     }
@@ -1754,19 +1822,32 @@ export function decodeIntent(
 
   if (failure !== null) throw new RangeError(failure.reason);
 
-  let confidence = 1;
+  let tokenMargin = 1;
 
   for (const entry of entries) {
     if (entry.label === "O" || isStructural(entry.label)) continue;
-    confidence = Math.min(confidence, entry.score);
+    tokenMargin = Math.min(tokenMargin, entry.score);
   }
 
-  // Strong deterministic extraction, or agreement between the independent
-  // token and utterance heads, is better sequence evidence than the weakest
-  // individual token margin. The public confidence threshold should not
-  // reject an otherwise fully reconciled schedule because one carrier token
-  // had a low local margin.
+  // Preserve the established public behavior while exposing the individual
+  // evidence below. A replacement score must be calibrated end to end before
+  // it is allowed to reject schedules that the active parser accepts.
+  let confidence = tokenMargin;
+
   if (explicitScheduleEvidence || globalKindConsistent) confidence = 1;
 
-  return { intent, confidence };
+  const evidence: SequenceConfidenceEvidence = {
+    tokenMargin,
+    ...(scheduleKind === undefined
+      ? {}
+      : {
+          scheduleKind: scheduleKind.kind,
+          scheduleKindMargin: scheduleKind.score,
+        }),
+    scheduleKindAgreement: globalKindConsistent,
+    explicitScheduleEvidence,
+    ...(explicitScheduleEvidence ? { lexiconAgreement: true } : {}),
+  };
+
+  return { intent, confidence, evidence };
 }

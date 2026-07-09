@@ -113,6 +113,7 @@ def train_epoch(
     shuffle_seed: int,
     balance_frames: bool,
     balance_kinds: bool,
+    balance_schedule_kinds: bool,
     frame_balance_power: float,
 ) -> dict[str, float]:
     model.train()
@@ -125,6 +126,7 @@ def train_epoch(
         shuffle_seed=shuffle_seed,
         balance_frames=balance_frames,
         balance_kinds=balance_kinds,
+        balance_schedule_kinds=balance_schedule_kinds,
         frame_balance_power=frame_balance_power,
     ):
         batch = dataset.batch(indices, device)
@@ -183,6 +185,10 @@ def evaluate(
     false_positive = 0
     false_negative = 0
     schedule_kind_correct = 0
+    schedule_kind_totals = np.zeros(len(SCHEDULE_KIND_NAMES), dtype=np.int64)
+    schedule_kind_correct_by_class = np.zeros(
+        len(SCHEDULE_KIND_NAMES), dtype=np.int64
+    )
     frame_kind_names = [name.split("/", 1)[0] for name in dataset.manifest.frame_names]
     kind_names = list(dict.fromkeys(frame_kind_names))
     kind_index = {name: index for index, name in enumerate(kind_names)}
@@ -202,6 +208,18 @@ def evaluate(
         schedule_kind_correct += int(
             (schedule_kind.argmax(dim=-1) == batch["schedule_kinds"]).sum()
         )
+        schedule_predictions = schedule_kind.argmax(dim=-1)
+        schedule_targets = batch["schedule_kinds"]
+        target_numpy = schedule_targets.detach().cpu().numpy()
+        correct_numpy = (schedule_predictions == schedule_targets).detach().cpu().numpy()
+        schedule_kind_totals += np.bincount(
+            target_numpy, minlength=len(SCHEDULE_KIND_NAMES)
+        )
+        schedule_kind_correct_by_class += np.bincount(
+            target_numpy,
+            weights=correct_numpy.astype(np.int64),
+            minlength=len(SCHEDULE_KIND_NAMES),
+        ).astype(np.int64)
 
         predictions = roles.argmax(dim=-1)
         correct += int(((predictions == labels) & mask).sum())
@@ -244,11 +262,33 @@ def evaluate(
         if by_kind
         else exact_sequences / max(sequences, 1)
     )
+    by_schedule_kind = {
+        name: {
+            "sequences": int(schedule_kind_totals[index]),
+            "correct": int(schedule_kind_correct_by_class[index]),
+            "accuracy": float(
+                schedule_kind_correct_by_class[index]
+                / max(schedule_kind_totals[index], 1)
+            ),
+        }
+        for index, name in enumerate(SCHEDULE_KIND_NAMES)
+    }
+    macro_schedule_kind_accuracy = float(
+        np.mean(
+            [
+                entry["accuracy"]
+                for entry in by_schedule_kind.values()
+                if entry["sequences"] > 0
+            ]
+        )
+    )
     return {
         "tokenAccuracy": correct / max(total_tokens, 1),
         "exactLabelAndBoundarySequence": exact_sequences / max(sequences, 1),
         "macroKindExactSequence": macro_kind_exact,
         "scheduleKindAccuracy": schedule_kind_correct / max(sequences, 1),
+        "macroScheduleKindAccuracy": macro_schedule_kind_accuracy,
+        "byScheduleKind": by_schedule_kind,
         "byKind": by_kind,
         "boundaryPrecision": precision,
         "boundaryRecall": recall,
@@ -397,6 +437,7 @@ def main(argv: list[str] | None = None) -> int:
             config.seed + epoch * EPOCH_SEED_STRIDE,
             config.balance_frames,
             config.balance_kinds,
+            config.balance_schedule_kinds,
             config.frame_balance_power,
         )
         tokens_seen += int(train_metrics["trainTokens"])
@@ -408,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         criterion = (
             float(metrics["tokenAccuracy"])
             + float(metrics["macroKindExactSequence"])
-            + 0.25 * float(metrics["scheduleKindAccuracy"])
+            + 0.25 * float(metrics["macroScheduleKindAccuracy"])
         )
 
         save_checkpoint(run_dir / "last.pt", model, config, epoch, criterion, metrics)

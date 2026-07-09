@@ -31,6 +31,7 @@ class Config:
     data_prefix: str | None = None
     balance_frames: bool = False
     balance_kinds: bool = False
+    balance_schedule_kinds: bool = False
     frame_balance_power: float = 0.5
     early_stopping_patience: int = 0
     min_epochs: int = 1
@@ -87,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="give each sentence kind equal total mass before sampling frames",
     )
     parser.add_argument(
+        "--balance-schedule-kinds",
+        action="store_true",
+        help="give each global schedule class equal total sampling mass",
+    )
+    parser.add_argument(
         "--frame-balance-power",
         type=float,
         default=0.5,
@@ -135,6 +141,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
         raise ValueError("--min-epochs must be in [1, --epochs]")
     if not 0 <= args.frame_balance_power <= 1:
         raise ValueError("--frame-balance-power must be in [0, 1]")
+    if args.balance_kinds and args.balance_schedule_kinds:
+        raise ValueError("choose either --balance-kinds or --balance-schedule-kinds")
     return Config(
         run=args.run,
         seed=args.seed,
@@ -153,6 +161,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         data_prefix=args.data_prefix,
         balance_frames=args.balance_frames,
         balance_kinds=args.balance_kinds,
+        balance_schedule_kinds=args.balance_schedule_kinds,
         frame_balance_power=args.frame_balance_power,
         early_stopping_patience=args.early_stopping_patience,
         min_epochs=args.min_epochs,

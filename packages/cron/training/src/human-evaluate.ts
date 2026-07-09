@@ -260,6 +260,8 @@ export interface HumanEvaluateOptions {
   corpus: string;
   out: string;
   partition: HumanPartition;
+  /** Optional exported candidate module; never changes the active artifact. */
+  weights?: string;
 }
 
 export async function evaluateHumanCorpus(
@@ -272,7 +274,7 @@ export async function evaluateHumanCorpus(
   const records = allRecords.filter((item) => item.partition === options.partition);
 
   if (records.length === 0) throw new Error(`human corpus has no ${options.partition} records`);
-  const engine = await loadEngine(options.dist);
+  const engine = await loadEngine(options.dist, options.weights);
   const byFamily: Record<string, Counts> = {};
   const byCapability: Record<string, Counts> = {};
   const failureCounts: Record<string, number> = {};
@@ -507,6 +509,8 @@ export function parseArgs(argv: readonly string[]): HumanEvaluateOptions {
 
     if (arg === "--dist") {
       options.dist = readOption(argv, index++);
+    } else if (arg === "--weights") {
+      options.weights = readOption(argv, index++);
     } else if (arg === "--corpus") {
       options.corpus = readOption(argv, index++);
     } else if (arg === "--out") {

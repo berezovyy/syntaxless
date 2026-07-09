@@ -60,6 +60,7 @@ describe("assertHumanIsolation", () => {
 describe("human evaluation CLI", () => {
   test("defaults to development and validates partitions", () => {
     expect(parseArgs([]).partition).toBe("development");
+    expect(parseArgs(["--weights", "/tmp/candidate.ts"]).weights).toBe("/tmp/candidate.ts");
     expect(() => parseArgs(["--partition", "mystery"])).toThrow(/invalid human partition/);
   });
 
