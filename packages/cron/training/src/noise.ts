@@ -1,6 +1,7 @@
 /** Deterministic, meaning-preserving spelling noise for paired corpus rows. */
 import { createHash } from "node:crypto";
 
+import type { Label } from "../../src/model/labels.js";
 import { tokenize } from "../../src/model/tokenizer.js";
 import type { RenderedExample } from "./renderer.js";
 
@@ -10,6 +11,13 @@ export type SpellingNoise =
 export interface NoisyExample {
   noise: SpellingNoise;
   example: RenderedExample;
+}
+
+export interface SpellingVariantOptions {
+  /** Restrict mutation to schedule roles that need targeted robustness. */
+  labels?: readonly Label[];
+  /** Bypass the ordinary one-in-four sampling for targeted equivalence rows. */
+  force?: boolean;
 }
 
 const NOISES: readonly SpellingNoise[] = [
@@ -108,16 +116,25 @@ function mutateWord(word: string, noise: SpellingNoise, choice: number): string 
  * multi-million-row corpus. The caller keeps the clean row beside this row and
  * pins both to the same split frame.
  */
-export function spellingVariant(example: RenderedExample, seed: string): NoisyExample | undefined {
+export function spellingVariant(
+  example: RenderedExample,
+  seed: string,
+  options: SpellingVariantOptions = {},
+): NoisyExample | undefined {
   const entropy = digest(`${seed}\0${example.text}`);
 
-  if (entropy[0]! % 4 !== 0) return undefined;
+  if (options.force !== true && entropy[0]! % 4 !== 0) return undefined;
+  const eligibleLabels = options.labels === undefined ? undefined : new Set(options.labels);
 
   const candidates = tokenize(example.text).filter((token) => {
     if (token.kind !== 0 || [...token.text].length < 3) return false;
 
     return example.spans.some(
-      (span) => span.label !== "O" && token.start >= span.start && token.end <= span.end,
+      (span) =>
+        span.label !== "O" &&
+        (eligibleLabels === undefined || eligibleLabels.has(span.label)) &&
+        token.start >= span.start &&
+        token.end <= span.end,
     );
   });
 

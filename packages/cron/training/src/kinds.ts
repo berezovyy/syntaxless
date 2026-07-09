@@ -231,6 +231,14 @@ const NEGATIVE_GROUPS = {
     "The group has not chosen between weekdays and weekends.",
     "Nine in the morning is only one option we are considering.",
     "A monthly cadence was suggested, not agreed.",
+    "The planning board lists Thursday as a possible date.",
+    "Our busiest support day is Monday.",
+    "The timetable shows noon for informational purposes.",
+    "A weekly frequency appears in the requirements document.",
+    "Her preferred day happens to be Friday.",
+    "The dashboard displays an hourly estimate.",
+    "Their draft mentions the second Tuesday.",
+    "This paragraph describes a daily process owned elsewhere.",
   ],
   corrective: [
     "No, not Monday.",
@@ -397,6 +405,7 @@ const CARRIER_BASES: Readonly<Partial<Record<KindId, readonly string[]>>> = {
     "24h",
     "compact",
     "dotted-meridiem",
+    "named",
     "oclock",
   ],
   "day-at-time": [
@@ -416,8 +425,9 @@ const CARRIER_BASES: Readonly<Partial<Record<KindId, readonly string[]>>> = {
   "day-of-month-at-time": ["the-at"],
   "ordinal-weekday": ["the-ordinal-of"],
   "ordinal-weekday-at-time": ["ordinal-of-each-at"],
-  bounds: ["from-to"],
+  bounds: ["from-to", "start-0", "end-0"],
   "exception-group": ["except-weekends"],
+  "exception-days": ["prefix-3", "prefix-5"],
 };
 
 function receivesCarrier(kind: KindId, template: string): boolean {
@@ -3446,6 +3456,33 @@ export function* iterateKinds(wanted?: ReadonlySet<KindId>): Generator<KindExamp
           };
         }
 
+        const targetedRole =
+          kind.family === "bounds"
+            ? ("BOUND" as const)
+            : kind.family === "exception"
+              ? ("EXCEPT" as const)
+              : undefined;
+
+        const targetedNoisy =
+          intent === null || targetedRole === undefined
+            ? undefined
+            : spellingVariant(cleanExample, `${name}/target-${targetedRole}`, {
+                labels: [targetedRole],
+                force: true,
+              });
+
+        if (targetedNoisy !== undefined && targetedNoisy.example.text !== noisy?.example.text) {
+          yield {
+            kind: kind.id,
+            family: kind.family,
+            template: `${kind.id}/target-noise-${targetedNoisy.noise}-${template.id}`,
+            split: template.split,
+            intent,
+            example: targetedNoisy.example,
+            splitExample: cleanExample,
+          };
+        }
+
         if (receivesCarrier(kind.id, template.id)) {
           for (let carrierIndex = 0; carrierIndex < POSITIVE_CARRIERS.length; carrierIndex++) {
             const carried = new Sentence();
@@ -3475,6 +3512,29 @@ export function* iterateKinds(wanted?: ReadonlySet<KindId>): Generator<KindExamp
                 split: template.split,
                 intent,
                 example: noisyCarried.example,
+                splitExample: cleanCarried,
+              };
+            }
+
+            const targetedCarried =
+              targetedRole === undefined
+                ? undefined
+                : spellingVariant(cleanCarried, `${carriedName}/target-${targetedRole}`, {
+                    labels: [targetedRole],
+                    force: true,
+                  });
+
+            if (
+              targetedCarried !== undefined &&
+              targetedCarried.example.text !== noisyCarried?.example.text
+            ) {
+              yield {
+                kind: kind.id,
+                family: kind.family,
+                template: `${kind.id}/target-noise-${targetedCarried.noise}-carrier-${carrierIndex}-${template.id}`,
+                split: template.split,
+                intent,
+                example: targetedCarried.example,
                 splitExample: cleanCarried,
               };
             }

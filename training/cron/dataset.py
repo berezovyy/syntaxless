@@ -80,6 +80,26 @@ def length_bucket(length: int) -> int:
     return length
 
 
+def group_frame_members(frames: np.ndarray, frame_count: int) -> list[np.ndarray]:
+    """Group sequence indices by frame with one vectorized ordering pass.
+
+    Scanning the complete frame shard once per frame is quadratic in practice:
+    the schedule lattice has millions of rows and tens of thousands of wording
+    frames. A stable argsort touches the shard once and keeps member indices in
+    their original sequence order.
+    """
+    frame_ids = np.asarray(frames)
+    if frame_ids.ndim != 1:
+        raise ValueError("frames must be a one-dimensional array")
+    if frame_count < 1 or int(frame_ids.max(initial=0)) >= frame_count:
+        raise ValueError("invalid frame ids or names")
+    counts = np.bincount(frame_ids, minlength=frame_count)
+    order = np.argsort(frame_ids, kind="stable")
+    stops = np.cumsum(counts, dtype=np.int64)
+    starts = np.concatenate((np.zeros(1, dtype=np.int64), stops[:-1]))
+    return [order[start:stop] for start, stop in zip(starts, stops, strict=True)]
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -158,12 +178,10 @@ class Dataset:
                     f"expected {self.sequences}"
                 )
             frame_count = len(self.manifest.frame_names)
-            if frame_count == 0 or int(self.frames.max(initial=0)) >= frame_count:
-                raise ValueError(f"{self.prefix}: invalid frame ids or names")
-            self.frame_members = [
-                np.flatnonzero(self.frames == frame_id)
-                for frame_id in range(frame_count)
-            ]
+            try:
+                self.frame_members = group_frame_members(self.frames, frame_count)
+            except ValueError as error:
+                raise ValueError(f"{self.prefix}: {error}") from error
             actual_counts = [int(members.size) for members in self.frame_members]
             if self.manifest.frame_counts and actual_counts != self.manifest.frame_counts:
                 raise ValueError(f"{self.prefix}: frame counts do not match frames shard")

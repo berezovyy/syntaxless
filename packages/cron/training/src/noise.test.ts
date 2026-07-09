@@ -33,3 +33,16 @@ test("spelling variants are deterministic and keep spans token aligned", () => {
     ).toHaveLength(1);
   }
 });
+
+test("a forced role-targeted variant mutates only the requested evidence", () => {
+  const variant = spellingVariant(clean, "targeted", {
+    labels: ["WEEKDAY"],
+    force: true,
+  });
+
+  expect(variant).toBeDefined();
+  if (variant === undefined) return;
+  expect(variant.example.text.slice(0, 6)).toBe("every ");
+  expect(variant.example.text).not.toContain("monday");
+  expect(variant.example.text).toEndWith(" at nine");
+});
