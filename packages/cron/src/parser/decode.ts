@@ -107,6 +107,7 @@ export type UnsafeScheduleContextReason =
   | "quoted-schedule"
   | "historical-description"
   | "multiple-schedules"
+  | "descriptive-statement"
   | "non-scheduling-language";
 
 /** A syntactically schedule-like phrase used in a non-command discourse role. */
@@ -319,6 +320,39 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   }
 
   return null;
+}
+
+/** Identify prose that mentions a possible schedule value without asking for
+ * a schedule. This guard is deliberately applied only when the decoder found
+ * no deterministic schedule evidence; explicit recurrence, clock, bound, and
+ * exception syntax remains eligible even inside a declarative carrier. */
+function unrequestedDeclarativeContext(text: string): boolean {
+  text = text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[.!?]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const directRequest =
+    /^(?:actually[,:]?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:add|arrange|book|configure|create|enable|have|make|notify|ping|remind|repeat|run|schedule|send|set|start|trigger)\b/.test(
+      text,
+    ) ||
+    /^(?:i(?:'d| would) like|i need|i want|let's)\b/.test(text) ||
+    /\b(?:can|could|may|will|would)\s+(?:i|you)\b/.test(text);
+
+  if (directRequest) return false;
+
+  const bareSchedule =
+    /^(?:at\b|daily\b|each\b|every\b|hourly\b|monthly\b|once\b|on\b|starting\b|until\b|weekly\b|weekdays?\b|weekends?\b|\d{1,2}(?:st|nd|rd|th)\b)/.test(
+      text,
+    );
+
+  if (bareSchedule) return false;
+
+  return /\b(?:am|are|arrives?|calls?|closes?|ends?|happens?|is|leaves?|meets?|occurs?|opens?|runs?|starts?|takes?|was|were|works?)\b/.test(
+    text,
+  );
 }
 
 /** Exact, context-free surfaces whose meaning is completely determined by the
@@ -1973,6 +2007,10 @@ export function decodeIntent(
       (scheduleKind.kind === "ordinal" && intent.ordinalWeekday !== undefined) ||
       (scheduleKind.kind === "bounded" && intent.bounds !== undefined) ||
       (scheduleKind.kind === "exception" && intent.exceptions !== undefined));
+
+  if (!explicitScheduleEvidence && unrequestedDeclarativeContext(sourceText ?? text)) {
+    throw new UnsafeScheduleContextError("descriptive-statement");
+  }
 
   if (trustedScheduleKind !== undefined && !explicitScheduleEvidence) {
     if (trustedScheduleKind === "none" || trustedScheduleKind === "ambiguous") {

@@ -452,6 +452,26 @@ describe("exact lexical schedule and rejection surfaces", () => {
     expect(result.code).toBe("unsafe-context");
     expect(result.diagnostics[0]?.code).toBe("uncertain-alternative");
   });
+
+  test("rejects a declarative weekday mention without schedule evidence", async () => {
+    const result = await parse("The planning session happens Tuesday.");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("unsafe-context");
+    expect(result.diagnostics[0]?.code).toBe("descriptive-statement");
+  });
+
+  test("keeps explicit recurrence evidence inside a declarative carrier", async () => {
+    const result = await parse("The export runs every day.");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+    });
+  });
 });
 
 describe("confidence bands", () => {
