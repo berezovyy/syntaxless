@@ -11,6 +11,8 @@ describe("actionable correction scoping", () => {
       "Please make it Thursday every week.",
     ],
     ["Not Monday and Wednesday after all; schedule Friday at four.", "schedule Friday at four."],
+    ["Move it from Tuesday at eight to Thursday at eleven.", "schedule Thursday at eleven."],
+    ["Instead of noon, make the daily reminder 2 pm.", "make the daily reminder 2 pm."],
   ])("keeps only the selected replacement in %s", (source, expected) => {
     expect(scopeActionableCorrection(source)).toBe(expected);
   });

@@ -205,3 +205,27 @@ describe("consumed human-v2 behavioral corpus", () => {
     for (const support of familyCounts.values()) expect(support).toBeGreaterThanOrEqual(5);
   });
 });
+
+describe("consumed human-v3 behavioral corpus", () => {
+  test("remains isolated and permanently unavailable as fresh acceptance", async () => {
+    const path = resolveRepo("packages/cron/evaluation/human-v3.jsonl");
+    const records = parseHumanCorpus(await readFile(path, "utf8"));
+
+    expect(records).toHaveLength(100);
+    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
+
+    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
+      checked: true,
+      outsideTrainingData: true,
+      incompatibleWithTrainingSchema: true,
+      absentFromGeneratorSources: true,
+    });
+
+    await expect(
+      assertAcceptanceFresh(
+        "acceptance",
+        "d1b465763fadc87014230da617aa6ee3ef27d17664bce20f48951cc1d1693147",
+      ),
+    ).rejects.toThrow(/already been consumed/);
+  });
+});

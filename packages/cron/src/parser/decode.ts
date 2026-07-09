@@ -264,7 +264,10 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   ].length;
 
   const hasCompetingScheduleValues =
-    weekdayMentions >= 2 || cadenceMentions >= 2 || clockMentions >= 2;
+    weekdayMentions >= 2 ||
+    cadenceMentions >= 2 ||
+    clockMentions >= 2 ||
+    [...text.matchAll(/\b\d{1,2}(?:st|nd|rd|th)\b/g)].length >= 2;
 
   const uncertainAlternative =
     !/\b(?:except|excluding|other than)\b/.test(text) &&
@@ -306,6 +309,12 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
 
   if (metaQuotation) return "quoted-schedule";
 
+  if (
+    /\b(?:copy|explain|translate)\b.*\b(?:phrase|sentence|string|words?)\b.*["'‘’“”]/.test(text)
+  ) {
+    return "quoted-schedule";
+  }
+
   // Explicit schedule-shaped language is common in prose that merely reports
   // a habit, timetable, label, recipe, or third-party event. These surfaces
   // are high-confidence model inputs but do not authorize creating a schedule.
@@ -324,6 +333,18 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       /^(?:he|she|they)\s+(?:arrives?|leaves?|meets?|works?)\b/.test(text));
 
   if (reportedOrHabitual) return "descriptive-statement";
+
+  if (
+    !hasDirectScheduleRequest(text) &&
+    (/^(?:buses?|trains?)\b.*\barrive\b/.test(text) ||
+      /^(?:his|her|their)\b.*\b(?:is due|performs?)\b/.test(text) ||
+      /^my\b.*\bwakes?\b/.test(text) ||
+      /^the\b.*\b(?:has|opens?)\b.*\b(?:printed|every|each|daily|weekly|monthly|hourly)\b/.test(
+        text,
+      ))
+  ) {
+    return "descriptive-statement";
+  }
 
   // A duration describes how long something continued; it is not a cadence.
   // Keep this independent of model labels so a token such as "hours" cannot
@@ -345,6 +366,10 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
 
   if (historical) return "historical-description";
 
+  if (/\b(?:back then|old rota|old schedule|in those days)\b/.test(text)) {
+    return "historical-description";
+  }
+
   const hypothetical =
     scheduleCue.test(text) &&
     ((/^(?:imagine|suppose)\b/.test(text) && /[?]$/.test(text)) ||
@@ -356,12 +381,30 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (
     scheduleCue.test(text) &&
     (/\bunless\b.*\b(?:make more sense|might be better|would be better)\b/.test(text) ||
-      /\b(?:hold off|do not choose yet|still deciding|not decided)\b/.test(text))
+      /\bbetween\b.*\band\b.*\b(?:feels? right|seems? right|undecided)\b/.test(text) ||
+      /\b(?:hold off|do not choose yet|set nothing yet|still deciding|not decided)\b/.test(text) ||
+      (hasCompetingScheduleValues && /\bboth\b.*\bproposals?\b/.test(text)))
   ) {
     return "uncertain-alternative";
   }
 
   if (/\b(?:and|or|from|through)\s*[?.,;:]?$/.test(text) && scheduleCue.test(text)) {
+    return "non-scheduling-language";
+  }
+
+  if (
+    /^(?:on\s+)?(?:mon(?:day)?s?|tue(?:sday)?s?|wed(?:nesday)?s?|thu(?:rsday)?s?|fri(?:day)?s?|sat(?:urday)?s?|sun(?:day)?s?)\s+at\s*[?.,;:]?$/.test(
+      text,
+    )
+  ) {
+    return "non-scheduling-language";
+  }
+
+  if (
+    /^(?:never mind about|do not schedule|don't schedule|withdraw my request|ignore the earlier)\b/.test(
+      text,
+    )
+  ) {
     return "non-scheduling-language";
   }
 
@@ -891,6 +934,14 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
 
   if (unitInterval !== null) {
     const unit = UNIT_ALIASES[unitInterval[1]!];
+
+    if (unit !== undefined) return { unit, interval: 1, valueStart: -1, valueEnd: -1 };
+  }
+
+  const everySingle = /\b(?:every|each)\s+single\s+([a-z]+)\b/.exec(normalized);
+
+  if (everySingle !== null) {
+    const unit = UNIT_ALIASES[everySingle[1]!];
 
     if (unit !== undefined) return { unit, interval: 1, valueStart: -1, valueEnd: -1 };
   }
@@ -1431,7 +1482,7 @@ function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefin
       cueText,
     ) ||
     (hasDirectScheduleRequest(cueText) &&
-      /(?:\bon\b|^(?:mon|tue|wed|thu|fri|sat|sun)\b|\bweekly\b|\b(?:let|make)\s+[a-z]+\s+(?:be|the)\b)/.test(
+      /(?:\bon\b|^(?:mon|tue|wed|thu|fri|sat|sun)\b|\bweekly\b|\b(?:schedule|set)\b|\b(?:let|make)\s+[a-z]+\s+(?:be|the)\b)/.test(
         cueText,
       ));
 
@@ -1447,10 +1498,16 @@ function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefin
 function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined {
   const text = joinEntries(entries);
 
-  if (!hasDirectScheduleRequest(text)) return undefined;
+  if (
+    !hasDirectScheduleRequest(text) &&
+    !/^(?:daily|each\s+day|every\s+day|monthly|weekly)\b/.test(text) &&
+    !/^at\b.*\b(?:daily|each\s+day|every\s+day)\b/.test(text)
+  ) {
+    return undefined;
+  }
 
   const match =
-    /\b(?:at|around)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
+    /\b(?:at|around|reminder(?:\s+for)?)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
       text,
     );
 
@@ -1484,6 +1541,14 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
     resolved = { ...resolved, hour: resolved.hour + 12 };
   }
 
+  if (
+    meridiem === undefined &&
+    resolved.hour === 12 &&
+    /\b(?:in the morning|at night)\b/.test(text)
+  ) {
+    resolved = { ...resolved, hour: 0 };
+  }
+
   if (resolved.hour > 23) throw new RangeError("decodeIntent: invalid explicit numeric time");
 
   return resolved;
@@ -1495,7 +1560,9 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
   const text = joinEntries(entries);
 
   const match =
-    /\b(half|quarter|[a-z]+|\d{1,2})\s+(past|after|to|before)\s+([a-z]+|\d{1,2})\b/.exec(text);
+    /\b(half|quarter|[a-z]+|\d{1,2})(?:\s+minutes?)?\s+(past|after|to|before)\s+([a-z]+|\d{1,2})\b/.exec(
+      text,
+    );
 
   if (match === null) return undefined;
   const minute = MINUTE_IDIOMS[match[1]!] ?? numberFrom(match[1]!);
@@ -1510,7 +1577,7 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
 
   let time = { hour: Math.floor(total / 60), minute: total % 60 };
 
-  if (time.hour < 12 && /\b(?:in the afternoon|in the evening|at night)\b/.test(text)) {
+  if (time.hour < 12 && /\b(?:in the afternoon|in the evening|at night|nightly)\b/.test(text)) {
     time = { ...time, hour: time.hour + 12 };
   }
 
@@ -2012,15 +2079,7 @@ export function decodeIntent(
 
   const dayOfMonthEvidence = explicitDayOfMonth(entries);
 
-  if (
-    dayOfMonth !== undefined &&
-    dayOfMonthEvidence !== undefined &&
-    dayOfMonth !== dayOfMonthEvidence
-  ) {
-    throw new RangeError("decodeIntent: predicted day conflicts with explicit day of month");
-  }
-
-  dayOfMonth ??= dayOfMonthEvidence;
+  if (dayOfMonthEvidence !== undefined) dayOfMonth = dayOfMonthEvidence;
   const daySpecEvidence = explicitDaySpec(entries);
 
   if (daySpecEvidence !== undefined) {

@@ -56,6 +56,10 @@ export function scopeActionableCorrection(text: string): string {
     [/^(use\s+.+?)\s*-\s*ignore\b/i, (match) => match[1]!],
     [/^let me revise that:\s*(.+)$/i, (match) => match[1]!],
     [/^not\b[^;]*;\s*(.+)$/i, (match) => match[1]!],
+    [/^move\b.*\bfrom\b.*?\bto\s+(.+)$/i, (match) => `schedule ${match[1]!}`],
+    [/^the\b[^;]*\bwas wrong;\s*(.+)$/i, (match) => match[1]!],
+    [/^revise that to\s+(.+?),\s*not\b/i, (match) => match[1]!],
+    [/^instead of\b[^,]*,\s*(.+)$/i, (match) => match[1]!],
   ];
 
   for (const [pattern, select] of patterns) {
