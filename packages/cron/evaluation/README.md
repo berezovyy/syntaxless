@@ -23,3 +23,11 @@ bun run --cwd packages/cron/training evaluate:human
 ```
 
 Do not run the `acceptance` partition until the candidate is otherwise frozen.
+
+The acceptance partition in `human-v1.jsonl` was consumed on 2026-09-15 and is
+now development evidence only. Its acceptance-partition hash is recorded in
+`consumed.json`; the evaluator refuses to score those acceptance records even
+if unrelated partitions change or the file is copied. Final promotion requires a newly and independently
+authored corpus with a different hash. After its one permitted acceptance run,
+copy `acceptancePartitionSha256` from the evaluation report into the ledger
+before further development.

@@ -30,6 +30,7 @@ export const MIN_FAMILY_SUPPORT = 5;
 export const MAX_SILENT_MEANING_CHANGE_RATE = 0.005;
 export const MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE = 0.01;
 export const MAX_FAILURES_PER_CATEGORY = 3;
+const ACCEPTANCE_LEDGER = "packages/cron/evaluation/consumed.json";
 
 export type HumanPartition = "development" | "calibration" | "acceptance";
 
@@ -69,6 +70,8 @@ export interface HumanEvaluationReport {
   version: 1;
   artifactSha256: string;
   corpusSha256: string;
+  /** Stable semantic hash recorded in the consumption ledger after first use. */
+  acceptancePartitionSha256: string;
   corpus: string;
   partition: HumanPartition;
   isolation: {
@@ -112,6 +115,39 @@ export interface SequenceEvidenceSummary {
   unconsumedScheduleLikeValues: number;
   semanticConstraintViolations: number;
   compilerInconsistent: number;
+}
+
+interface AcceptanceLedger {
+  version: 1;
+  acceptancePartitionSha256: string[];
+}
+
+/** Refuse to reuse acceptance wording after its first promotion decision. The
+ * ledger is keyed by content rather than path, so copying the file elsewhere
+ * cannot make consumed evidence blind again. */
+export async function assertAcceptanceFresh(
+  partition: HumanPartition,
+  acceptancePartitionSha256: string,
+): Promise<void> {
+  if (partition !== "acceptance") return;
+
+  const ledgerText = await readFile(resolveRepo(ACCEPTANCE_LEDGER), "utf8").catch(() => {
+    throw new Error("acceptance consumption ledger is missing");
+  });
+
+  const ledger = JSON.parse(ledgerText) as AcceptanceLedger;
+
+  if (
+    ledger.version !== 1 ||
+    !Array.isArray(ledger.acceptancePartitionSha256) ||
+    !ledger.acceptancePartitionSha256.every((hash) => /^[a-f0-9]{64}$/.test(hash))
+  ) {
+    throw new Error("acceptance consumption ledger is malformed");
+  }
+
+  if (ledger.acceptancePartitionSha256.includes(acceptancePartitionSha256)) {
+    throw new Error("acceptance corpus has already been consumed");
+  }
 }
 
 type RawEvidence = NonNullable<NonNullable<ReturnType<Engine["decodeRaw"]>>["evidence"]>;
@@ -359,7 +395,17 @@ export async function evaluateHumanCorpus(
 ): Promise<HumanEvaluationReport> {
   const corpus = resolveRepo(options.corpus);
   const contents = await readFile(corpus, "utf8");
+  const corpusSha256 = sha256Hex(contents);
   const allRecords = parseHumanCorpus(contents);
+
+  const acceptancePartitionSha256 = sha256Hex(
+    `${allRecords
+      .filter((record) => record.partition === "acceptance")
+      .map((record) => JSON.stringify(record))
+      .join("\n")}\n`,
+  );
+
+  await assertAcceptanceFresh(options.partition, acceptancePartitionSha256);
   const isolation = await assertHumanIsolation(corpus, allRecords);
   const records = allRecords.filter((item) => item.partition === options.partition);
 
@@ -564,7 +610,8 @@ export async function evaluateHumanCorpus(
   return {
     version: HUMAN_CORPUS_VERSION,
     artifactSha256: engine.artifactSha256,
-    corpusSha256: sha256Hex(contents),
+    corpusSha256,
+    acceptancePartitionSha256,
     corpus,
     partition: options.partition,
     isolation,

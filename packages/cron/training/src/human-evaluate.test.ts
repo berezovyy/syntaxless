@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { resolveRepo } from "./evaluate";
 import { coarseText } from "./fingerprint";
 import {
+  assertAcceptanceFresh,
   assertHumanIsolation,
   parseArgs,
   parseHumanCorpus,
@@ -22,6 +23,24 @@ const valid = {
   intent: { frequency: { unit: "minute", interval: 11 } },
   expected: { supported: true, expression: "*/11 * * * *" },
 } as const;
+
+describe("acceptance consumption ledger", () => {
+  test("blocks a consumed corpus hash even when the file path changes", async () => {
+    await expect(
+      assertAcceptanceFresh(
+        "acceptance",
+        "d6a589e7b626e9689b2341ac19d7668263b53fd67746d6291c743ea0253d2e81",
+      ),
+    ).rejects.toThrow(/already been consumed/);
+  });
+
+  test("does not block development or a genuinely new acceptance hash", async () => {
+    const fresh = "0".repeat(64);
+
+    await expect(assertAcceptanceFresh("development", fresh)).resolves.toBeUndefined();
+    await expect(assertAcceptanceFresh("acceptance", fresh)).resolves.toBeUndefined();
+  });
+});
 
 describe("parseHumanCorpus", () => {
   test("accepts the isolated evaluation schema", () => {
