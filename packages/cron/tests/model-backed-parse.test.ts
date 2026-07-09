@@ -343,6 +343,7 @@ describe("exact lexical schedule and rejection surfaces", () => {
     "If we ran this every minute, would the server cope?",
     "Yesterday I called her at 9pm.",
     "Our project cycle is 3 days old",
+    "The outage lasted six hours.",
   ])("%s is explicitly rejected", async (phrase) => {
     const result = await parse(phrase);
 

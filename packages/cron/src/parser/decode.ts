@@ -301,6 +301,16 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
 
   if (metaQuotation) return "quoted-schedule";
 
+  // A duration describes how long something continued; it is not a cadence.
+  // Keep this independent of model labels so a token such as "hours" cannot
+  // turn an ordinary past or present-tense observation into "every hour".
+  const descriptiveDuration =
+    /\b(?:last(?:s|ed)?|ran|runs?|took|takes?|work(?:s|ed)?)\s+(?:for\s+)?(?:\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:minutes?|hours?|days?|weeks?|months?)\b/.test(
+      text,
+    );
+
+  if (descriptiveDuration) return "historical-description";
+
   const historical =
     scheduleCue.test(text) &&
     /\b(?:arrived|formerly|had|happened|met|occurred|previously|ran|rang|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
