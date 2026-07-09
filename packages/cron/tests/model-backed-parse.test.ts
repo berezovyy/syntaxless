@@ -350,6 +350,108 @@ describe("exact lexical schedule and rejection surfaces", () => {
     if (result.ok) return;
     expect(result).not.toHaveProperty("intent");
   });
+
+  test("preserves question punctuation for discourse-safety classification", async () => {
+    const result = await parse("Does the backup run every day?");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("unsafe-context");
+    expect(result.diagnostics[0]?.code).toBe("informational-question");
+  });
+
+  test("does not reject a question that is an explicit scheduling request", async () => {
+    const result = await parse("Could you schedule this every day?");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+    });
+  });
+
+  test("accepts an indirect polite scheduling question", async () => {
+    const result = await parse("Would it be possible to run this every day?");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+    });
+  });
+
+  test("treats checking an object as the requested action, not a meta question", async () => {
+    const result = await parse("Could you please check the dashboard every hour?");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "hour", interval: 1 },
+    });
+  });
+
+  test("keeps a question about whether a schedule exists informational", async () => {
+    const result = await parse("Could you check whether this runs every hour?");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("unsafe-context");
+    expect(result.diagnostics[0]?.code).toBe("informational-question");
+  });
+
+  test("preserves a skip-style weekday exception", async () => {
+    const result = await parse("Every day, skipping Thursdays.");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+      exceptions: { weekdays: ["thursday"] },
+    });
+  });
+
+  test("preserves a leading adverb recurrence with an omit exception", async () => {
+    const result = await parse("Daily, but omit Fridays.");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+      exceptions: { weekdays: ["friday"] },
+    });
+  });
+
+  test("rejects a correction containing two competing weekday values", async () => {
+    const result = await parse("Wait, make that Wednesday rather than Thursday.");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("unsafe-context");
+    expect(result.diagnostics[0]?.code).toBe("competing-correction");
+  });
+
+  test("rejects a context-dependent correction with one visible schedule", async () => {
+    const result = await parse("No, I meant every Tuesday.");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("unsafe-context");
+    expect(result.diagnostics[0]?.code).toBe("competing-correction");
+  });
+
+  test("rejects an unresolved weekday alternative", async () => {
+    const result = await parse("Run this on Monday or Saturday.");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("unsafe-context");
+    expect(result.diagnostics[0]?.code).toBe("uncertain-alternative");
+  });
 });
 
 describe("confidence bands", () => {

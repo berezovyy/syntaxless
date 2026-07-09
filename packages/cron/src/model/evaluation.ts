@@ -36,7 +36,9 @@ export function decodeRaw(text: string) {
       role: predictions.labels[index]!,
       boundary: predictions.boundaries[index]! === 1,
       score: predictions.scores[index]!,
+      boundaryScore: predictions.boundaryScores[index]!,
     })),
     scheduleKind,
+    text,
   );
 }

@@ -1,3 +1,4 @@
+import { compile } from "../compiler/cron.js";
 import {
   validateDayOfMonth,
   validateInterval,
@@ -58,6 +59,8 @@ export interface LabeledToken {
   role: number;
   boundary: boolean;
   score: number;
+  /** Optional for oracle callers; runtime inference always supplies it. */
+  boundaryScore?: number;
 }
 
 /** A validated intent plus the weakest margin among its content tokens. */
@@ -70,12 +73,16 @@ export interface DecodedIntent {
 
 export interface SequenceConfidenceEvidence {
   tokenMargin: number;
+  boundaryMargin: number;
   scheduleKind?: ScheduleKind;
   scheduleKindMargin?: number;
   scheduleKindAgreement: boolean;
   explicitScheduleEvidence: boolean;
   /** Present only when deterministic language evidence was reconciled. */
   lexiconAgreement?: boolean;
+  unconsumedScheduleLikeValues: number;
+  semanticConstraintViolations: number;
+  compilerConsistent: boolean;
 }
 
 export interface ScheduleKindEvidence {
@@ -93,11 +100,31 @@ export class UnknownRoleError extends Error {
   }
 }
 
+export type UnsafeScheduleContextReason =
+  | "informational-question"
+  | "uncertain-alternative"
+  | "competing-correction"
+  | "quoted-schedule"
+  | "historical-description"
+  | "multiple-schedules"
+  | "non-scheduling-language";
+
+/** A syntactically schedule-like phrase used in a non-command discourse role. */
+export class UnsafeScheduleContextError extends RangeError {
+  readonly contextReason: UnsafeScheduleContextReason;
+  constructor(contextReason: UnsafeScheduleContextReason) {
+    super(`decodeIntent: unsafe schedule context: ${contextReason}`);
+    this.name = "UnsafeScheduleContextError";
+    this.contextReason = contextReason;
+  }
+}
+
 interface Entry {
   token: RawToken;
   label: Label;
   boundary: boolean;
   score: number;
+  boundaryScore: number;
 }
 
 interface Group {
@@ -124,64 +151,189 @@ interface ClauseFacts {
 function exactEvidence(): SequenceConfidenceEvidence {
   return {
     tokenMargin: 1,
+    boundaryMargin: 1,
     scheduleKindAgreement: true,
     explicitScheduleEvidence: true,
     lexiconAgreement: true,
+    unconsumedScheduleLikeValues: 0,
+    semanticConstraintViolations: 0,
+    compilerConsistent: true,
   };
 }
 
-function explicitlyNonScheduling(text: string): boolean {
-  const requestQuestion =
-    /^(?:can|could|would|will)\s+you\b.*\b(?:remind|schedule|set|run|send|make|have|trigger|notify|ping)\b/.test(
+function countUnconsumedScheduleLikeValues(text: string, intent: ScheduleIntent): number {
+  const representedWeekdays = new Set<Weekday>([
+    ...(intent.weekdays ?? []),
+    ...(intent.ordinalWeekday === undefined ? [] : [intent.ordinalWeekday.weekday]),
+    ...(intent.exceptions?.weekdays ?? []),
+  ]);
+
+  let unconsumed = 0;
+
+  const weekdaySurfaces = new Map<string, Weekday>([
+    ...Object.entries(WEEKDAY_ALIASES),
+    ...Object.entries(WEEKDAY_PLURAL_ALIASES),
+  ] as Array<[string, Weekday]>);
+
+  for (const match of text.matchAll(/\b[\p{L}_]+\b/gu)) {
+    const weekday = weekdaySurfaces.get(match[0]);
+
+    if (weekday !== undefined && !representedWeekdays.has(weekday)) unconsumed++;
+  }
+
+  const representedDates = new Set<string>([
+    ...(intent.bounds?.start === undefined ? [] : [intent.bounds.start]),
+    ...(intent.bounds?.end === undefined ? [] : [intent.bounds.end]),
+    ...(intent.exceptions?.dates ?? []),
+  ]);
+
+  for (const match of text.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) {
+    if (!representedDates.has(match[0])) unconsumed++;
+  }
+
+  const clockMentions = [
+    ...text.matchAll(
+      /\b(?:at|around)\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|noon|midnight|half\s+past\s+[a-z]+|quarter\s+(?:past|to)\s+[a-z]+)\b/g,
+    ),
+  ].length;
+
+  if (clockMentions > 1) unconsumed += clockMentions - 1;
+
+  return unconsumed;
+}
+
+function compilerConsistent(intent: ScheduleIntent): boolean {
+  const result = compile(intent);
+
+  if (result.supported) return true;
+
+  return ["non-unit-interval", "ordinal-weekday", "day-spec", "bounds", "exceptions"].includes(
+    result.code,
+  );
+}
+
+function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null {
+  // The ordinary parser normalization deliberately removes sentence-final
+  // punctuation. Keep a separate, lightweight normalization here because a
+  // question mark is strong discourse evidence and must not disappear before
+  // safety classification.
+  text = text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const scheduleCue =
+    /\b(?:at\s+(?:\d{1,2}|noon|midnight)|daily|each|every|hourly|minutes?|hours?|days?|weeks?|months?|monthly|once\s+(?:a|per)|weekly|weekdays?|weekends?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/;
+
+  const requestQuestionPrefix = /\b(?:can|could|would|will)\s+you\b/.test(text);
+
+  const metaQuestion =
+    /\b(?:can|could|would|will)\s+you\b.*\b(?:describe|explain|know|remember|say|tell)\b/.test(
+      text,
+    ) || /\b(?:can|could|would|will)\s+you\b.*\b(?:check|confirm)\s+(?:if|whether)\b/.test(text);
+
+  const politeRequestQuestion =
+    /\b(?:can|could|may)\s+i\s+(?:ask|book|get|have|request|set)\b/.test(text) ||
+    /\b(?:could|would)\s+(?:it be possible to|you mind)\b/.test(text) ||
+    /\b(?:do you think you could|is it possible (?:for you )?to|would it be (?:okay|ok) (?:for you )?to)\b/.test(
       text,
     );
 
-  const informationalQuestion =
-    /\?$/.test(text) &&
-    !requestQuestion &&
-    /^(?:am|are|can|could|did|do|does|how|is|should|was|were|what|when|where|which|who|why|will|would)\b/.test(
-      text,
-    );
+  const requestQuestion =
+    (requestQuestionPrefix || politeRequestQuestion) && scheduleCue.test(text) && !metaQuestion;
+
+  if (/\?$/.test(text) && !requestQuestion) return "informational-question";
+
+  const weekdayMentions = [
+    ...text.matchAll(
+      /\b(?:mon(?:day)?s?|tue(?:s|sday)?s?|wed(?:nesday)?s?|thu(?:r|rs|rsday)?s?|fri(?:day)?s?|sat(?:urday)?s?|sun(?:day)?s?)\b/g,
+    ),
+  ].length;
+
+  const cadenceMentions = [...text.matchAll(/\b(?:daily|hourly|monthly|weekly)\b/g)].length;
+
+  const clockMentions = [
+    ...text.matchAll(/\b(?:at\s+)?(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)|noon|midnight)\b/g),
+  ].length;
+
+  const hasCompetingScheduleValues =
+    weekdayMentions >= 2 || cadenceMentions >= 2 || clockMentions >= 2;
 
   const uncertainAlternative =
-    /\b(?:maybe|perhaps|possibly|unsure|not sure)\b.*\b(?:or|whether)\b/.test(text) ||
-    /\beither\b.*\bor\b/.test(text);
+    (/\b(?:maybe|might|perhaps|possibly|probably|unsure|not sure|undecided)\b/.test(text) &&
+      scheduleCue.test(text)) ||
+    /\beither\b.*\bor\b/.test(text) ||
+    /\b(?:whether|between)\b.*\bor\b/.test(text) ||
+    (/\bor\b/.test(text) && hasCompetingScheduleValues);
+
+  if (uncertainAlternative) return "uncertain-alternative";
 
   const competingCorrection =
     /\b(?:not|instead of)\b.*\b(?:but|rather|instead)\b/.test(text) ||
-    /\b(?:change|move|switch)\b.*\bfrom\b.*\bto\b/.test(text);
+    /\b(?:change|move|switch)\b.*\bfrom\b.*\bto\b/.test(text) ||
+    (scheduleCue.test(text) &&
+      (/^(?:no|wait)[,:]?\s+/.test(text) ||
+        /\b(?:cancel|correcting|correction|disregard|forget|ignore|mistake|scratch|withdraw|wrong)\b/.test(
+          text,
+        ) ||
+        /\b(?:i (?:meant|said)|not what i (?:asked|meant|said))\b/.test(text))) ||
+    (hasCompetingScheduleValues &&
+      /\b(?:actually|correction|i meant|instead|make that|rather than|wait)\b/.test(text)) ||
+    /\b(?:disregard|forget|ignore|scratch|withdraw)\b.*\b(?:date|day|hour|reminder|schedule|time|weekday|weekend)\b/.test(
+      text,
+    );
+
+  if (competingCorrection) return "competing-correction";
+
+  const quotedSchedule =
+    /["'‘’“”][^"'‘’“”]*\b(?:at|daily|each|every|hourly|monthly|weekly)\b[^"'‘’“”]*["'‘’“”]/.test(
+      text,
+    );
 
   const metaQuotation =
-    /\b(?:article|documentation|docs?|example|message|phrase|sample|sentence|text|tutorial)\b.*\b(?:contains?|mentions?|reads?|says?|shows?|uses?|wrote)\b.*["'‘’“”].*\b(?:at|daily|each|every|hourly|monthly|weekly)\b/.test(
+    quotedSchedule &&
+    /\b(?:article|documentation|docs?|example|guide|handbook|manual|message|phrase|sample|sentence|text|tooltip|tutorial|quote|quoted|wrote|contains?|mentions?|reads?|says?|shows?|uses?)\b/.test(
       text,
     );
+
+  if (metaQuotation) return "quoted-schedule";
 
   const historical =
-    /\b(?:formerly|previously|yesterday|used to)\b/.test(text) ||
-    /\b(?:happened|occurred|ran|was scheduled|were scheduled)\b.*\b(?:at|daily|each|every|hourly|monthly|weekly)\b/.test(
+    scheduleCue.test(text) &&
+    /\b(?:arrived|formerly|had|happened|met|occurred|previously|ran|rang|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
       text,
     );
 
-  return (
-    informationalQuestion ||
-    uncertainAlternative ||
-    competingCorrection ||
-    metaQuotation ||
-    historical
-  );
+  if (historical) return "historical-description";
+
+  const recurrenceCues = [...text.matchAll(/\b(?:daily|each|every|hourly|monthly|weekly)\b/g)]
+    .length;
+
+  if (
+    recurrenceCues > 1 &&
+    /\b(?:another|both|candidate|compare|option|or|proposal|versus)\b/.test(text)
+  ) {
+    return "multiple-schedules";
+  }
+
+  return null;
 }
 
 /** Exact, context-free surfaces whose meaning is completely determined by the
  * shared lexicon. Keeping these in the decoder makes short inputs robust to a
  * sparse-hash collision without treating a weekday mentioned in prose as a
  * schedule. Longer conversational inputs still go through the tagger. */
-function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
+function exactLexicalIntent(entries: readonly Entry[], sourceText?: string): DecodedIntent | null {
   const text = joinEntries(entries);
+  const unsafeContext = unsafeScheduleContext(sourceText ?? text);
+
+  if (unsafeContext !== null) throw new UnsafeScheduleContextError(unsafeContext);
 
   // Explicit corrections, cancellations, questions, and hedged alternatives
   // are not schedules even when they contain otherwise valid schedule words.
   if (
-    explicitlyNonScheduling(text) ||
     /\b(?:do not|don't|did not|didn't)\s+mean\b/.test(text) ||
     /^(?:no,?\s+not\b|actually,?\s+never mind\b)/.test(text) ||
     /^maybe\b.*\bor\b/.test(text) ||
@@ -207,7 +359,7 @@ function exactLexicalIntent(entries: readonly Entry[]): DecodedIntent | null {
     /\b(?:except|excluding|through|from|of)$/.test(text) ||
     /\b(?:at half past|monthly on the)$/.test(text)
   ) {
-    throw new RangeError("decodeIntent: explicitly non-scheduling input");
+    throw new UnsafeScheduleContextError("non-scheduling-language");
   }
 
   const weekdaySurface = text.replace(/^(?:every|each|on)\s+/, "");
@@ -610,6 +762,25 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
 
   if (directiveAdverb !== null) {
     const unit = ADVERB_FREQUENCIES[directiveAdverb[1]!];
+
+    if (unit !== undefined) {
+      return {
+        unit,
+        interval: 1,
+        valueStart: -1,
+        valueEnd: -1,
+        contextual: true,
+      };
+    }
+  }
+
+  const constrainedAdverb =
+    /^(daily|hourly|weekly)\b.*\b(?:apart from|but not(?: on)?|except(?: on)?|excluding|omit(?:ting)?|skip(?:ping)?)\b/.exec(
+      normalized,
+    );
+
+  if (constrainedAdverb !== null) {
+    const unit = ADVERB_FREQUENCIES[constrainedAdverb[1]!];
 
     if (unit !== undefined) {
       return {
@@ -1480,6 +1651,7 @@ function resolveTime(
 export function decodeIntent(
   labeled: readonly LabeledToken[],
   scheduleKind?: ScheduleKindEvidence,
+  sourceText?: string,
 ): DecodedIntent {
   const entries: Entry[] = [];
 
@@ -1495,12 +1667,13 @@ export function decodeIntent(
       label: labelFromId(item.role),
       boundary: item.boundary,
       score: item.score,
+      boundaryScore: item.boundaryScore ?? 1,
     });
   }
 
   if (entries.length === 0) throw new RangeError("decodeIntent: no tokens");
 
-  const lexical = exactLexicalIntent(entries);
+  const lexical = exactLexicalIntent(entries, sourceText);
 
   if (lexical !== null) return lexical;
 
@@ -1823,10 +1996,12 @@ export function decodeIntent(
   if (failure !== null) throw new RangeError(failure.reason);
 
   let tokenMargin = 1;
+  let boundaryMargin = 1;
 
   for (const entry of entries) {
     if (entry.label === "O" || isStructural(entry.label)) continue;
     tokenMargin = Math.min(tokenMargin, entry.score);
+    boundaryMargin = Math.min(boundaryMargin, entry.boundaryScore);
   }
 
   // Preserve the established public behavior while exposing the individual
@@ -1838,6 +2013,7 @@ export function decodeIntent(
 
   const evidence: SequenceConfidenceEvidence = {
     tokenMargin,
+    boundaryMargin,
     ...(scheduleKind === undefined
       ? {}
       : {
@@ -1847,6 +2023,9 @@ export function decodeIntent(
     scheduleKindAgreement: globalKindConsistent,
     explicitScheduleEvidence,
     ...(explicitScheduleEvidence ? { lexiconAgreement: true } : {}),
+    unconsumedScheduleLikeValues: countUnconsumedScheduleLikeValues(text, intent),
+    semanticConstraintViolations: 0,
+    compilerConsistent: compilerConsistent(intent),
   };
 
   return { intent, confidence, evidence };

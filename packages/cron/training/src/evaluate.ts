@@ -235,7 +235,22 @@ interface DistLabels {
 
 interface DistEvaluation extends DistTokenizer, DistInference, DistLabels {
   weights: WeightsArtifact;
-  decodeRaw: (text: string) => { intent: ScheduleIntent; confidence: number };
+  decodeRaw: (text: string) => {
+    intent: ScheduleIntent;
+    confidence: number;
+    evidence?: {
+      tokenMargin: number;
+      boundaryMargin: number;
+      scheduleKind?: string;
+      scheduleKindMargin?: number;
+      scheduleKindAgreement: boolean;
+      explicitScheduleEvidence: boolean;
+      lexiconAgreement?: boolean;
+      unconsumedScheduleLikeValues: number;
+      semanticConstraintViolations: number;
+      compilerConsistent: boolean;
+    };
+  };
 }
 
 /** A decoded runtime plus the provenance of the artifact it runs. */

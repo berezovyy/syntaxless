@@ -21,7 +21,7 @@ import {
   riskCoverage,
   sha256Hex,
 } from "./evaluate";
-import type { RiskCoveragePoint, SelectiveOutcome } from "./evaluate";
+import type { Engine, RiskCoveragePoint, SelectiveOutcome } from "./evaluate";
 
 export const HUMAN_CORPUS_VERSION = 1;
 export const MIN_OVERALL_ACCURACY = 0.95;
@@ -93,11 +93,101 @@ export interface HumanEvaluationReport {
   selectivePrediction: RiskCoveragePoint[];
   rawSelectivePrediction: RiskCoveragePoint[];
   calibrationThreshold: RiskCoveragePoint | null;
+  sequenceEvidence: Record<string, SequenceEvidenceSummary>;
   promotion: {
     eligible: boolean;
     passed: boolean;
     failures: string[];
   };
+}
+
+export interface SequenceEvidenceSummary {
+  count: number;
+  tokenMargin: { min: number; mean: number; max: number } | null;
+  boundaryMargin: { min: number; mean: number; max: number } | null;
+  scheduleKindMargin: { min: number; mean: number; max: number } | null;
+  scheduleKindAgreementRate: number;
+  explicitScheduleEvidenceRate: number;
+  lexiconAgreementRate: number | null;
+  unconsumedScheduleLikeValues: number;
+  semanticConstraintViolations: number;
+  compilerInconsistent: number;
+}
+
+type RawEvidence = NonNullable<NonNullable<ReturnType<Engine["decodeRaw"]>>["evidence"]>;
+
+function numericSummary(values: readonly number[]) {
+  if (values.length === 0) return null;
+
+  return {
+    min: Math.min(...values),
+    mean: values.reduce((sum, value) => sum + value, 0) / values.length,
+    max: Math.max(...values),
+  };
+}
+
+function sumEvidence(
+  values: readonly { evidence: RawEvidence }[],
+  select: (evidence: RawEvidence) => number,
+): number {
+  let total = 0;
+
+  for (const entry of values) total += select(entry.evidence);
+
+  return total;
+}
+
+function summarizeEvidence(
+  entries: readonly { evidence: RawEvidence; correct: boolean; negative: boolean }[],
+): Record<string, SequenceEvidenceSummary> {
+  const groups = {
+    all: entries,
+    correct: entries.filter((entry) => entry.correct),
+    incorrect: entries.filter((entry) => !entry.correct),
+    positive: entries.filter((entry) => !entry.negative),
+    negative: entries.filter((entry) => entry.negative),
+  };
+
+  return Object.fromEntries(
+    Object.entries(groups).map(([name, values]) => {
+      const lexicon = values.filter((entry) => entry.evidence.lexiconAgreement !== undefined);
+
+      return [
+        name,
+        {
+          count: values.length,
+          tokenMargin: numericSummary(values.map((entry) => entry.evidence.tokenMargin)),
+          boundaryMargin: numericSummary(values.map((entry) => entry.evidence.boundaryMargin)),
+          scheduleKindMargin: numericSummary(
+            values.flatMap((entry) =>
+              entry.evidence.scheduleKindMargin === undefined
+                ? []
+                : [entry.evidence.scheduleKindMargin],
+            ),
+          ),
+          scheduleKindAgreementRate:
+            values.filter((entry) => entry.evidence.scheduleKindAgreement).length /
+            Math.max(values.length, 1),
+          explicitScheduleEvidenceRate:
+            values.filter((entry) => entry.evidence.explicitScheduleEvidence).length /
+            Math.max(values.length, 1),
+          lexiconAgreementRate:
+            lexicon.length === 0
+              ? null
+              : lexicon.filter((entry) => entry.evidence.lexiconAgreement).length / lexicon.length,
+          unconsumedScheduleLikeValues: sumEvidence(
+            values,
+            (evidence) => evidence.unconsumedScheduleLikeValues,
+          ),
+          semanticConstraintViolations: sumEvidence(
+            values,
+            (evidence) => evidence.semanticConstraintViolations,
+          ),
+          compilerInconsistent: values.filter((entry) => !entry.evidence.compilerConsistent).length,
+        },
+      ];
+    }),
+  );
 }
 
 const GENERATOR_SOURCES = [
@@ -289,6 +379,12 @@ export async function evaluateHumanCorpus(
   const selectiveOutcomes: SelectiveOutcome[] = [];
   const rawSelectiveOutcomes: SelectiveOutcome[] = [];
 
+  const rawEvidence: Array<{
+    evidence: RawEvidence;
+    correct: boolean;
+    negative: boolean;
+  }> = [];
+
   try {
     // Lint every partition's gold contract without parsing reserved acceptance
     // wording. This catches fixture mistakes while keeping acceptance inputs
@@ -386,6 +482,14 @@ export async function evaluateHumanCorpus(
         negative: item.intent === null,
       });
 
+      if (raw?.evidence !== undefined) {
+        rawEvidence.push({
+          evidence: raw.evidence,
+          correct: rawCorrect,
+          negative: item.intent === null,
+        });
+      }
+
       addCount(byFamily, item.family, correct);
       for (const capability of item.capabilities) addCount(byCapability, capability, correct);
 
@@ -480,6 +584,7 @@ export async function evaluateHumanCorpus(
     selectivePrediction,
     rawSelectivePrediction,
     calibrationThreshold,
+    sequenceEvidence: summarizeEvidence(rawEvidence),
     promotion: {
       eligible,
       passed: eligible && promotionFailures.length === 0,

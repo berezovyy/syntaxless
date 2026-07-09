@@ -20,7 +20,7 @@ import type { ScheduleKind } from "../model/schedule-kinds.js";
 import { tokenize } from "../model/tokenizer.js";
 import type { RawToken } from "../model/tokenizer.js";
 import { classifyConfidence } from "./confidence.js";
-import { decodeIntent, UnknownRoleError } from "./decode.js";
+import { decodeIntent, UnknownRoleError, UnsafeScheduleContextError } from "./decode.js";
 import type { LabeledToken } from "./decode.js";
 import { normalize } from "./normalize.js";
 import type { Diagnostic, ParseResult } from "./parse.js";
@@ -46,6 +46,7 @@ export function labelTokensFromPredictions(
     role: predictions.labels[index]!,
     boundary: predictions.boundaries[index]! === 1,
     score: predictions.scores[index]!,
+    boundaryScore: predictions.boundaryScores[index]!,
   }));
 }
 
@@ -57,12 +58,30 @@ export function labelTokensFromPredictions(
 export function resultFromLabeledTokens(
   labeled: readonly LabeledToken[],
   scheduleKind?: { kind: ScheduleKind; score: number },
+  sourceText?: string,
 ): ParseResult {
   let decoded;
 
   try {
-    decoded = decodeIntent(labeled, scheduleKind);
+    decoded = decodeIntent(labeled, scheduleKind, sourceText);
   } catch (error) {
+    if (error instanceof UnsafeScheduleContextError) {
+      return {
+        ok: false,
+        reason: error.message,
+        code: "unsafe-context",
+        confidence: 0,
+        diagnostics: [
+          {
+            code: error.contextReason,
+            severity: "warning",
+            message: error.message,
+          },
+        ],
+        source: "model",
+      };
+    }
+
     if (error instanceof UnknownRoleError) {
       return {
         ok: false,
@@ -160,5 +179,9 @@ export async function parseWithModel(
           score: predictions.scheduleKindScore,
         };
 
-  return resultFromLabeledTokens(labelTokensFromPredictions(tokens, predictions), scheduleKind);
+  return resultFromLabeledTokens(
+    labelTokensFromPredictions(tokens, predictions),
+    scheduleKind,
+    text,
+  );
 }

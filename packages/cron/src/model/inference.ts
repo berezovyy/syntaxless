@@ -90,6 +90,8 @@ export interface Predictions {
   labels: Uint8Array;
   boundaries: Uint8Array;
   scores: Float32Array;
+  /** Distance from the calibrated boundary decision in `[0, 1]`. */
+  boundaryScores: Float32Array;
   logits?: Float32Array;
   boundaryLogits?: Float32Array;
   scheduleKind?: number;
@@ -365,6 +367,7 @@ export function inferRows(
   const scores = new Float32Array(width);
   const logits = new Float32Array(width * ROLE_CLASSES);
   const boundaryLogits = new Float32Array(width);
+  const boundaryScores = new Float32Array(width);
 
   for (let token = 0; token < width; token++) {
     let best = -Infinity;
@@ -399,6 +402,7 @@ export function inferRows(
 
     boundaryLogits[token] = boundary;
     boundaries[token] = Number(boundary >= BOUNDARY_THRESHOLD);
+    boundaryScores[token] = 1 - Math.exp(-Math.abs(boundary - BOUNDARY_THRESHOLD));
 
     let total = 0;
 
@@ -454,6 +458,7 @@ export function inferRows(
     labels,
     boundaries,
     scores,
+    boundaryScores,
     ...(scheduleKind === undefined || scheduleKindScore === undefined
       ? {}
       : { scheduleKind, scheduleKindScore }),

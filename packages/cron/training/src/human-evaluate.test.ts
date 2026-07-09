@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 
+import { resolveRepo } from "./evaluate";
 import { coarseText } from "./fingerprint";
 import {
   assertHumanIsolation,
@@ -52,7 +52,7 @@ describe("assertHumanIsolation", () => {
     const records = parseHumanCorpus(`${JSON.stringify(valid)}\n`);
 
     await expect(
-      assertHumanIsolation(resolve("packages/cron/training/data/human.jsonl"), records),
+      assertHumanIsolation(resolveRepo("packages/cron/training/data/human.jsonl"), records),
     ).rejects.toThrow(/outside training\/data/);
   });
 });
@@ -104,7 +104,7 @@ describe("human evaluation CLI", () => {
 
 describe("committed human-v1 corpus", () => {
   test("keeps partitions disjoint, supported, and generator-isolated", async () => {
-    const path = resolve("packages/cron/evaluation/human-v1.jsonl");
+    const path = resolveRepo("packages/cron/evaluation/human-v1.jsonl");
     const records = parseHumanCorpus(await readFile(path, "utf8"));
 
     await expect(assertHumanIsolation(path, records)).resolves.toEqual({

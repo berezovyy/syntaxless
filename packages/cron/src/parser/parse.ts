@@ -26,6 +26,7 @@ export type ParseFailureCode =
   | "unrecognized-interval"
   | "conflicting-selectors"
   | "low-confidence"
+  | "unsafe-context"
   | "model-error";
 
 /** Which understanding step produced a {@link ParseResult}. */
