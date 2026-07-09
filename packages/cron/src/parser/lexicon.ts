@@ -551,10 +551,12 @@ export const MONTH_ABBREVIATIONS: readonly string[] = [
 
 export const DAY_RULES = {
   "last day": "last_day_of_month",
+  "very last day": "last_day_of_month",
   "final day": "last_day_of_month",
   "last calendar day": "last_day_of_month",
   "last business day": "last_business_day",
   "final business day": "last_business_day",
+  "final working day": "last_business_day",
 } as const;
 
 export const BOUND_ALIASES: Readonly<
@@ -627,6 +629,8 @@ export const EXCEPTION_PREFIXES = [
   "but not on",
   "other than",
   "apart from",
+  "although not on",
+  "unless the day is",
 ] as const;
 
 export const START_BOUND_PREFIXES = [

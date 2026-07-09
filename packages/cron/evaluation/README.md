@@ -31,3 +31,17 @@ if unrelated partitions change or the file is copied. Final promotion requires a
 authored corpus with a different hash. After its one permitted acceptance run,
 copy `acceptancePartitionSha256` from the evaluation report into the ledger
 before further development.
+
+`human-v2.jsonl` was authored by the coding agent at the user's explicit
+request, rather than by an independent human, and was consumed on 2026-09-15.
+It is a broad 150-example behavioral set, but it is not independent evidence.
+Its acceptance hash is also recorded in `consumed.json`, so it can now be used
+only as development diagnostics and never as a fresh promotion gate.
+The one valid frozen-candidate run scored 96/150 (64.0%), with 29 silent
+meaning changes and 15 false accepts. After those failures were used for
+decoder development, the same set reached 150/150; that later score is a
+regression result, not promotion evidence.
+After consumption, one gold-label typo (`half past three` had been labeled as
+15:30 rather than 03:30) was corrected. Both the originally evaluated hash and
+the corrected fixture hash are consumed; the correction cannot create a fresh
+acceptance set.

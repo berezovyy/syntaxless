@@ -169,3 +169,39 @@ describe("committed human-v1 corpus", () => {
     }
   });
 });
+
+describe("consumed human-v2 behavioral corpus", () => {
+  test("remains isolated, broad, and permanently unavailable as fresh acceptance", async () => {
+    const path = resolveRepo("packages/cron/evaluation/human-v2.jsonl");
+    const records = parseHumanCorpus(await readFile(path, "utf8"));
+
+    expect(records).toHaveLength(150);
+    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
+
+    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
+      checked: true,
+      outsideTrainingData: true,
+      incompatibleWithTrainingSchema: true,
+      absentFromGeneratorSources: true,
+    });
+
+    await expect(
+      assertAcceptanceFresh(
+        "acceptance",
+        "fcd9d449595b380299f773629b595fd190d5c87d436af2817e4da81f5dd0a3c8",
+      ),
+    ).rejects.toThrow(/already been consumed/);
+
+    const fingerprints = new Set(records.map((record) => coarseText(record.text)));
+
+    expect(fingerprints.size).toBe(records.length);
+    const familyCounts = new Map<string, number>();
+
+    for (const record of records) {
+      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
+    }
+
+    expect(familyCounts.size).toBeGreaterThanOrEqual(15);
+    for (const support of familyCounts.values()) expect(support).toBeGreaterThanOrEqual(5);
+  });
+});

@@ -33,6 +33,41 @@ export interface ModelParserOptions {
 }
 
 /**
+ * Reduce an explicit replacement correction to the clause the user actually
+ * selected. The patterns require both a correction marker and an actionable
+ * replacement; cancellations and unresolved alternatives remain untouched and
+ * are rejected later by the discourse-safety decoder.
+ */
+export function scopeActionableCorrection(text: string): string {
+  const value = text
+    .normalize("NFKC")
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const patterns: Array<[RegExp, (match: RegExpExecArray) => string]> = [
+    [/^actually,?\s+make that\s+(.+?),\s+not\b/i, (match) => match[1]!],
+    [/^(?:sorry,?\s+)?i meant\s+(.+?)\s+rather than\b/i, (match) => match[1]!],
+    [/^change\b[^:]*:\s*(.+?),\s*not\b/i, (match) => match[1]!],
+    [/^no,?\s+use\s+(.+?)\s+instead of\b/i, (match) => `use ${match[1]!}`],
+    [/^correction[-:]\s*(.+?),\s*not\b/i, (match) => match[1]!],
+    [/^forget\b[^;]*;\s*(.+)$/i, (match) => match[1]!],
+    [/^i said\b.*?\bby mistake\.\s*(.+)$/i, (match) => match[1]!],
+    [/^(use\s+.+?)\s*-\s*ignore\b/i, (match) => match[1]!],
+    [/^let me revise that:\s*(.+)$/i, (match) => match[1]!],
+    [/^not\b[^;]*;\s*(.+)$/i, (match) => match[1]!],
+  ];
+
+  for (const [pattern, select] of patterns) {
+    const match = pattern.exec(value);
+
+    if (match !== null) return select(match).trim();
+  }
+
+  return text;
+}
+
+/**
  * Build the decoder's input from tokens and one forward pass. Pure: the
  * predictions are supplied by the caller, so this module never imports the
  * inference engine.
@@ -151,7 +186,8 @@ export async function parseWithModel(
   text: string,
   options?: ModelParserOptions,
 ): Promise<ParseResult> {
-  const normalized = normalize(text);
+  const scopedText = scopeActionableCorrection(text);
+  const normalized = normalize(scopedText);
 
   if (normalized.length === 0) {
     return {
@@ -182,6 +218,6 @@ export async function parseWithModel(
   return resultFromLabeledTokens(
     labelTokensFromPredictions(tokens, predictions),
     scheduleKind,
-    text,
+    scopedText,
   );
 }
