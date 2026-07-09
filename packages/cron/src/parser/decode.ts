@@ -344,14 +344,7 @@ function unrequestedDeclarativeContext(text: string): boolean {
     .replace(/\s+/g, " ")
     .trim();
 
-  const directRequest =
-    /^(?:actually[,:]?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:add|arrange|book|configure|create|enable|have|make|notify|ping|remind|repeat|run|schedule|send|set|start|trigger)\b/.test(
-      text,
-    ) ||
-    /^(?:i(?:'d| would) like|i need|i want|let's)\b/.test(text) ||
-    /\b(?:can|could|may|will|would)\s+(?:i|you)\b/.test(text);
-
-  if (directRequest) return false;
+  if (hasDirectScheduleRequest(text)) return false;
 
   const bareSchedule =
     /^(?:at\b|daily\b|each\b|every\b|hourly\b|monthly\b|once\b|on\b|starting\b|until\b|weekly\b|weekdays?\b|weekends?\b|\d{1,2}(?:st|nd|rd|th)\b)/.test(
@@ -362,6 +355,19 @@ function unrequestedDeclarativeContext(text: string): boolean {
 
   return /\b(?:am|are|arrives?|calls?|closes?|ends?|happens?|is|leaves?|meets?|occurs?|opens?|runs?|starts?|takes?|was|were|works?)\b/.test(
     text,
+  );
+}
+
+/** Command/request evidence used only to decide whether an otherwise explicit
+ * schedule surface belongs to the user request. This does not create any
+ * schedule values by itself. */
+function hasDirectScheduleRequest(text: string): boolean {
+  return (
+    /(?:^|,\s*)(?:actually[,:]?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:add|arrange|book|configure|create|enable|have|make|notify|ping|remind|repeat|run|schedule|send|set|start|trigger)\b/.test(
+      text,
+    ) ||
+    /\b(?:i(?:'d| would) like|i(?:\s+still)?\s+(?:need|want)|let's)\b/.test(text) ||
+    /\b(?:can|could|may|will|would)\s+(?:i|you)\b/.test(text)
   );
 }
 
@@ -813,7 +819,7 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
         interval: 1,
         valueStart: -1,
         valueEnd: -1,
-        contextual: true,
+        ...(hasDirectScheduleRequest(normalized) ? {} : { contextual: true }),
       };
     }
   }
@@ -1273,17 +1279,43 @@ function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefin
     2,
   );
 
-  if (
-    !/\b(?:every|each|weekly\s+on|every\s+week\s+on|each\s+week\s+on|day\s+(?:are|is))\b/.test(
+  const selectorCue =
+    /\b(?:every|each|weekly\s+on|every\s+week\s+on|each\s+week\s+on|day\s+(?:are|is))\b/.test(
       cueText,
-    )
-  ) {
-    return undefined;
-  }
+    ) ||
+    (hasDirectScheduleRequest(cueText) && /(?:^on\b|\bweekly\b)/.test(cueText));
 
+  if (!selectorCue) return undefined;
   const weekdays = weekdaysIn(text, true);
 
   return weekdays.length === 0 ? undefined : weekdays;
+}
+
+/** Preserve a numeric or number-word clock only when the surrounding utterance
+ * is explicitly a request. The request requirement prevents an ordinary
+ * observation such as "the train arrived at 06:45" from becoming a schedule. */
+function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined {
+  const text = joinEntries(entries);
+
+  if (!hasDirectScheduleRequest(text)) return undefined;
+  const match = /\b(?:at|around)\s+([a-z]+|\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(text);
+
+  if (match === null) return undefined;
+  const hour = /^\d+$/.test(match[1]!) ? Number(match[1]) : numberFrom(match[1]!);
+
+  if (hour === undefined) return undefined;
+  const minute = match[2] === undefined ? 0 : Number(match[2]);
+  const meridiem = match[3] as "am" | "pm" | undefined;
+
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute > 59) {
+    throw new RangeError("decodeIntent: invalid explicit numeric time");
+  }
+
+  const resolved = resolveTime(hour, minute, meridiem);
+
+  if (resolved.hour > 23) throw new RangeError("decodeIntent: invalid explicit numeric time");
+
+  return resolved;
 }
 
 /** Recover a complete relative clock such as "half past eight". Both values
@@ -1845,6 +1877,15 @@ export function decodeIntent(
     minuteRelation = undefined;
   }
 
+  const requestedTimeEvidence = explicitRequestedTime(entries);
+
+  if (requestedTimeEvidence !== undefined) {
+    hour = requestedTimeEvidence.hour;
+    minute = requestedTimeEvidence.minute;
+    meridiem = undefined;
+    minuteRelation = undefined;
+  }
+
   const namedTimeEvidence = explicitNamedTime(entries);
 
   if (namedTimeEvidence !== undefined) {
@@ -2002,6 +2043,7 @@ export function decodeIntent(
     dayGroupEvidence !== undefined ||
     boundEvidence !== undefined ||
     exceptionEvidence !== undefined ||
+    requestedTimeEvidence !== undefined ||
     namedTimeEvidence !== undefined ||
     (intent.time !== undefined &&
       /\b(?:at|around|noon|midnight|half\s+past|quarter\s+(?:past|to)|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/.test(

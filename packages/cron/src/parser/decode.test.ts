@@ -231,6 +231,76 @@ describe("perfect-label oracle over the Phase 03 table", () => {
 });
 
 describe("range and interval rules", () => {
+  test("a requested cadence adverb survives an ambiguous global kind", () => {
+    const tokens = tokenize("Have it refresh hourly").filter((token) => token.kind !== 3);
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: labelId.O,
+      boundary: false,
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled, { kind: "ambiguous", score: 1 }).intent).toEqual({
+      frequency: { unit: "hour", interval: 1 },
+    });
+  });
+
+  test("an explicit requested numeric clock survives missing neural roles", () => {
+    const tokens = tokenize("I want the audit generated daily at 18:35").filter(
+      (token) => token.kind !== 3,
+    );
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: labelId.O,
+      boundary: false,
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled, { kind: "ambiguous", score: 1 }).intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+      time: { hour: 18, minute: 35 },
+    });
+  });
+
+  test("an explicit requested number-word clock survives missing neural roles", () => {
+    const tokens = tokenize("On Monday, send the digest at eight").filter(
+      (token) => token.kind !== 3,
+    );
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: labelId.O,
+      boundary: false,
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled, { kind: "none", score: 1 }).intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["monday"],
+      time: { hour: 8, minute: 0 },
+    });
+  });
+
+  test("a requested weekly day survives an ambiguous global kind", () => {
+    const tokens = tokenize("Make Thursday the weekly maintenance day").filter(
+      (token) => token.kind !== 3,
+    );
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: labelId.O,
+      boundary: false,
+      score: 1,
+    }));
+
+    expect(decodeIntent(labeled, { kind: "ambiguous", score: 1 }).intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["thursday"],
+    });
+  });
+
   test("monday through friday expands to an ordered weekday list", () => {
     const intent = weekdays(["monday", "tuesday", "wednesday", "thursday", "friday"]);
     const example = renderIntent(intent, "weekday-range", noCarrier, "through");
@@ -500,7 +570,7 @@ describe("confidence", () => {
 
 describe("global schedule-kind safety", () => {
   test("rejects a confident global kind that contradicts token semantics", () => {
-    const labeled = tokenize("please run daily")
+    const labeled = tokenize("kindly execute daily")
       .filter((token) => token.kind !== 3)
       .map((token) => ({
         token,
@@ -515,7 +585,7 @@ describe("global schedule-kind safety", () => {
   });
 
   test("a confident negative kind rejects schedule-like token predictions", () => {
-    const labeled = tokenize("please run daily")
+    const labeled = tokenize("kindly execute daily")
       .filter((token) => token.kind !== 3)
       .map((token) => ({
         token,
