@@ -11,7 +11,9 @@ export function normalize(text: string): string {
   let value = text.normalize("NFKC").toLowerCase();
 
   value = value.replace(/[\u2013\u2014]/g, "-");
-  value = value.replace(/\ba\.?\s*m\.?/g, "am").replace(/\bp\.?\s*m\.?/g, "pm");
+  // Fold punctuated meridiems without consuming an ordinary article followed
+  // by an `m` word (`a monthly reminder` must not become `amonthly reminder`).
+  value = value.replace(/\ba\.\s*m\.?/g, "am").replace(/\bp\.\s*m\.?/g, "pm");
   // Repair only boundaries whose interpretation is unambiguous. A generic
   // letter/digit split would corrupt ordinals (`15th`) and identifiers (`v2`).
   value = value.replace(/\b(every|each)\s*(\d+)/g, "$1 $2");

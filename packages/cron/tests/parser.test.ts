@@ -148,3 +148,9 @@ test("normalize canonicalizes and is idempotent", () => {
   expect(normalize("the 15th and v2")).toBe("the 15th and v2");
   expect(() => normalize(123 as unknown as string)).toThrow(TypeError);
 });
+
+test("normalize does not merge an article into an m-word", () => {
+  expect(normalize("a monthly reminder")).toBe("a monthly reminder");
+  expect(normalize("at 9 a.m.")).toBe("at 9 am");
+  expect(normalize("at 9 a. m.")).toBe("at 9 am");
+});
