@@ -45,8 +45,15 @@ After consumption, one gold-label typo (`half past three` had been labeled as
 15:30 rather than 03:30) was corrected. Both the originally evaluated hash and
 the corrected fixture hash are consumed; the correction cannot create a fresh
 acceptance set.
+Two later labels that incorrectly treated `nightly` as a PM marker were also
+corrected to ordinary unqualified-clock semantics. The resulting v2 and v3
+hashes are consumed as well.
 
 `human-v3.jsonl` is a second, newly authored but still non-independent
 100-example acceptance set. Its only frozen-candidate run scored 78/100
 (78.0%), with 17 silent meaning changes and 12 false accepts. Its hash was
 immediately consumed; all later use is development-only.
+
+`human-v4.jsonl` is the third non-independent acceptance set. Its only frozen
+run scored 82/100 (82.0%), with 13 silent meaning changes and 8 false accepts.
+Its hash is consumed and it is development-only from this point onward.

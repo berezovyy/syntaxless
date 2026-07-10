@@ -219,9 +219,25 @@ export async function parseWithModel(
           score: predictions.scheduleKindScore,
         };
 
-  return resultFromLabeledTokens(
+  const result = resultFromLabeledTokens(
     labelTokensFromPredictions(tokens, predictions),
     scheduleKind,
     scopedText,
   );
+
+  // A spelled monthly calendar day is a unit cadence unless the user also
+  // supplied an explicit multi-month interval. Keep this final public-result
+  // invariant independent of whatever interval role the model assigned to a
+  // component of a compound ordinal such as "twenty-seventh".
+  if (
+    result.ok &&
+    result.intent.dayOfMonth !== undefined &&
+    /\b(?:monthly|every\s+month|each\s+month|once\s+per\s+month)\b/.test(normalized) &&
+    !/\bevery\s+(?:\d+|second|third|fourth)\s+months?\b/.test(normalized)
+  ) {
+    result.intent.frequency.unit = "month";
+    result.intent.frequency.interval = 1;
+  }
+
+  return result;
 }

@@ -315,6 +315,10 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "quoted-schedule";
   }
 
+  if (/\b(?:typed|wrote)\b.*["'‘’“”].*\b(?:every|monthly|weekly|daily|hourly)\b/.test(text)) {
+    return "quoted-schedule";
+  }
+
   // Explicit schedule-shaped language is common in prose that merely reports
   // a habit, timetable, label, recipe, or third-party event. These surfaces
   // are high-confidence model inputs but do not authorize creating a schedule.
@@ -341,7 +345,11 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       /^my\b.*\bwakes?\b/.test(text) ||
       /^the\b.*\b(?:has|opens?)\b.*\b(?:printed|every|each|daily|weekly|monthly|hourly)\b/.test(
         text,
-      ))
+      ) ||
+      /^(?:flights?|planes?)\b.*\bdepart\b/.test(text) ||
+      /^the\s+manual\b.*\brecommends?\b/.test(text) ||
+      /^this\b.*\b(?:costs?|charges?)\b.*\bper\s+(?:day|week|month)\b/.test(text) ||
+      /^the\s+clock\b.*\bstrikes?\b/.test(text))
   ) {
     return "descriptive-statement";
   }
@@ -362,7 +370,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       text,
     ) ||
       /\b(?:already|earlier today|last (?:month|week|year)|years? ago)\b/.test(text) ||
-      /\bbefore\b.*\b(?:migration|merger|outage|retired|retirement)\b/.test(text));
+      /\bbefore\b.*\b(?:migration|merger|outage|retired|retirement|shutdown)\b/.test(text));
 
   if (historical) return "historical-description";
 
@@ -370,10 +378,18 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "historical-description";
   }
 
+  if (
+    (/^in\s+\d{4}\b/.test(text) || /\bfinished\b.*\bmonthly\b/.test(text)) &&
+    scheduleCue.test(text)
+  ) {
+    return "historical-description";
+  }
+
   const hypothetical =
     scheduleCue.test(text) &&
-    ((/^(?:imagine|suppose)\b/.test(text) && /[?]$/.test(text)) ||
+    (/^(?:imagine|suppose|supposing)\b/.test(text) ||
       (/^if\b/.test(text) && /\b(?:could|might|would|will)\b/.test(text)) ||
+      /\bwould be\b.*\bif\b/.test(text) ||
       /\b(?:no decision has been made|we will tell you)\b/.test(text));
 
   if (hypothetical) return "non-scheduling-language";
@@ -453,6 +469,9 @@ function unrequestedDeclarativeContext(text: string): boolean {
 function hasDirectScheduleRequest(text: string): boolean {
   return (
     /(?:^|,\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|arrange|begin|book|check|configure|continue|create|enable|have|issue|keep|let|make|notify|ping|remind|repeat|run|schedule|send|set|start|trigger|use)\b/.test(
+      text,
+    ) ||
+    /\bplease\s+(?:add|arrange|book|configure|create|make|remind|run|schedule|send|set)\b/.test(
       text,
     ) ||
     /\b(?:i(?:'d| would) like|i(?:\s+still)?\s+(?:need|want)|let's)\b/.test(text) ||
@@ -810,6 +829,14 @@ interface ExplicitFrequencyEvidence {
 function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence | undefined {
   const text = joinEntries(entries);
 
+  if (
+    /\bmonthly\b/.test(text) &&
+    hasDirectScheduleRequest(text) &&
+    !/\bevery\s+(?:\d+|second|third|fourth)\s+months?\b/.test(text)
+  ) {
+    return { unit: "month", interval: 1, valueStart: -1, valueEnd: -1 };
+  }
+
   const halfHour = /\bevery\s+(?:one\s+)?half[-\s]+hour\b|\bhalf[-\s]+hour\s+intervals?\b/.exec(
     text,
   );
@@ -963,6 +990,15 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
         ...(hasDirectScheduleRequest(normalized) ? {} : { contextual: true }),
       };
     }
+  }
+
+  const requestedAdverb = /\b(daily|hourly|weekly|monthly)\b/.exec(normalized);
+
+  if (requestedAdverb !== null && hasDirectScheduleRequest(normalized)) {
+    const unit =
+      requestedAdverb[1] === "monthly" ? "month" : ADVERB_FREQUENCIES[requestedAdverb[1]!];
+
+    if (unit !== undefined) return { unit, interval: 1, valueStart: -1, valueEnd: -1 };
   }
 
   const idiom = Object.entries(FREQUENCY_IDIOMS)
@@ -1191,7 +1227,7 @@ function explicitBounds(entries: readonly Entry[]): RecurrenceBounds | undefined
     "monthly",
   ]);
 
-  if (/\b(?:ending\s+on|through\s+and\s+including)\s*$/.test(before)) {
+  if (/\b(?:ending\s+on|through|through\s+and\s+including)\s*$/.test(before)) {
     const end = offsetIsoDate(date.iso, 1);
 
     if (end === undefined) throw new RangeError("decodeIntent: invalid inclusive end date");
@@ -1403,12 +1439,30 @@ function explicitDayOfMonth(entries: readonly Entry[]): number | undefined {
     .map((value) => regexEscape(value).replace(/\ /g, "\\s+"))
     .join("|");
 
+  for (const [surface, day] of DAY_ORDINALS.map(
+    (surface, index) => [surface, index + 1] as const,
+  ).sort(([left], [right]) => right.length - left.length)) {
+    const phrase = regexEscape(surface).replace(/\ /g, "\\s+");
+
+    if (
+      new RegExp(
+        `\\b(?:the\\s+)?${phrase}\\s+(?:(?:a\\s+)?monthly|(?:every|each)\\s+month)\\b`,
+      ).test(text)
+    ) {
+      return day;
+    }
+  }
+
   const valuePattern = `(\\d{1,2})(?:st|nd|rd|th)?|(${wordOrdinals})`;
 
   const patterns = [
     new RegExp(`\\b(?:the\\s+)?(?:${valuePattern})\\s+day\\b`),
     new RegExp(`\\bday\\s+(?:${valuePattern})\\b`),
     new RegExp(`\\b(?:the\\s+)?(?:${valuePattern})\\s+of\\s+(?:every|each)?\\s*month\\b`),
+    new RegExp(`\\b(?:the\\s+)?(?:${valuePattern})\\s+(?:a\\s+)?monthly\\b`),
+    new RegExp(`\\b(?:the\\s+)?(?:${valuePattern})\\s+(?:every|each)\\s+month\\b`),
+    new RegExp(`\\bmonthly\\b.*?\\b(?:on|for)\\s+(?:the\\s+)?(?:${valuePattern})\\b`),
+    new RegExp(`\\bon\\s+(?:the\\s+)?(?:${valuePattern})\\b(?=\\s*(?:,|$|at\\b|if\\b))`),
   ];
 
   for (const pattern of patterns) {
@@ -1482,7 +1536,7 @@ function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefin
       cueText,
     ) ||
     (hasDirectScheduleRequest(cueText) &&
-      /(?:\bon\b|^(?:mon|tue|wed|thu|fri|sat|sun)\b|\bweekly\b|\b(?:schedule|set)\b|\b(?:let|make)\s+[a-z]+\s+(?:be|the)\b)/.test(
+      /(?:\bon\b|^(?:mon|tue|wed|thu|fri|sat|sun)\b|\b(?:fortnightly|weekly)\b|\b(?:schedule|set)\b|\b(?:let|make)\s+[a-z]+\s+(?:be|the)\b)/.test(
         cueText,
       ));
 
@@ -1507,7 +1561,7 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
   }
 
   const match =
-    /\b(?:at|around|reminder(?:\s+for)?)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
+    /\b(?:at|around|(?:alert|notification|reminder)(?:\s+for)?)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
       text,
     );
 
@@ -1536,7 +1590,7 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
   if (
     meridiem === undefined &&
     resolved.hour < 12 &&
-    /\b(?:in the afternoon|in the evening|at night|nightly)\b/.test(text)
+    /\b(?:in the afternoon|in the evening|at night)\b/.test(text)
   ) {
     resolved = { ...resolved, hour: resolved.hour + 12 };
   }
@@ -1577,7 +1631,7 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
 
   let time = { hour: Math.floor(total / 60), minute: total % 60 };
 
-  if (time.hour < 12 && /\b(?:in the afternoon|in the evening|at night|nightly)\b/.test(text)) {
+  if (time.hour < 12 && /\b(?:in the afternoon|in the evening|at night)\b/.test(text)) {
     time = { ...time, hour: time.hour + 12 };
   }
 
@@ -1587,7 +1641,7 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
 /** Recover an exact named clock anchor only behind a clock preposition. */
 function explicitNamedTime(entries: readonly Entry[]): TimeOfDay | undefined {
   const text = joinEntries(entries);
-  const match = /\b(?:at|for|around)\s+(midnight|noon|midday)\b/.exec(text);
+  const match = /\b(?:at|for|around|make|use)\s+(midnight|noon|midday)\b/.exec(text);
 
   if (match === null) return undefined;
   const hour = NAMED_HOURS[match[1]!];
@@ -2092,6 +2146,26 @@ export function decodeIntent(
   if (frequencyEvidence !== undefined) {
     unit = frequencyEvidence.unit;
     interval = frequencyEvidence.interval;
+
+    if (
+      frequencyEvidence.unit !== "month" &&
+      dayOfMonthEvidence === undefined &&
+      scopedOrdinalEvidence === undefined &&
+      daySpecEvidence === undefined
+    ) {
+      dayOfMonth = undefined;
+      ordinal = undefined;
+      day = undefined;
+    }
+  }
+
+  if (
+    dayOfMonthEvidence !== undefined &&
+    /\b(?:monthly|every\s+month|each\s+month|once\s+per\s+month)\b/.test(text) &&
+    !/\bevery\s+(?:\d+|second|third|fourth)\s+months?\b/.test(text)
+  ) {
+    unit = "month";
+    interval = 1;
   }
 
   const exceptionEvidence = explicitExceptions(entries);
@@ -2284,6 +2358,14 @@ export function decodeIntent(
   }
 
   if (monthlySelectors > 0) intent.frequency.unit = "month";
+
+  if (
+    intent.dayOfMonth !== undefined &&
+    /\b(?:monthly|every\s+month|each\s+month|once\s+per\s+month)\b/.test(text) &&
+    !/\bevery\s+(?:\d+|second|third|fourth)\s+months?\b/.test(text)
+  ) {
+    intent.frequency.interval = 1;
+  }
 
   if (intent.weekdays !== undefined && intent.weekdays.length > 0) {
     if (hasContradictoryDailyCue(text)) {

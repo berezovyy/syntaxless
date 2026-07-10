@@ -188,7 +188,7 @@ describe("consumed human-v2 behavioral corpus", () => {
     await expect(
       assertAcceptanceFresh(
         "acceptance",
-        "fcd9d449595b380299f773629b595fd190d5c87d436af2817e4da81f5dd0a3c8",
+        "ed3914bb0cd6fbf591e0c49fcd22a67afdf9d04c1c65936d1258b2832efe2ad8",
       ),
     ).rejects.toThrow(/already been consumed/);
 
@@ -224,7 +224,31 @@ describe("consumed human-v3 behavioral corpus", () => {
     await expect(
       assertAcceptanceFresh(
         "acceptance",
-        "d1b465763fadc87014230da617aa6ee3ef27d17664bce20f48951cc1d1693147",
+        "b1247ed94271c743ab1f633a3d0c670872b65f44426412f09f42b284eddae93b",
+      ),
+    ).rejects.toThrow(/already been consumed/);
+  });
+});
+
+describe("consumed human-v4 behavioral corpus", () => {
+  test("remains isolated and permanently unavailable as fresh acceptance", async () => {
+    const path = resolveRepo("packages/cron/evaluation/human-v4.jsonl");
+    const records = parseHumanCorpus(await readFile(path, "utf8"));
+
+    expect(records).toHaveLength(100);
+    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
+
+    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
+      checked: true,
+      outsideTrainingData: true,
+      incompatibleWithTrainingSchema: true,
+      absentFromGeneratorSources: true,
+    });
+
+    await expect(
+      assertAcceptanceFresh(
+        "acceptance",
+        "5af1c32e7ff713b3a090f61fbf5abd7ed5cc16622953706a3423e2f0a3ef6a23",
       ),
     ).rejects.toThrow(/already been consumed/);
   });
