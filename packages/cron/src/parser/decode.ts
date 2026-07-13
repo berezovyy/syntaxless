@@ -537,7 +537,7 @@ function unrequestedDeclarativeContext(text: string): boolean {
   if (hasDirectScheduleRequest(text)) return false;
 
   const bareSchedule =
-    /^(?:at\b|daily\b|each\b|every\b|hourly\b|monthly\b|once\b|on\b|starting\b|until\b|weekly\b|weekdays?\b|weekends?\b|\d{1,2}(?:st|nd|rd|th)\b)/.test(
+    /^(?:at\b|daily\b|each\b|every\b|hourly\b|monthly\b|once\b|on\b|starting\b|the\s+(?:\d{1,2}(?:st|nd|rd|th)|first|second|third|fourth|last)\b|until\b|weekly\b|weekdays?\b|weekends?\b|mon(?:day)?s?\b|tue(?:sday)?s?\b|wed(?:nesday)?s?\b|thu(?:rsday)?s?\b|fri(?:day)?s?\b|sat(?:urday)?s?\b|sun(?:day)?s?\b|\d{1,2}(?:st|nd|rd|th)\b)/.test(
       text,
     );
 
@@ -553,7 +553,7 @@ function unrequestedDeclarativeContext(text: string): boolean {
  * schedule values by itself. */
 function hasDirectScheduleRequest(text: string): boolean {
   return (
-    /(?:^|,\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|arrange|begin|book|check|configure|continue|create|do|enable|give|have|issue|keep|let|make|notify|ping|poll|remind|repeat|run|schedule|send|set|start|trigger|use)\b/.test(
+    /(?:^|,\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|arrange|begin|book|charge|check|close|configure|continue|create|do|enable|give|have|issue|keep|let|make|meet|notify|ping|poll|put|refresh|remind|repeat|run|schedule|send|set|start|take|trigger|use)\b/.test(
       text,
     ) ||
     /\bplease\s+(?:add|arrange|book|configure|create|make|remind|run|schedule|send|set)\b/.test(
