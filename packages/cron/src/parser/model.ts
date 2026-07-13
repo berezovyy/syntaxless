@@ -53,10 +53,16 @@ export function scopeActionableCorrection(text: string): string {
     [/^actually,?\s+make that\s+(.+?),\s+not\b/i, (match) => match[1]!],
     [/^make that\s+(.+?),\s+instead of\b/i, (match) => `make ${match[1]!}`],
     [/^(?:sorry,?\s+)?i meant\s+(.+?)\s+rather than\b/i, (match) => match[1]!],
+    [/^(?:sorry,?\s+)?i meant\s+(.+?),\s+not\b/i, (match) => match[1]!],
     [/^i said\b.+?,\s+but i meant\s+(.+)$/i, (match) => match[1]!],
+    [
+      /^i (?:gave|sent|told)\b.+?\bby mistake\.\s*((?:please\s+)?(?:make|run|schedule|send|set|use)\b.+)$/i,
+      (match) => match[1]!,
+    ],
     [/^change\b[^:]*:\s*(.+?),\s*not\b/i, (match) => match[1]!],
     [/^no,?\s+use\s+(.+?)\s+instead of\b/i, (match) => `use ${match[1]!}`],
     [/^correction[-:]\s*(.+?),\s*not\b/i, (match) => match[1]!],
+    [/^correction[-:]\s*(.+?)\s+rather than\b/i, (match) => match[1]!],
     [/^forget\b[^;]*;\s*(.+)$/i, (match) => match[1]!],
     [
       /^(?:discard|scratch)\b[^;]*;\s*((?:make|run|schedule|send|set|trigger)\b.+)$/i,

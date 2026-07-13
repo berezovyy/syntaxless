@@ -154,3 +154,8 @@ test("normalize does not merge an article into an m-word", () => {
   expect(normalize("at 9 a.m.")).toBe("at 9 am");
   expect(normalize("at 9 a. m.")).toBe("at 9 am");
 });
+
+test("normalize canonicalizes a meridiem-qualified dotted clock", () => {
+  expect(normalize("Daily at 1.20 p.m.")).toBe("daily at 1:20 pm");
+  expect(normalize("Release 1.20 is current")).toBe("release 1.20 is current");
+});

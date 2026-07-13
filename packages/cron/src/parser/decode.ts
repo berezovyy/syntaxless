@@ -310,6 +310,14 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (metaQuotation) return "quoted-schedule";
 
   if (
+    scheduleCue.test(text) &&
+    !hasDirectScheduleRequest(text) &&
+    /\b(?:example|label|tutorial)\b.*\b(?:reads?|says?)\b/.test(text)
+  ) {
+    return "quoted-schedule";
+  }
+
+  if (
     /\b(?:copy|explain|translate)\b.*\b(?:phrase|sentence|string|words?)\b.*["'‘’“”]/.test(text)
   ) {
     return "quoted-schedule";
@@ -336,7 +344,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
         text,
       ) ||
       /^(?:her|his|our|the|their)\b.*\b(?:arrives?|chimes?|is open|works?)\b/.test(text) ||
-      /^(?:he|she|they)\s+(?:arrives?|leaves?|meets?|works?)\b/.test(text));
+      /^(?:he|she|they)\s+(?:arrives?|leaves?|meets?|visits?|works?)\b/.test(text));
 
   if (reportedOrHabitual) return "descriptive-statement";
 
@@ -351,7 +359,17 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    /^(?:he|she|they)\s+(?:mentioned|reported|said|told)\b/.test(text)
+    /^my\s+\w+\s+(?:calls?|goes?|runs?|visits?|walks?|works?)\b/.test(text)
+  ) {
+    return "descriptive-statement";
+  }
+
+  if (/^there\s+(?:are|is)\b/.test(text) && scheduleCue.test(text)) return "descriptive-statement";
+
+  if (
+    scheduleCue.test(text) &&
+    !hasDirectScheduleRequest(text) &&
+    /^(?:he|she|they|[a-z]+)\s+(?:explained|mentioned|reported|said|told)\b/.test(text)
   ) {
     return "descriptive-statement";
   }
@@ -400,6 +418,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       /\b(?:already|earlier today|last (?:month|week|year)|years? ago)\b/.test(text) ||
       /\bbefore\b.*\b(?:migration|merger|outage|retired|retirement|shutdown)\b/.test(text));
 
+  if (/^before\s+the\s+\w+\b/.test(text) && scheduleCue.test(text)) return "historical-description";
   if (historical) return "historical-description";
 
   if (/\b(?:back then|old rota|old schedule|in those days)\b/.test(text)) {
@@ -466,6 +485,30 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "non-scheduling-language";
   }
 
+  if (/\b(?:a|some)\s+few\s+times?\s+per\s+(?:day|week|month)\b/.test(text)) {
+    return "non-scheduling-language";
+  }
+
+  if (/\bdo not\s+(?:add|arrange|create|make|run|schedule|send|set|start)\b/.test(text)) {
+    return "non-scheduling-language";
+  }
+
+  if (
+    /\b(?:near|around)\s+the\s+(?:beginning|middle|end)\s+of\s+(?:each|every|the)\s+month\b/.test(
+      text,
+    )
+  ) {
+    return "non-scheduling-language";
+  }
+
+  if (/\b(?:maybe|perhaps)\b/.test(text) && weekdayMentions >= 2) return "uncertain-alternative";
+
+  if (/^at\s+(?:[a-z]+|\d{1,2})\s+minutes?\s+(?:past|after|to|before)\s*[?.,;:]?$/.test(text)) {
+    return "non-scheduling-language";
+  }
+
+  if (/^between\s+\d{4}-\d{2}-\d{2}\s+and\s*[?.,;:]?$/.test(text)) return "non-scheduling-language";
+
   const recurrenceCues = [...text.matchAll(/\b(?:daily|each|every|hourly|monthly|weekly)\b/g)]
     .length;
 
@@ -510,7 +553,7 @@ function unrequestedDeclarativeContext(text: string): boolean {
  * schedule values by itself. */
 function hasDirectScheduleRequest(text: string): boolean {
   return (
-    /(?:^|,\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|arrange|begin|book|check|configure|continue|create|enable|give|have|issue|keep|let|make|notify|ping|poll|remind|repeat|run|schedule|send|set|start|trigger|use)\b/.test(
+    /(?:^|,\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|arrange|begin|book|check|configure|continue|create|do|enable|give|have|issue|keep|let|make|notify|ping|poll|remind|repeat|run|schedule|send|set|start|trigger|use)\b/.test(
       text,
     ) ||
     /\bplease\s+(?:add|arrange|book|configure|create|make|remind|run|schedule|send|set)\b/.test(
@@ -884,6 +927,14 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
   );
 
   if (halfHour !== null) return { unit: "minute", interval: 30, valueStart: -1, valueEnd: -1 };
+
+  if (
+    /\b(?:(?:every\s+(?:other|second))|alternat(?:e|ing))\s+(?:mon(?:day)?s?|tue(?:sday)?s?|wed(?:nesday)?s?|thu(?:rsday)?s?|fri(?:day)?s?|sat(?:urday)?s?|sun(?:day)?s?)\b/.test(
+      text,
+    )
+  ) {
+    return { unit: "week", interval: 2, valueStart: -1, valueEnd: -1 };
+  }
 
   if (/\b(?:every|each)\s+(?:morning|evening|night)\b/.test(text)) {
     return { unit: "day", interval: 1, valueStart: -1, valueEnd: -1 };
@@ -1693,7 +1744,7 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
 
   if (
     time.hour < 12 &&
-    /\b(?:in the afternoon|in the evening|at night|tonight|every evening|each evening|pm)\b/.test(
+    /\b(?:in the afternoon|in the evening|at night|tonight|every evening|each evening|every night|each night|pm)\b/.test(
       text,
     )
   ) {
@@ -2196,6 +2247,9 @@ export function decodeIntent(
 
   const scopedOrdinalEvidence =
     ordinalEvidence !== undefined &&
+    !/\b(?:(?:every\s+(?:other|second))|alternat(?:e|ing))\s+(?:mon(?:day)?s?|tue(?:sday)?s?|wed(?:nesday)?s?|thu(?:rsday)?s?|fri(?:day)?s?|sat(?:urday)?s?|sun(?:day)?s?)\b/.test(
+      scheduleScopeText,
+    ) &&
     (ordinal !== undefined ||
       /\b(?:monthly|every\s+month|each\s+month|remind|schedule)\b/.test(scheduleScopeText))
       ? ordinalEvidence
@@ -2276,7 +2330,8 @@ export function decodeIntent(
     minuteRelation = undefined;
   }
 
-  const requestedTimeEvidence = explicitRequestedTime(entries);
+  const requestedTimeEvidence =
+    relativeTimeEvidence === undefined ? explicitRequestedTime(entries) : undefined;
 
   if (requestedTimeEvidence !== undefined) {
     hour = requestedTimeEvidence.hour;
@@ -2420,6 +2475,28 @@ export function decodeIntent(
     delete intent.exceptions;
   }
 
+  // In recurrence language, "every second Monday" means alternate Mondays;
+  // an ordinal monthly selector needs an explicit monthly context such as
+  // "the second Monday of every month". Resolve this visible contrast after
+  // model reconciliation so an ORDINAL role cannot silently change cadence.
+  if (
+    /\b(?:(?:every\s+(?:other|second))|alternat(?:e|ing))\s+(?:mon(?:day)?s?|tue(?:sday)?s?|wed(?:nesday)?s?|thu(?:rsday)?s?|fri(?:day)?s?|sat(?:urday)?s?|sun(?:day)?s?)\b/.test(
+      text,
+    )
+  ) {
+    const visibleWeekdays = weekdaysIn(text, true);
+
+    if (visibleWeekdays.length !== 1) {
+      throw new RangeError("decodeIntent: ambiguous alternating weekday");
+    }
+
+    intent.frequency = { unit: "week", interval: 2 };
+    intent.weekdays = visibleWeekdays;
+    delete intent.dayOfMonth;
+    delete intent.ordinalWeekday;
+    delete intent.day;
+  }
+
   // Selector shape is a semantic constraint, not a model preference. Repair a
   // mismatched frequency only when the decoded selector itself is explicit;
   // contradictory independent selectors fail instead of being merged.
@@ -2448,6 +2525,7 @@ export function decodeIntent(
     }
 
     intent.frequency.unit = "week";
+    if (frequencyEvidence === undefined) intent.frequency.interval = 1;
   }
 
   const explicitScheduleEvidence =

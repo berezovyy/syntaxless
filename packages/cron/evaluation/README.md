@@ -71,3 +71,13 @@ vague-cadence, and clock-reconciliation gaps. Its hash was immediately recorded
 in `consumed.json`; after those gaps were fixed it reached 100/100 only as a
 development regression. That later result is not fresh promotion evidence, and
 the original 83% result remains the honest acceptance score.
+
+`human-v7.jsonl` is the sixth coding-agent-authored, non-independent acceptance
+set. It was authored and gold-linted only after the v6 fixes and candidate were
+frozen, and contains 100 new examples with ten examples in each of ten broad
+families. Its one fresh run scored 79/100 (79.0%), with 17 silent meaning
+changes and 12 false accepts, so promotion failed. The failures exposed dotted
+clocks, night qualifiers, numeric relative clocks, weekday abbreviations,
+alternate-week wording, further correction forms, prose/reporting contexts,
+vague schedules, prohibitions, and incomplete ranges. The acceptance hash is
+consumed. A later 100/100 result is development regression evidence only.

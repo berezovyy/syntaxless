@@ -350,6 +350,19 @@ describe("exact lexical schedule and rejection surfaces", () => {
     "We are documenting why 'at midnight' was parsed incorrectly.",
     "Every few hours should be enough, give or take.",
     "Remove Monday and Friday at noon from my reminders.",
+    "My neighbor walks her dog every morning at seven.",
+    "This medication label says one tablet every eight hours.",
+    "There are sixty minutes in every hour.",
+    "He visits on alternate Sundays when travel permits.",
+    "Before the redesign, the newsletter went out each Monday.",
+    "She explained that backups happen every weekend.",
+    "The tutorial's example reads: every two hours.",
+    "Use a day near the middle of each month.",
+    "Perhaps exclude Friday, though excluding Monday is another option.",
+    "A few times per day, at moments you choose.",
+    "Please do not create a daily 8 a.m. alert.",
+    "At ten minutes to",
+    "Between 2037-01-01 and",
   ])("%s is explicitly rejected", async (phrase) => {
     const result = await parse(phrase);
 
@@ -390,6 +403,62 @@ describe("exact lexical schedule and rejection surfaces", () => {
       frequency: { unit: "day", interval: 1 },
       time: { hour: 20, minute: 5 },
     });
+  });
+
+  test.each([
+    [
+      "At a quarter to eleven each night, run the final sync.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 22, minute: 45 } },
+    ],
+    [
+      "Make this recur daily at 1.20 p.m.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 13, minute: 20 } },
+    ],
+    [
+      "Do the checks on Tues., Thurs., and Sat. at 3:10pm.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["tuesday", "thursday", "saturday"],
+        time: { hour: 15, minute: 10 },
+      },
+    ],
+    [
+      "Notify me on weekdays, 5 minutes after nine in the morning.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: [...WEEKDAYS],
+        time: { hour: 9, minute: 5 },
+      },
+    ],
+    [
+      "Schedule the monthly review for day 13 at quarter past one p.m.",
+      {
+        frequency: { unit: "month", interval: 1 },
+        dayOfMonth: 13,
+        time: { hour: 13, minute: 15 },
+      },
+    ],
+    [
+      "Every second Monday at 10:00, perform the maintenance.",
+      {
+        frequency: { unit: "week", interval: 2 },
+        weekdays: ["monday"],
+        time: { hour: 10, minute: 0 },
+      },
+    ],
+    [
+      "Set this for alternate Mondays.",
+      {
+        frequency: { unit: "week", interval: 2 },
+        weekdays: ["monday"],
+      },
+    ],
+  ] as const)("reconciles explicit human schedule evidence in %s", async (phrase, intent) => {
+    const result = await parse(phrase);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.intent as unknown).toEqual(intent);
   });
 
   test("accepts an indirect polite scheduling question", async () => {
