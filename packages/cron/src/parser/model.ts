@@ -42,6 +42,7 @@ export function scopeActionableCorrection(text: string): string {
   const value = text
     .normalize("NFKC")
     .replace(/[\u2013\u2014]/g, "-")
+    .replace(/[\u2018\u2019]/g, "'")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -51,6 +52,7 @@ export function scopeActionableCorrection(text: string): string {
       (match) => match[1]!,
     ],
     [/^actually,?\s+make that\s+(.+?),\s+not\b/i, (match) => match[1]!],
+    [/^(?:apologies|sorry)\s*[-,:]\s*make it\s+(.+?),\s+not\b/i, (match) => `make ${match[1]!}`],
     [/^make that\s+(.+?),\s+instead of\b/i, (match) => `make ${match[1]!}`],
     [/^(?:sorry,?\s+)?i meant\s+(.+?)\s+rather than\b/i, (match) => match[1]!],
     [/^(?:sorry,?\s+)?i meant\s+(.+?),\s+not\b/i, (match) => match[1]!],
@@ -63,8 +65,9 @@ export function scopeActionableCorrection(text: string): string {
     [/^no,?\s+use\s+(.+?)\s+instead of\b/i, (match) => `use ${match[1]!}`],
     [/^(?:sorry,?\s+)?use\s+(.+?)\s+instead of\b/i, (match) => `use ${match[1]!}`],
     [/^no,?\s+i need\s+(.+?)\s+rather than\b/i, (match) => match[1]!],
-    [/^correction[-:]\s*(.+?),\s*not\b/i, (match) => match[1]!],
-    [/^correction[-:]\s*(.+?)\s+rather than\b/i, (match) => match[1]!],
+    [/^no\s*-\s*(.+?),\s+rather than\b/i, (match) => match[1]!],
+    [/^correction\s*[-:]\s*(.+?),\s*not\b/i, (match) => match[1]!],
+    [/^correction\s*[-:]\s*(.+?)\s+rather than\b/i, (match) => match[1]!],
     [/^forget\b[^;]*;\s*(.+)$/i, (match) => match[1]!],
     [
       /^(?:discard|scratch)\b[^;]*;\s*((?:make|run|schedule|send|set|trigger)\b.+)$/i,
@@ -88,8 +91,10 @@ export function scopeActionableCorrection(text: string): string {
     ],
     [/^the\b[^;]*\bwas wrong;\s*(.+)$/i, (match) => match[1]!],
     [/^the\b[^;]*\bwas a mistake;\s*(.+)$/i, (match) => match[1]!],
+    [/^[^.]+\bwon't work\.\s*((?:make|run|schedule|send|set|use)\b.+)$/i, (match) => match[1]!],
     [/^revise that to\s+(.+?),\s*not\b/i, (match) => match[1]!],
     [/^revise\b.*?\bto\s+(.+?),\s*rather than\b/i, (match) => match[1]!],
+    [/^(?:please\s+)?revise\b.*?\bto\s+(.+?)\s+instead of\b/i, (match) => match[1]!],
     [/^instead of\b[^,]*,\s*(.+)$/i, (match) => match[1]!],
   ];
 

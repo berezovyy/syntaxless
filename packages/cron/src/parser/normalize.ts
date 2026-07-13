@@ -11,6 +11,7 @@ export function normalize(text: string): string {
   let value = text.normalize("NFKC").toLowerCase();
 
   value = value.replace(/[\u2013\u2014]/g, "-");
+  value = value.replace(/[\u2018\u2019]/g, "'");
   // Fold punctuated meridiems without consuming an ordinary article followed
   // by an `m` word (`a monthly reminder` must not become `amonthly reminder`).
   value = value.replace(/\ba\.\s*m\.?/g, "am").replace(/\bp\.\s*m\.?/g, "pm");

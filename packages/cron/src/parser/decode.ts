@@ -222,6 +222,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     .normalize("NFKC")
     .toLowerCase()
     .replace(/[\u2013\u2014]/g, "-")
+    .replace(/[\u2018\u2019]/g, "'")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -230,6 +231,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
 
   const requestQuestionPrefix =
     /\b(?:can|could|would|will)\s+you\b/.test(text) ||
+    /\b(?:can|could|would|will)\s+we\s+(?:arrange|create|make|run|schedule|set)\b/.test(text) ||
     /\b(?:can|could|would)\s+(?:this|it)\s+(?:be\s+)?(?:arranged|happen|recur|repeat|run|scheduled)\b/.test(
       text,
     );
@@ -344,15 +346,17 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   const reportedOrHabitual =
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    (/\bi usually\b/.test(text) ||
+    (/\bi (?:normally|usually)\b/.test(text) ||
       /\baccording to\b/.test(text) ||
-      /\b(?:card|description|documentation|event|manual|recipe|sign|timetable)\b.*\b(?:contains?|reads?|says?|shows?|written)\b/.test(
+      /\b(?:card|description|documentation|event|guide|manual|recipe|sign|timetable)\b.*\b(?:contains?|reads?|recommend(?:s|ed)?|says?|shows?|suggest(?:s|ed)?|written)\b/.test(
         text,
       ) ||
       /\b(?:contains?|reads?|says?|shows?|written)\b.*\b(?:card|description|documentation|event|manual|recipe|sign|timetable)\b/.test(
         text,
       ) ||
-      /^(?:her|his|our|the|their)\b.*\b(?:arrives?|chimes?|is open|works?)\b/.test(text) ||
+      /^(?:her|his|our|the|their)\b.*\b(?:arrives?|billed|charged|chimes?|is open|renews?|works?)\b/.test(
+        text,
+      ) ||
       /^(?:he|she|they)\s+(?:arrives?|leaves?|meets?|visits?|works?)\b/.test(text));
 
   if (reportedOrHabitual) return "descriptive-statement";
@@ -368,7 +372,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    /^my\s+\w+\s+(?:calls?|goes?|runs?|visits?|walks?|works?)\b/.test(text)
+    /^my\s+\w+\s+(?:calls?|goes?|phones?|rings?|runs?|visits?|walks?|works?)\b/.test(text)
   ) {
     return "descriptive-statement";
   }
@@ -378,7 +382,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    /^(?:every\s+(?:minute|hour|day|week|month)\b.*\b(?:contains?|equals?|has)\b|(?:that|this|the)\s+report\b.*\b(?:entries|totals|rows|columns)\b|i\s+(?:drink|exercise|read|sleep|walk)\b)/.test(
+    /^(?:every\s+(?:minute|hour|day|week|month)\b.*\b(?:contains?|equals?|has|is made up)\b|each\s+day\b.*\b(?:contains?|is made up)\b|(?:that|this|the)\s+(?:report|spreadsheet)\b.*\b(?:entries|totals|rows|columns)\b|i\s+(?:drink|exercise|jog|read|sleep|walk)\b|.+\bcosts?\b)/.test(
       text,
     )
   ) {
@@ -411,6 +415,15 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
 
   if (
     !hasDirectScheduleRequest(text) &&
+    /\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\s+(?:follows|precedes)\s+(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/.test(
+      text,
+    )
+  ) {
+    return "descriptive-statement";
+  }
+
+  if (
+    !hasDirectScheduleRequest(text) &&
     (/^my\b.*\bleaves?\b/.test(text) ||
       /^(?:her|his|their)\b.*\brenews?\b/.test(text) ||
       /^the\s+(?:guide|handbook|manual)\b.*\b(?:recommends?|suggests?)\b/.test(text) ||
@@ -431,6 +444,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
 
   const historical =
     scheduleCue.test(text) &&
+    !hasDirectScheduleRequest(text) &&
     (/\b(?:arrived|fired|former|formerly|had|happened|met|occurred|old|previous|previously|ran|rang|recommended|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
       text,
     ) ||
@@ -514,12 +528,33 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "non-scheduling-language";
   }
 
-  if (/\bdo not\s+(?:add|arrange|create|make|run|schedule|send|set|start)\b/.test(text)) {
+  if (
+    /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)[-\s]+(?:minute|hour|day|week|month)s?[-\s]+(?:check|job|process|task)\b/.test(
+      text,
+    ) &&
+    !/\b(?:cadence|each|every|hourly|interval|repeat|recurring)\b/.test(text)
+  ) {
+    return "non-scheduling-language";
+  }
+
+  if (
+    /\b(?:do not|don't)\s+(?:add|arrange|configure|create|make|run|schedule|send|set|start)\b/.test(
+      text,
+    )
+  ) {
     return "non-scheduling-language";
   }
 
   if (
     /\b(?:near|around)\s+the\s+(?:beginning|middle|end)\s+of\s+(?:each|every|the)\s+month\b/.test(
+      text,
+    )
+  ) {
+    return "non-scheduling-language";
+  }
+
+  if (
+    /\b(?:near|around)\s+the\s+(?:first|last)\s+(?:part|portion)\s+of\s+(?:each|every|the)\s+month\b/.test(
       text,
     )
   ) {
@@ -578,7 +613,7 @@ function unrequestedDeclarativeContext(text: string): boolean {
  * schedule values by itself. */
 function hasDirectScheduleRequest(text: string): boolean {
   return (
-    /(?:^|,\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|arrange|begin|book|charge|check|close|configure|continue|create|do|enable|give|have|issue|keep|let|make|meet|notify|ping|poll|put|refresh|remind|repeat|run|schedule|send|set|start|take|trigger|use)\b/.test(
+    /(?:^|[,;]\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|archive|arrange|begin|book|charge|check|close|configure|continue|create|do|enable|give|have|issue|keep|let|make|meet|notify|ping|poll|put|refresh|remind|repeat|run|schedule|send|set|start|take|trigger|use)\b/.test(
       text,
     ) ||
     /\bplease\s+(?:add|arrange|book|configure|create|make|remind|run|schedule|send|set)\b/.test(
@@ -1567,7 +1602,13 @@ function explicitDayOfMonth(entries: readonly Entry[]): number | undefined {
   // by itself to create a schedule.
   const text = normalizeGrammarWords(rawText, ["day", "monthly", "month"], 2);
 
-  if (!/\b(?:monthly|every\s+month|each\s+month)\b/.test(text)) return undefined;
+  if (
+    !/\b(?:monthly|every\s+month|each\s+month|every\s+(?:\d+|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+months?)\b/.test(
+      text,
+    )
+  ) {
+    return undefined;
+  }
 
   const wordOrdinals = [...DAY_ORDINALS]
     .sort((left, right) => right.length - left.length)
@@ -1739,7 +1780,9 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
   if (
     meridiem === undefined &&
     resolved.hour < 12 &&
-    /\b(?:in the afternoon|in the evening|at night|tonight|every evening|each evening)\b/.test(text)
+    /\b(?:in the afternoon|in the evening|at night|tonight|every (?:single )?evening|each evening)\b/.test(
+      text,
+    )
   ) {
     resolved = { ...resolved, hour: resolved.hour + 12 };
   }
@@ -1782,7 +1825,7 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
 
   if (
     time.hour < 12 &&
-    /\b(?:in the afternoon|in the evening|at night|tonight|every evening|each evening|every night|each night|pm)\b/.test(
+    /\b(?:in the afternoon|in the evening|at night|tonight|every (?:single )?evening|each evening|every night|each night|pm)\b/.test(
       text,
     )
   ) {
@@ -1834,6 +1877,7 @@ function explicitExceptions(entries: readonly Entry[]): ExplicitExceptionEvidenc
   let cue = new RegExp(`\\b(?:${alternatives})\\b`).exec(text);
 
   if (cue === null) cue = /\b(?:but\s+)?leave\b(?=.*\balone\b)/.exec(text);
+  if (cue === null) cue = /\b(?:but\s+)?leave\b(?=.*\bout\b)/.exec(text);
   let cueStart = cue?.index;
   let cueEnd = cue === null ? undefined : cue.index + cue[0].length;
 

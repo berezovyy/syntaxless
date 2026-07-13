@@ -372,6 +372,16 @@ describe("exact lexical schedule and rejection surfaces", () => {
     "Every several minutes should be adequate.",
     "Turn off the daily notification at 9 a.m.",
     "The second Friday of every",
+    "My father phones on Tuesdays at seven in the evening.",
+    "Each day is made up of twenty-four hours.",
+    "Their membership is billed monthly on day 2.",
+    "I normally jog at 6:30 every morning before breakfast.",
+    "Friday follows Thursday in the calendar.",
+    "Coffee costs five dollars at 8am on weekdays.",
+    "An earlier operations guide suggested running it every three hours.",
+    "Somewhere around the first part of each month would be fine.",
+    "Don’t configure a retry every hour.",
+    "Run the two-hour check only until October 8, 2040.",
   ])("%s is explicitly rejected", async (phrase) => {
     const result = await parse(phrase);
 
@@ -647,6 +657,55 @@ describe("exact lexical schedule and rejection surfaces", () => {
       expect(result.intent as unknown).toEqual(intent);
     },
   );
+
+  test.each([
+    [
+      "Could we schedule the household backup on weekend days at 01:15?",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["saturday", "sunday"],
+        time: { hour: 1, minute: 15 },
+      },
+    ],
+    [
+      "Make the week’s sixth day at noon my regular maintenance slot.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["saturday"],
+        time: { hour: 12, minute: 0 },
+      },
+    ],
+    [
+      "On the second of each month at 00:30, archive the previous report.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 2, time: { hour: 0, minute: 30 } },
+    ],
+    [
+      "Repeat daily but leave 2041-07-04 out.",
+      { frequency: { unit: "day", interval: 1 }, exceptions: { dates: ["2041-07-04"] } },
+    ],
+    [
+      "Please process this on the last working day of every month.",
+      { frequency: { unit: "month", interval: 1 }, day: { type: "last_business_day" } },
+    ],
+    [
+      "On the 22nd, run this once every three months.",
+      { frequency: { unit: "month", interval: 3 }, dayOfMonth: 22 },
+    ],
+    [
+      "Morning won’t work. Set the daily reminder for 8:25 in the evening.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 20, minute: 25 } },
+    ],
+    [
+      "Please revise the cadence to monthly on day 25 instead of weekly.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 25 },
+    ],
+  ] as const)("preserves demonstrated v9 schedule evidence: %s", async (text, intent) => {
+    const result = await parse(text);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.intent as unknown).toEqual(intent);
+  });
 });
 
 describe("confidence bands", () => {

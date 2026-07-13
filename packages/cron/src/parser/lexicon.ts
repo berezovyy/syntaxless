@@ -557,6 +557,7 @@ export const DAY_RULES = {
   "final calendar day": "last_day_of_month",
   "last business day": "last_business_day",
   "final business day": "last_business_day",
+  "last working day": "last_business_day",
   "final working day": "last_business_day",
 } as const;
 
