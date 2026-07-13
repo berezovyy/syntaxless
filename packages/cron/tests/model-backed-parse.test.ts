@@ -382,6 +382,12 @@ describe("exact lexical schedule and rejection surfaces", () => {
     "Somewhere around the first part of each month would be fine.",
     "Don’t configure a retry every hour.",
     "Run the two-hour check only until October 8, 2040.",
+    "My sister attends yoga every Wednesday at 6 p.m.",
+    "Every week consists of seven days.",
+    "His rent is collected monthly on the first.",
+    "We usually eat breakfast at 8 a.m. on weekdays.",
+    "Our retired billing task executed on day 9 monthly.",
+    "Choose a date near the latter part of each month.",
   ])("%s is explicitly rejected", async (phrase) => {
     const result = await parse(phrase);
 
@@ -700,6 +706,63 @@ describe("exact lexical schedule and rejection surfaces", () => {
       { frequency: { unit: "month", interval: 1 }, dayOfMonth: 25 },
     ],
   ] as const)("preserves demonstrated v9 schedule evidence: %s", async (text, intent) => {
+    const result = await parse(text);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.intent as unknown).toEqual(intent);
+  });
+
+  test.each([
+    [
+      "Would you please check my queue every 23 minutes while I am on call?",
+      { frequency: { unit: "minute", interval: 23 } },
+    ],
+    [
+      "From Wednesday through Sunday, run it at 14:30 each day.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["wednesday", "thursday", "friday", "saturday", "sunday"],
+        time: { hour: 14, minute: 30 },
+      },
+    ],
+    [
+      "Use Mon., Thu., and Sat. at 8:15 a.m.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["monday", "thursday", "saturday"],
+        time: { hour: 8, minute: 15 },
+      },
+    ],
+    [
+      "Make the twenty-first at 08:00 the monthly review time.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 21, time: { hour: 8, minute: 0 } },
+    ],
+    [
+      "Could you schedule day 31 of each month for 15:45?",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 31, time: { hour: 15, minute: 45 } },
+    ],
+    [
+      "Set this up: each month, day 12, 22:22.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 12, time: { hour: 22, minute: 22 } },
+    ],
+    [
+      "Sorry—use Friday at 11:25 a.m., not Monday at five.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["friday"],
+        time: { hour: 11, minute: 25 },
+      },
+    ],
+    [
+      "No, business days at 09:05 instead of weekends.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: [...WEEKDAYS],
+        time: { hour: 9, minute: 5 },
+      },
+    ],
+  ] as const)("preserves demonstrated v10 schedule evidence: %s", async (text, intent) => {
     const result = await parse(text);
 
     expect(result.ok).toBe(true);

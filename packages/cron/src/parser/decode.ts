@@ -346,7 +346,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   const reportedOrHabitual =
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    (/\bi (?:normally|usually)\b/.test(text) ||
+    (/\b(?:i|we) (?:normally|usually)\b/.test(text) ||
       /\baccording to\b/.test(text) ||
       /\b(?:card|description|documentation|event|guide|manual|recipe|sign|timetable)\b.*\b(?:contains?|reads?|recommend(?:s|ed)?|says?|shows?|suggest(?:s|ed)?|written)\b/.test(
         text,
@@ -354,7 +354,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       /\b(?:contains?|reads?|says?|shows?|written)\b.*\b(?:card|description|documentation|event|manual|recipe|sign|timetable)\b/.test(
         text,
       ) ||
-      /^(?:her|his|our|the|their)\b.*\b(?:arrives?|billed|charged|chimes?|is open|renews?|works?)\b/.test(
+      /^(?:her|his|our|the|their)\b.*\b(?:arrives?|billed|charged|chimes?|is collected|is open|renews?|works?)\b/.test(
         text,
       ) ||
       /^(?:he|she|they)\s+(?:arrives?|leaves?|meets?|visits?|works?)\b/.test(text));
@@ -372,7 +372,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    /^my\s+\w+\s+(?:calls?|goes?|phones?|rings?|runs?|visits?|walks?|works?)\b/.test(text)
+    /^my\s+\w+\s+(?:attends?|calls?|goes?|phones?|rings?|runs?|visits?|walks?|works?)\b/.test(text)
   ) {
     return "descriptive-statement";
   }
@@ -382,7 +382,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    /^(?:every\s+(?:minute|hour|day|week|month)\b.*\b(?:contains?|equals?|has|is made up)\b|each\s+day\b.*\b(?:contains?|is made up)\b|(?:that|this|the)\s+(?:report|spreadsheet)\b.*\b(?:entries|totals|rows|columns)\b|i\s+(?:drink|exercise|jog|read|sleep|walk)\b|.+\bcosts?\b)/.test(
+    /^(?:every\s+(?:minute|hour|day|week|month)\b.*\b(?:consists?|contains?|equals?|has|is made up)\b|each\s+day\b.*\b(?:consists?|contains?|is made up)\b|(?:that|this|the)\s+(?:chart|report|spreadsheet)\b.*\b(?:averages|bars|entries|totals|rows|columns)\b|i\s+(?:drink|exercise|jog|read|sleep|walk)\b|.+\bcosts?\b)/.test(
       text,
     )
   ) {
@@ -445,7 +445,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   const historical =
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    (/\b(?:arrived|fired|former|formerly|had|happened|met|occurred|old|previous|previously|ran|rang|recommended|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
+    (/\b(?:arrived|executed|fired|former|formerly|had|happened|met|occurred|old|previous|previously|ran|rang|recommended|retired|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
       text,
     ) ||
       /\b(?:already|earlier today|last (?:month|week|year)|years? ago)\b/.test(text) ||
@@ -554,7 +554,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   }
 
   if (
-    /\b(?:near|around)\s+the\s+(?:first|last)\s+(?:part|portion)\s+of\s+(?:each|every|the)\s+month\b/.test(
+    /\b(?:near|around)\s+the\s+(?:first|last|latter)\s+(?:part|portion)\s+of\s+(?:each|every|the)\s+month\b/.test(
       text,
     )
   ) {
@@ -1638,6 +1638,7 @@ function explicitDayOfMonth(entries: readonly Entry[]): number | undefined {
     new RegExp(`\\b(?:the\\s+)?(?:${valuePattern})\\s+(?:a\\s+)?monthly\\b`),
     new RegExp(`\\b(?:the\\s+)?(?:${valuePattern})\\s+(?:every|each)\\s+month\\b`),
     new RegExp(`\\bmonthly\\b.*?\\b(?:on|for)\\s+(?:the\\s+)?(?:${valuePattern})\\b`),
+    new RegExp(`\\bmake\\s+(?:the\\s+)?(?:${valuePattern})\\b.*\\bmonthly\\b`),
     new RegExp(`\\bon\\s+(?:the\\s+)?(?:${valuePattern})\\b(?=\\s*(?:,|$|at\\b|if\\b))`),
   ];
 
@@ -1712,7 +1713,7 @@ function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefin
       cueText,
     ) ||
     (hasDirectScheduleRequest(cueText) &&
-      /(?:\bon\b|^(?:mon|tue|wed|thu|fri|sat|sun)\b|\b(?:fortnightly|weekly)\b|\b(?:schedule|set)\b|\b(?:make|schedule|set)\s+(?:mon(?:day)?s?|tue(?:sday)?s?|wed(?:nesday)?s?|thu(?:rsday)?s?|fri(?:day)?s?|sat(?:urday)?s?|sun(?:day)?s?)\b|\b(?:let|make)\s+[a-z]+\s+(?:be|the)\b)/.test(
+      /(?:\bon\b|^(?:mon|tue|wed|thu|fri|sat|sun)\b|^use\s+(?:mon|tue|wed|thu|fri|sat|sun)\b|\b(?:fortnightly|weekly)\b|\b(?:schedule|set)\b|\b(?:make|schedule|set)\s+(?:mon(?:day)?s?|tue(?:sday)?s?|wed(?:nesday)?s?|thu(?:rsday)?s?|fri(?:day)?s?|sat(?:urday)?s?|sun(?:day)?s?)\b|\b(?:let|make)\s+[a-z]+\s+(?:be|the)\b)/.test(
         cueText,
       ));
 
@@ -1755,6 +1756,11 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
         : /^\d+$/.test(match[1]!)
           ? Number(match[1])
           : numberFrom(match[1]!);
+  }
+
+  if ((match === null || hour === undefined) && hasDirectScheduleRequest(text)) {
+    match = /\b(\d{1,2}):(\d{2})\b/.exec(text);
+    hour = match === null ? undefined : Number(match[1]);
   }
 
   if (match === null) return undefined;
@@ -1858,7 +1864,9 @@ function explicitNamedTime(entries: readonly Entry[]): TimeOfDay | undefined {
 
 function dailyCueIntroducesWeekdayRange(text: string): boolean {
   return (
-    /\b(?:every|each)\s+day\s+from\b/.test(text) && explicitWeekdayRange(text, true) !== undefined
+    explicitWeekdayRange(text, true) !== undefined &&
+    (/\b(?:every|each)\s+day\s+from\b/.test(text) ||
+      /\bfrom\b.*\b(?:through|to|until)\b.*\b(?:every|each)\s+day\b/.test(text))
   );
 }
 
@@ -2431,6 +2439,16 @@ export function decodeIntent(
     hour = namedTimeEvidence.hour;
     minute = namedTimeEvidence.minute;
     meridiem = undefined;
+  }
+
+  if (
+    /\bi am\b/.test(text) &&
+    !/\b(?:at|around)\s+(?:\d{1,2}(?::\d{2})?|noon|midnight)\b/.test(text)
+  ) {
+    hour = undefined;
+    minute = undefined;
+    meridiem = undefined;
+    minuteRelation = undefined;
   }
 
   if (weekdays.length === 0 && trustedScheduleKind === "weekly") {

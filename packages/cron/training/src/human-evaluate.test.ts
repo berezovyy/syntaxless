@@ -413,3 +413,37 @@ describe("consumed human-v9 behavioral corpus", () => {
     for (const support of familyCounts.values()) expect(support).toBe(10);
   });
 });
+
+describe("consumed human-v10 behavioral corpus", () => {
+  test("remains isolated, balanced, and permanently unavailable as fresh acceptance", async () => {
+    const path = resolveRepo("packages/cron/evaluation/human-v10.jsonl");
+    const records = parseHumanCorpus(await readFile(path, "utf8"));
+
+    expect(records).toHaveLength(100);
+    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
+    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
+
+    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
+      checked: true,
+      outsideTrainingData: true,
+      incompatibleWithTrainingSchema: true,
+      absentFromGeneratorSources: true,
+    });
+
+    await expect(
+      assertAcceptanceFresh(
+        "acceptance",
+        "58a1380346c8f7c78ec532c2763778101eaa50c306b04ce55b5d4726ca841186",
+      ),
+    ).rejects.toThrow(/already been consumed/);
+
+    const familyCounts = new Map<string, number>();
+
+    for (const record of records) {
+      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
+    }
+
+    expect(familyCounts.size).toBe(10);
+    for (const support of familyCounts.values()) expect(support).toBe(10);
+  });
+});

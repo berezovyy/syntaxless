@@ -61,6 +61,8 @@ describe("actionable correction scoping", () => {
       "Set the daily reminder for 8:25 in the evening.",
     ],
     ["Please revise the cadence to monthly on day 25 instead of weekly.", "monthly on day 25"],
+    ["Sorry—use Friday at 11:25 a.m., not Monday at five.", "use Friday at 11:25 a.m."],
+    ["No, business days at 09:05 instead of weekends.", "business days at 09:05"],
   ])("keeps only the selected replacement in %s", (source, expected) => {
     expect(scopeActionableCorrection(source)).toBe(expected);
   });

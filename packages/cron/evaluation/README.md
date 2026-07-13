@@ -81,3 +81,21 @@ clocks, night qualifiers, numeric relative clocks, weekday abbreviations,
 alternate-week wording, further correction forms, prose/reporting contexts,
 vague schedules, prohibitions, and incomplete ranges. The acceptance hash is
 consumed. A later 100/100 result is development regression evidence only.
+
+`human-v8.jsonl` is a seventh coding-agent-authored, non-independent set of 100
+balanced examples. Its one fresh run scored 82/100, with 12 silent meaning
+changes and 9 false accepts. Its consumed failures guided decoder and safety
+changes; the later 100/100 score is regression evidence only.
+
+`human-v9.jsonl` is an eighth coding-agent-authored, non-independent set of 100
+balanced examples. The initially authored gold scored 75/100, with 19 silent
+meaning changes and 9 false accepts. A subsequent gold audit corrected an
+inclusive-bound convention error and two ambiguous author assumptions. Every
+intermediate and final fixture hash remains consumed. The corrected set now
+scores 100/100 only as development regression evidence.
+
+`human-v10.jsonl` is a ninth coding-agent-authored, non-independent set of 100
+balanced examples. Its only fresh run scored 88/100, with 9 silent meaning
+changes and 6 false accepts, so promotion failed. Its later 100/100 result is
+development regression evidence only; its wording and hash are permanently
+consumed.
