@@ -55,6 +55,7 @@ export function scopeActionableCorrection(text: string): string {
     [/^(?:apologies|sorry)\s*[-,:]\s*make it\s+(.+?),\s+not\b/i, (match) => `make ${match[1]!}`],
     [/^make that\s+(.+?),\s+instead of\b/i, (match) => `make ${match[1]!}`],
     [/^(?:sorry,?\s+)?i meant\s+(.+?)\s+rather than\b/i, (match) => match[1]!],
+    [/^no,?\s+i meant\s+(.+?)\s+rather than\b/i, (match) => match[1]!],
     [/^(?:sorry,?\s+)?i meant\s+(.+?),\s+not\b/i, (match) => match[1]!],
     [/^i said\b.+?,\s+but i meant\s+(.+)$/i, (match) => match[1]!],
     [
@@ -93,11 +94,17 @@ export function scopeActionableCorrection(text: string): string {
     ],
     [/^the\b[^;]*\bwas wrong;\s*(.+)$/i, (match) => match[1]!],
     [/^the\b[^;]*\bwas a mistake;\s*(.+)$/i, (match) => match[1]!],
+    [/^[^.]+\bis wrong\.\s*((?:make|run|schedule|send|set|use)\b.+)$/i, (match) => match[1]!],
     [/^[^.]+\bwon't work\.\s*((?:make|run|schedule|send|set|use)\b.+)$/i, (match) => match[1]!],
     [/^revise that to\s+(.+?),\s*not\b/i, (match) => match[1]!],
     [/^revise\b.*?\bto\s+(.+?),\s*rather than\b/i, (match) => match[1]!],
     [/^(?:please\s+)?revise\b.*?\bto\s+(.+?)\s+instead of\b/i, (match) => match[1]!],
     [/^instead of\b[^,]*,\s*(.+)$/i, (match) => match[1]!],
+    [
+      /^(?:sorry,?\s+)?not\b.+?after all\s*[-—]\s*((?:make|run|schedule|send|set|use)\b.+)$/i,
+      (match) => match[1]!,
+    ],
+    [/^the old request\b.+?;\s*replace it with\s+(.+)$/i, (match) => match[1]!],
   ];
 
   for (const [pattern, select] of patterns) {

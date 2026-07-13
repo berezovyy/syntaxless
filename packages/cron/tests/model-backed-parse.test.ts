@@ -388,6 +388,17 @@ describe("exact lexical schedule and rejection surfaces", () => {
     "We usually eat breakfast at 8 a.m. on weekdays.",
     "Our retired billing task executed on day 9 monthly.",
     "Choose a date near the latter part of each month.",
+    "A month has roughly four weeks, and each week has seven days.",
+    "Elena attends rehearsals every Tuesday at 7 p.m.",
+    "The sale repeats each Friday at noon; I am only describing it.",
+    "An archived issue requested a daily 6 a.m. notification.",
+    "The tooltip displays: schedule Wednesday at noon.",
+    "Choose between weekly and monthly later; do nothing now.",
+    "Compare Mondays at eight with Thursdays at ten without choosing either.",
+    "Use one of the weekdays, whichever looks suitable.",
+    "Wake me after three hours.",
+    "Run this once on 2056-04-10 at noon.",
+    "Set a one-time alarm for 7:10 a.m.",
   ])("%s is explicitly rejected", async (phrase) => {
     const result = await parse(phrase);
 
@@ -478,7 +489,33 @@ describe("exact lexical schedule and rejection surfaces", () => {
         weekdays: ["monday"],
       },
     ],
+    ["run.every.8.minutes please", { frequency: { unit: "minute", interval: 8 } }],
+    [
+      "Please use the first and fifth days of the week at 8:10.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["monday", "friday"],
+        time: { hour: 8, minute: 10 },
+      },
+    ],
   ] as const)("reconciles explicit human schedule evidence in %s", async (phrase, intent) => {
+    const result = await parse(phrase);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.intent as unknown).toEqual(intent);
+  });
+
+  test.each([
+    [
+      "No, I meant the 23rd of every month, rather than the 13th.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 23 },
+    ],
+    [
+      "Evening is wrong. Set it every day at 6:20 in the morning.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 6, minute: 20 } },
+    ],
+  ] as const)("keeps the actionable side of correction %s", async (phrase, intent) => {
     const result = await parse(phrase);
 
     expect(result.ok).toBe(true);

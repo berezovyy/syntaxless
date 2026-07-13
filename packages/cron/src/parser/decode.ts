@@ -230,7 +230,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     /\b(?:at\s+(?:\d{1,2}|noon|midnight)|\d{1,2}\s*(?:am|pm)|half\s+past|quarter\s+(?:past|to)|daily|each|every|everyday|hourly|minutes?|hours?|days?|weeks?|months?|monthly|morning|nightly|once\s+(?:a|per)|weekly|weekdays?|weekends?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/;
 
   const requestQuestionPrefix =
-    /\b(?:can|could|would|will)\s+you\b/.test(text) ||
+    /\b(?:can|could|would|will)\s+(?:u|you)\b/.test(text) ||
     /\b(?:can|could|would|will)\s+we\s+(?:arrange|create|make|run|schedule|set)\b/.test(text) ||
     /\b(?:can|could|would)\s+(?:this|it)\s+(?:be\s+)?(?:arranged|happen|recur|repeat|run|scheduled)\b/.test(
       text,
@@ -277,6 +277,9 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       scheduleCue.test(text)) ||
       /\beither\b.*\bor\b/.test(text) ||
       /\b(?:whether|between)\b.*\bor\b/.test(text) ||
+      (/\bbetween\b.*\band\b/.test(text) && hasCompetingScheduleValues) ||
+      (/^compare\b/.test(text) && hasCompetingScheduleValues) ||
+      /\bone\s+of\s+the\s+weekdays?\b.*\b(?:whichever|unsure|not sure)\b/.test(text) ||
       (/\bor\b/.test(text) && hasCompetingScheduleValues));
 
   if (uncertainAlternative) return "uncertain-alternative";
@@ -348,10 +351,10 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     !hasDirectScheduleRequest(text) &&
     (/\b(?:i|we) (?:normally|usually)\b/.test(text) ||
       /\baccording to\b/.test(text) ||
-      /\b(?:brochure|card|description|documentation|event|graph|guide|log|manual|recipe|sign|test|timetable)\b.*\b(?:contains?|mentions?|prints?|reads?|recommend(?:s|ed)?|says?|shows?|suggest(?:s|ed)?|written)\b/.test(
+      /\b(?:brochure|card|description|documentation|event|graph|guide|log|manual|recipe|sign|test|timetable|tooltip)\b.*\b(?:contains?|displays?|mentions?|prints?|reads?|recommend(?:s|ed)?|says?|shows?|suggest(?:s|ed)?|written)\b/.test(
         text,
       ) ||
-      /\b(?:contains?|mentions?|prints?|reads?|says?|shows?|written)\b.*\b(?:brochure|card|description|documentation|event|graph|log|manual|recipe|sign|test|timetable)\b/.test(
+      /\b(?:contains?|displays?|mentions?|prints?|reads?|says?|shows?|written)\b.*\b(?:brochure|card|description|documentation|event|graph|log|manual|recipe|sign|test|timetable|tooltip)\b/.test(
         text,
       ) ||
       /^(?:her|his|our|the|their)\b.*\b(?:arrives?|billed|charged|chimes?|is collected|is open|renews?|works?)\b/.test(
@@ -366,6 +369,28 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     !hasDirectScheduleRequest(text) &&
     /^(?:i|we|you)\s+(?:eat|have|meet|work)\b/.test(text)
   ) {
+    return "descriptive-statement";
+  }
+
+  if (
+    scheduleCue.test(text) &&
+    !hasDirectScheduleRequest(text) &&
+    /^(?:a|one)\s+(?:minute|hour|day|week|month)\b.*\b(?:consists?|contains?|equals?|has|is made up)\b/.test(
+      text,
+    )
+  ) {
+    return "descriptive-statement";
+  }
+
+  if (
+    scheduleCue.test(text) &&
+    !hasDirectScheduleRequest(text) &&
+    /^[a-z]+\s+(?:attends?|calls?|goes?|phones?|visits?|walks?|works?)\b/.test(text)
+  ) {
+    return "descriptive-statement";
+  }
+
+  if (/\bi\s+am\s+only\s+(?:describing|discussing|mentioning|quoting)\b/.test(text)) {
     return "descriptive-statement";
   }
 
@@ -445,9 +470,10 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   const historical =
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    (/\b(?:arrived|executed|fired|former|formerly|had|happened|met|occurred|old|previous|previously|ran|rang|recommended|retired|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
+    (/\b(?:archived|arrived|executed|fired|former|formerly|had|happened|met|occurred|old|previous|previously|ran|rang|recommended|retired|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
       text,
     ) ||
+      /\b(?:archived|closed|historical|old|previous)\s+(?:issue|request|ticket)\b/.test(text) ||
       /\b(?:already|earlier today|last (?:month|week|year)|years? ago)\b/.test(text) ||
       /\bbefore\b.*\b(?:migration|merger|outage|retired|retirement|shutdown)\b/.test(text));
 
@@ -558,7 +584,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       /\bnext\s+(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b.*\bonly\b/.test(
         text,
       ) ||
-      /\b(?:in\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:minutes?|hours?|days?|weeks?)|once\s+at|one\s+time\s+at)\b/.test(
+      /\b(?:(?:in|after)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|ninety)\s+(?:minutes?|hours?|days?|weeks?)|once\s+(?:at|on)|one[-\s]+time\s+(?:alarm\s+for|at|on))\b/.test(
         text,
       ) ||
       /\b(?:appointment|meeting)\b.*\b(?:for|on)\s+(?:the\s+)?\d{1,2}(?:st|nd|rd|th)?\b/.test(
@@ -635,14 +661,14 @@ function unrequestedDeclarativeContext(text: string): boolean {
  * schedule values by itself. */
 function hasDirectScheduleRequest(text: string): boolean {
   return (
-    /(?:^|[,;]\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|archive|arrange|begin|book|charge|check|close|configure|continue|create|do|enable|give|have|issue|keep|let|make|meet|notify|perform|ping|poll|put|refresh|remind|repeat|run|schedule|send|set|start|take|trigger|use)\b/.test(
+    /(?:^|[,;]\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|archive|arrange|begin|book|charge|check|close|configure|continue|create|do|enable|give|have|issue|keep|let|make|meet|notify|perform|ping|poll|put|refresh|remind|repeat|run|schedule|send|set|start|take|trigger|use|wake)\b/.test(
       text,
     ) ||
     /\bplease\s+(?:add|arrange|book|configure|create|make|perform|remind|run|schedule|send|set)\b/.test(
       text,
     ) ||
     /\b(?:i(?:'d| would) like|i(?:\s+still)?\s+(?:need|want)|let's)\b/.test(text) ||
-    /\b(?:can|could|may|will|would)\s+(?:i|you)\b/.test(text)
+    /\b(?:can|could|may|will|would)\s+(?:i|u|you)\b/.test(text)
   );
 }
 
@@ -1034,7 +1060,7 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
   const numberSurface = `(?:\\d+|(?:${numberWords})(?:[-\\s](?:${numberWords}))?)`;
 
   const ordinalInterval = new RegExp(
-    `\\bevery\\s+(second|third|fourth)\\s+(minutes?|hours?|days?|weeks?|months?)\\b`,
+    `\\bevery[-\\s]+(second|third|fourth)[-\\s]+(minutes?|hours?|days?|weeks?|months?)\\b`,
   ).exec(text);
 
   if (ordinalInterval !== null) {
@@ -1671,6 +1697,17 @@ function explicitDayOfMonth(entries: readonly Entry[]): number | undefined {
     const surface = match.slice(1).find((value) => value !== undefined);
 
     if (surface === undefined) continue;
+    const surfaceOffset = match[0].lastIndexOf(surface);
+    const afterSurface = text.slice(match.index + surfaceOffset + surface.length);
+
+    if (
+      /^\s+(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/.test(
+        afterSurface,
+      )
+    ) {
+      continue;
+    }
+
     const numeric = /^\d+$/.test(surface) ? Number(surface) : DAY_ORDINALS.indexOf(surface) + 1;
 
     if (validateDayOfMonth(numeric) === null) return numeric;
@@ -1756,6 +1793,10 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
     !/^(?:daily|each\s+day|every\s+day|monthly|weekly)\b/.test(text) &&
     !/^at\b.*\b(?:daily|each\s+day|every\s+day)\b/.test(text)
   ) {
+    return undefined;
+  }
+
+  if (/\bat\s+(?:[a-z]+(?:-[a-z]+)?|\d+)[-\s]+(?:minutes?|hours?)[-\s]+intervals?\b/.test(text)) {
     return undefined;
   }
 
@@ -1871,7 +1912,8 @@ function explicitNamedTime(entries: readonly Entry[]): TimeOfDay | undefined {
     !hasDirectScheduleRequest(text) &&
     !/^(?:at\b|daily\b|each\b|every\b|hourly\b|monthly\b|on\b|weekly\b|weekdays?\b|weekends?\b)/.test(
       text,
-    )
+    ) &&
+    !/\b(?:recur|repeat)\b.*\b(?:at|around)\s+(?:midnight|noon|midday)\b/.test(text)
   ) {
     return undefined;
   }
@@ -2535,6 +2577,8 @@ export function decodeIntent(
   }
 
   if (ordinalEvidence !== undefined) {
+    const visibleOrdinalWeekdays = weekdaysIn(text, true);
+
     if (
       (intent.ordinalWeekday !== undefined &&
         (intent.ordinalWeekday.ordinal !== ordinalEvidence.ordinal ||
@@ -2542,7 +2586,7 @@ export function decodeIntent(
       (intent.dayOfMonth !== undefined && dayOfMonthEvidence !== undefined) ||
       intent.day !== undefined ||
       (intent.weekdays !== undefined &&
-        intent.weekdays.some((weekday) => weekday !== ordinalEvidence.weekday))
+        visibleOrdinalWeekdays.some((weekday) => weekday !== ordinalEvidence.weekday))
     ) {
       throw new RangeError(
         "decodeIntent: predicted selector conflicts with explicit ordinal weekday",
@@ -2579,7 +2623,12 @@ export function decodeIntent(
   if (exceptionEvidence !== undefined) {
     intent.exceptions = exceptionEvidence.exceptions;
 
-    if (exceptionEvidence.selectorWeekdays.length > 0) {
+    if (
+      exceptionEvidence.selectorWeekdays.length > 0 &&
+      intent.ordinalWeekday === undefined &&
+      intent.dayOfMonth === undefined &&
+      intent.day === undefined
+    ) {
       intent.frequency.unit = "week";
       intent.weekdays = exceptionEvidence.selectorWeekdays;
     } else {
@@ -2637,6 +2686,25 @@ export function decodeIntent(
     };
 
     intent.weekdays = [descriptiveWeekday];
+    delete intent.dayOfMonth;
+    delete intent.ordinalWeekday;
+    delete intent.day;
+  }
+
+  const positionalWeekdayList =
+    /\b((?:first|second|third|fourth|fifth|sixth|seventh)(?:\s*(?:,|and)\s*(?:first|second|third|fourth|fifth|sixth|seventh))+?)\s+days?\s+of\s+the\s+week\b/.exec(
+      text,
+    );
+
+  if (positionalWeekdayList !== null) {
+    const positions = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh"];
+
+    intent.frequency.unit = "week";
+
+    intent.weekdays = [
+      ...positionalWeekdayList[1]!.matchAll(/first|second|third|fourth|fifth|sixth|seventh/g),
+    ].map((match) => WEEKDAY_SEQUENCE[positions.indexOf(match[0])]!);
+
     delete intent.dayOfMonth;
     delete intent.ordinalWeekday;
     delete intent.day;

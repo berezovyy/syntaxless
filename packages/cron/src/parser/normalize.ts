@@ -19,6 +19,15 @@ export function normalize(text: string): string {
   // to values carrying an explicit meridiem so decimal/version numbers remain
   // untouched.
   value = value.replace(/\b(\d{1,2})\.(\d{2})\s*(am|pm)\b/g, "$1:$2 $3");
+
+  // Speech-to-text and terse chat sometimes use full stops as word separators.
+  // Limit this repair to a complete recurrence-shaped sequence so version
+  // numbers and ordinary prose punctuation retain their meaning.
+  value = value.replace(
+    /\b(run|schedule|repeat)\.(every|each)\.(\d+)\.(minutes?|hours?|days?|weeks?|months?)\b/g,
+    "$1 $2 $3 $4",
+  );
+
   // Repair only boundaries whose interpretation is unambiguous. A generic
   // letter/digit split would corrupt ordinals (`15th`) and identifiers (`v2`).
   value = value.replace(/\b(every|each)\s*(\d+)/g, "$1 $2");

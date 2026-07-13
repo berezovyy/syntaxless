@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 
+import { normalizeForKey } from "./corpus/normalize";
 import { resolveRepo } from "./evaluate";
 import { coarseText } from "./fingerprint";
 import {
@@ -472,5 +473,56 @@ describe("human calibration-v2 behavioral corpus", () => {
 
     expect(familyCounts.size).toBe(11);
     for (const support of familyCounts.values()) expect(support).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe("consumed human-v11 behavioral corpus", () => {
+  test("remains isolated, distributed, and unavailable as fresh acceptance", async () => {
+    const path = resolveRepo("packages/cron/evaluation/human-v11.jsonl");
+    const records = parseHumanCorpus(await readFile(path, "utf8"));
+
+    expect(records).toHaveLength(120);
+    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
+    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
+
+    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
+      checked: true,
+      outsideTrainingData: true,
+      incompatibleWithTrainingSchema: true,
+      absentFromGeneratorSources: true,
+    });
+
+    for (const hash of [
+      "b221fbc00e43c3e5833c99cb3d5f69b8a7a5a841c9dd447944fe581cc96987c7",
+      "5e8a2ce9fd014e67e781e67a316c7a5e24db593dd648f37da9322272e4613670",
+    ]) {
+      await expect(assertAcceptanceFresh("acceptance", hash)).rejects.toThrow(
+        /already been consumed/,
+      );
+    }
+
+    const familyCounts = new Map<string, number>();
+
+    for (const record of records) {
+      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
+    }
+
+    expect(familyCounts.size).toBe(12);
+    for (const support of familyCounts.values()) expect(support).toBe(10);
+
+    const priorKeys = new Set<string>();
+
+    for (const name of [
+      ...Array.from({ length: 10 }, (_, index) => `human-v${index + 1}.jsonl`),
+      "human-calibration-v2.jsonl",
+    ]) {
+      const prior = parseHumanCorpus(
+        await readFile(resolveRepo(`packages/cron/evaluation/${name}`), "utf8"),
+      );
+
+      for (const record of prior) priorKeys.add(normalizeForKey(record.text));
+    }
+
+    expect(records.filter((record) => priorKeys.has(normalizeForKey(record.text)))).toEqual([]);
   });
 });

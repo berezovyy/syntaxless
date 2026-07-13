@@ -112,3 +112,15 @@ the public parser scored 100/100. On raw decoding, the maximum safe-coverage
 point is a 0.4 threshold (40% coverage, zero observed risk); the existing 0.5
 public floor is therefore retained rather than tuned downward. This result is
 calibration/development evidence only and does not authorize model promotion.
+
+`human-v11.jsonl` is a tenth coding-agent-authored, non-independent acceptance
+set, created after the calibration changes were frozen. It contains 120 new
+examples across twelve equally supported families, with no normalized wording
+overlap against the earlier human fixtures. Its one permitted acceptance run
+scored 95/120 (79.2%), with 17 silent meaning changes and 11 false accepts, so
+promotion failed. A gold audit corrected two authoring mistakes: the public
+`last_business_day` spelling and the exclusive end convention for `between`.
+Both the original and corrected fixture hashes are consumed. After using the
+failures for safety and decoder development, the corrected gold moved the
+audited baseline to 97/120 and ultimately reached 120/120 only as regression
+evidence; those later results are not fresh promotion evidence.
