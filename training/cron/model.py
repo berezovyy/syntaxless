@@ -31,6 +31,19 @@ SCHEDULE_KIND_NAMES = (
     "ambiguous",
 )
 
+# Must match packages/cron/src/model/speech-acts.ts. Never reorder.
+SPEECH_ACT_NAMES = (
+    "none",
+    "request",
+    "descriptive",
+    "question",
+    "quoted",
+    "correction",
+    "one-off",
+    "cancel",
+    "incomplete",
+)
+
 
 def fake_quantize(weight: torch.Tensor, bits: int) -> torch.Tensor:
     """Symmetric per-tensor int-`bits` quantization with a straight-through pass.
@@ -102,6 +115,8 @@ class Tagger(nn.Module):
         rows_per_token: int,
         role_classes: int,
         schedule_kind_classes: int = 0,
+        speech_act_classes: int = 0,
+        actionable_head: bool = False,
         hidden: int = 32,
         kernel_size: int = 3,
         quantization_bits: int = 6,
@@ -111,6 +126,8 @@ class Tagger(nn.Module):
         self.rows_per_token = rows_per_token
         self.role_classes = role_classes
         self.schedule_kind_classes = schedule_kind_classes
+        self.speech_act_classes = speech_act_classes
+        self.actionable_head_enabled = bool(actionable_head)
         self.hidden = hidden
         self.kernel_size = kernel_size
         self.quantization_bits = quantization_bits
@@ -131,6 +148,14 @@ class Tagger(nn.Module):
             QLinear(hidden, schedule_kind_classes, quantization_bits)
             if schedule_kind_classes > 0
             else None
+        )
+        self.speech_act_head = (
+            QLinear(hidden, speech_act_classes, quantization_bits)
+            if speech_act_classes > 0
+            else None
+        )
+        self.actionable_head = (
+            QLinear(hidden, 1, quantization_bits) if actionable_head else None
         )
         self._qat = False
 
@@ -161,7 +186,7 @@ class Tagger(nn.Module):
 
     def forward(
         self, rows: torch.Tensor, valid: torch.Tensor, neighbors: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         batch, width, _ = rows.shape
         embedding_weight = self.embedding.weight
         if self.qat:
@@ -198,7 +223,17 @@ class Tagger(nn.Module):
             if self.schedule_kind_head is not None
             else pooled.new_empty((batch, 0))
         )
-        return roles, boundary, schedule_kind
+        speech_act = (
+            self.speech_act_head(pooled[:, 0, :])
+            if self.speech_act_head is not None
+            else pooled.new_empty((batch, 0))
+        )
+        actionable = (
+            self.actionable_head(gated).squeeze(-1)
+            if self.actionable_head is not None
+            else gated.new_empty((batch, 0))
+        )
+        return roles, boundary, schedule_kind, speech_act, actionable
 
 
 def parameter_counts(model: nn.Module) -> dict[str, int]:

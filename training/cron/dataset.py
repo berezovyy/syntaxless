@@ -1,9 +1,11 @@
 """Shard loader, length-bucketed batching, and split regeneration.
 
-The shard contract is owned by Phase 13 (`packages/cron/training/src/featurize.ts`):
-a `<prefix>.json` manifest plus six `<prefix>.<field>.bin` files. Nothing here
-parses cron text: the loader reads labels and boundaries that Phase 13 recorded
-from the generator, and the regenerator drives the committed TypeScript tools.
+The shard contract is owned by TypeScript (`packages/cron/training/src/featurize.ts`):
+a `<prefix>.json` manifest plus `<prefix>.<field>.bin` files for rows, labels,
+boundaries, kinds, neighbors, offsets, frames, speech, and actionable. Nothing
+here parses cron text: the loader reads labels and discourse supervision that
+the generator recorded, and the regenerator drives the committed TypeScript
+tools.
 """
 from __future__ import annotations
 
@@ -36,6 +38,53 @@ SCHEDULE_KIND_NAMES = (
     "ambiguous",
 )
 SCHEDULE_KIND_INDEX = {name: index for index, name in enumerate(SCHEDULE_KIND_NAMES)}
+
+# Must match packages/cron/src/model/speech-acts.ts. Never reorder.
+SPEECH_ACT_NAMES = (
+    "none",
+    "request",
+    "descriptive",
+    "question",
+    "quoted",
+    "correction",
+    "one-off",
+    "cancel",
+    "incomplete",
+)
+SPEECH_ACT_INDEX = {name: index for index, name in enumerate(SPEECH_ACT_NAMES)}
+
+# Must match packages/cron/src/model/labels.ts.
+ROLE_LABELS = (
+    "O",
+    "RECUR",
+    "INTERVAL",
+    "WEEKDAY",
+    "DAYGROUP",
+    "DOM",
+    "ORDINAL",
+    "HOUR",
+    "MINUTE",
+    "MERIDIEM",
+    "BOUND",
+    "EXCEPT",
+    "COUNT",
+    "GLUE",
+    "EDGE",
+)
+CONTENT_LABELS = {
+    "INTERVAL",
+    "WEEKDAY",
+    "DAYGROUP",
+    "DOM",
+    "ORDINAL",
+    "HOUR",
+    "MINUTE",
+    "MERIDIEM",
+    "COUNT",
+}
+CONTENT_LABEL_IDS = {
+    index for index, name in enumerate(ROLE_LABELS) if name in CONTENT_LABELS
+}
 
 
 def schedule_kind_for_frame(frame_name: str) -> int:
@@ -110,7 +159,7 @@ def _sha256(path: Path) -> str:
 
 @dataclass(slots=True)
 class ShardManifest:
-    """The six-field manifest written by Phase 13."""
+    """The featurizer manifest: roles, frames, and optional discourse heads."""
 
     fingerprints: list[str]
     role_classes: int
@@ -120,6 +169,9 @@ class ShardManifest:
     format: dict[str, dict[str, str]]
     frame_names: list[str]
     frame_counts: list[int]
+    speech_act_classes: int
+    speech_act_names: list[str]
+    actionable_counts: dict[str, int]
 
     @classmethod
     def load(cls, prefix: Path) -> "ShardManifest":
@@ -133,6 +185,12 @@ class ShardManifest:
             format=parsed["format"],
             frame_names=list(parsed.get("frameNames", [])),
             frame_counts=[int(value) for value in parsed.get("frameCounts", [])],
+            speech_act_classes=int(parsed.get("speechActClasses", 0)),
+            speech_act_names=list(parsed.get("speechActNames", [])),
+            actionable_counts={
+                str(key): int(value)
+                for key, value in parsed.get("actionableCounts", {}).items()
+            },
         )
 
 
@@ -155,6 +213,8 @@ class Dataset:
         self.neighbors = self._load("neighbors")
         self.offsets = self._load("offsets")
         self.frames = self._load("frames") if "frames" in self.manifest.format else None
+        self.speech = None
+        self.actionable = None
 
         self.sequences = int(self.offsets.shape[0]) - 1
         self.token_count = int(self.offsets[-1])
@@ -185,11 +245,54 @@ class Dataset:
             actual_counts = [int(members.size) for members in self.frame_members]
             if self.manifest.frame_counts and actual_counts != self.manifest.frame_counts:
                 raise ValueError(f"{self.prefix}: frame counts do not match frames shard")
+        self._load_discourse()
 
     def _load(self, key: str) -> np.ndarray:
         spec = self.manifest.format[key]
         dtype = NUMPY_DTYPES[spec["dtype"]]
         return np.memmap(f"{self.prefix}{spec['suffix']}", dtype=dtype, mode="r")
+
+    def _load_discourse(self) -> None:
+        """Load speech-act / actionable shards, or synthesize them for old prefixes."""
+        if "speech" in self.manifest.format:
+            speech = self._load("speech")
+            if speech.size != self.sequences:
+                raise ValueError(
+                    f"{self.prefix}: speech has {speech.size} values, "
+                    f"expected {self.sequences}"
+                )
+            self.speech = speech.astype(np.int64, copy=False)
+        if "actionable" in self.manifest.format:
+            actionable = self._load("actionable")
+            if actionable.size != self.token_count:
+                raise ValueError(
+                    f"{self.prefix}: actionable has {actionable.size} values, "
+                    f"expected {self.token_count}"
+                )
+            self.actionable = actionable.astype(np.uint8, copy=False)
+        if self.speech is not None and self.actionable is not None:
+            return
+        speech = np.full(self.sequences, SPEECH_ACT_INDEX["none"], dtype=np.int64)
+        actionable = np.zeros(self.token_count, dtype=np.uint8)
+        for index in range(self.sequences):
+            start = int(self.offsets[index])
+            end = int(self.offsets[index + 1])
+            labels = self.labels[start:end]
+            kinds = self.kinds[start:end]
+            has_content = bool(
+                np.any(
+                    (kinds != 3)
+                    & np.isin(labels, list(CONTENT_LABEL_IDS))
+                )
+            )
+            if has_content:
+                speech[index] = SPEECH_ACT_INDEX["request"]
+                content = (kinds != 3) & np.isin(labels, list(CONTENT_LABEL_IDS))
+                actionable[start:end] = content.astype(np.uint8)
+        if self.speech is None:
+            self.speech = speech
+        if self.actionable is None:
+            self.actionable = actionable
 
     def __len__(self) -> int:
         return self.sequences
@@ -209,6 +312,7 @@ class Dataset:
         balance_kinds: bool = False,
         balance_schedule_kinds: bool = False,
         frame_balance_power: float = 0.5,
+        max_sequences: int | None = None,
     ):
         """Yield batches of sequence indices, grouped by similar length.
 
@@ -257,13 +361,16 @@ class Dataset:
             selected = np.concatenate(draws)
             rng.shuffle(selected)
 
+        if max_sequences is not None and selected.size > max_sequences:
+            selected = rng.choice(selected, size=max_sequences, replace=False)
+
         tie_break = np.arange(selected.size)
         if shuffle_seed is not None:
             permutation = rng.permutation(selected.size)
             tie_break = np.empty(selected.size, dtype=np.int64)
             tie_break[permutation] = np.arange(selected.size)
         order = selected[np.lexsort((tie_break, self.lengths[selected]))]
-        for start in range(0, self.sequences, batch_size):
+        for start in range(0, order.size, batch_size):
             yield [int(index) for index in order[start : start + batch_size]]
 
     def batch(self, indices, device: str | None = None) -> dict:
@@ -286,6 +393,8 @@ class Dataset:
         kinds = np.full((count, width), 3, dtype=np.int64)
         neighbors = np.full((count, width, 2), -1, dtype=np.int64)
         valid = np.zeros((count, width), dtype=bool)
+        actionable = np.zeros((count, width), dtype=np.float32)
+        speech_acts = np.zeros(count, dtype=np.int64)
 
         for row, index in enumerate(indices):
             start = int(self.offsets[index])
@@ -301,6 +410,10 @@ class Dataset:
             kinds[row, :length] = sequence_kinds
             neighbors[row, :length] = self.neighbors[start:end]
             valid[row, :length] = True
+            if self.actionable is not None:
+                actionable[row, :length] = self.actionable[start:end]
+            if self.speech is not None:
+                speech_acts[row] = int(self.speech[index])
 
         tensors = {
             "rows": torch.as_tensor(rows),
@@ -314,6 +427,8 @@ class Dataset:
                 if self.frames is not None
                 else np.zeros(count, dtype=np.int64)
             ),
+            "speech_acts": torch.as_tensor(speech_acts),
+            "actionable": torch.as_tensor(actionable),
         }
         if device is not None:
             tensors = {key: value.to(device) for key, value in tensors.items()}
@@ -323,6 +438,24 @@ class Dataset:
 def fingerprints_path(prefix: str | Path) -> Path:
     """The sibling `<prefix>.jsonl.fingerprints.json` written by generate.ts."""
     return Path(f"{prefix}.jsonl.fingerprints.json")
+
+
+def merge_fingerprint_excludes(paths: list[Path], out: Path) -> Path:
+    """Union fingerprint JSON files into one generate.ts `--exclude` payload.
+
+    Train must drop both held-out and validation wording; generate.ts accepts
+    a single exclude file.
+    """
+    fingerprints: set[str] = set()
+    for path in paths:
+        parsed = json.loads(path.read_text())
+        values = parsed.get("fingerprints")
+        if not isinstance(values, list):
+            raise TypeError(f"exclude file has no fingerprints array: {path}")
+        fingerprints.update(str(value) for value in values)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"fingerprints": sorted(fingerprints)}) + "\n")
+    return out
 
 
 def _normalize_generated(path: Path) -> None:

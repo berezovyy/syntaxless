@@ -9,10 +9,9 @@
  * this same process. The crate is what will ship, not a re-implementation.
  *
  * The corpus is gold data with rendered spans, an expected AST, and an expected
- * compiled expression. `tokenRoles` scores the built internal modules
- * (tokenizer + inference); `exactAst` and `compiledExpression` score the built
- * public entry (`parse` + `compile`). The three contracts are reported side by
- * side and never summed.
+ * compiled expression. The four contracts (`tokenRoles`, `rawDecode`,
+ * `exactAst`, `compiledExpression`) are reported side by side and never summed.
+ * Speech-act and actionable accuracy are extra columns, not a fifth contract.
  *
  * Reports are write-only evidence: `results/<set>.json` is never read as an
  * input to another run. The calibration and held-out frame splits are
@@ -27,12 +26,27 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import type { CompileResult } from "../../src/compiler/cron";
+import { isStructural } from "../../src/model/labels";
 import type { Label } from "../../src/model/labels";
+import { SPEECH_ACTS } from "../../src/model/speech-acts";
+import type { SpeechAct } from "../../src/model/speech-acts";
 import type { RawToken } from "../../src/model/tokenizer";
 import type { ParseResult } from "../../src/parser/parse";
 import type { ScheduleIntent } from "../../src/types/intent";
+import {
+  addAttribution,
+  attributeMiss,
+  emptyAttributionReport,
+  writeAttributionFile,
+} from "./attribution";
+import type { AttributionReport } from "./attribution";
+import { canonicalizeIntent } from "./canonical-intent";
 import { spellingVariant } from "./noise";
 import type { SpellingNoise } from "./noise";
+import { oracleDecode } from "./oracle";
+import type { OracleRecord } from "./oracle";
+
+export { canonicalizeIntent } from "./canonical-intent";
 
 /** Default corpus/report locations, relative to the repository root. */
 export const DEFAULTS = {
@@ -69,9 +83,11 @@ export interface GoldRecord {
     end: number;
     label: Label;
     clauseStart: boolean;
+    actionable?: boolean;
   }[];
   intent: ScheduleIntent | null;
   expected: { supported: boolean; expression: string | null };
+  speechAct?: SpeechAct;
 }
 
 /** Running correct/total counts; the guard's `Counts` shape. */
@@ -107,6 +123,13 @@ export interface ContractReport {
   failures: ContractFailure[];
 }
 
+export interface OverlayOffEvaluation {
+  contracts: ContractReport[];
+  selectivePrediction: RiskCoveragePoint[];
+  rawSelectivePrediction: RiskCoveragePoint[];
+  typoInvariance: TypoInvarianceReport;
+}
+
 export interface EvaluationResult {
   artifactSha256: string;
   corpus: string;
@@ -119,6 +142,17 @@ export interface EvaluationResult {
   /** Counterfactual raw-decode curve used to select a better policy. */
   rawSelectivePrediction: RiskCoveragePoint[];
   typoInvariance: TypoInvarianceReport;
+  /**
+   * Overlay-off scores on the same artifact. Promotion uses this block;
+   * overlay-on remains diagnostic. Missing overlay-off is a failed run.
+   */
+  overlayOff: OverlayOffEvaluation;
+  /** Extra column; not a contract and not averaged into exactAst. */
+  speechActAccuracy?: number;
+  /** Extra column; not a contract and not averaged into exactAst. */
+  actionableAccuracy?: number;
+  /** Per-miss ROLE/ACT/DECODE/CONF/GOLD histogram (overlay-off exactAst). */
+  attribution: AttributionReport;
 }
 
 export interface TypoInvarianceReport {
@@ -217,7 +251,7 @@ interface WeightsArtifact {
 }
 
 interface DistIndex {
-  parse: (text: string) => Promise<ParseResult>;
+  parse: (text: string, options?: { overlay?: "on" | "off" }) => Promise<ParseResult>;
   compile: (intent: ScheduleIntent) => CompileResult;
 }
 
@@ -225,8 +259,14 @@ interface DistTokenizer {
   tokenize: (text: string) => RawToken[];
 }
 
+interface DistPredictions {
+  labels: Uint8Array;
+  speechAct?: number;
+  actionable?: Uint8Array;
+}
+
 interface DistInference {
-  inferTokens: (tokens: readonly RawToken[]) => { labels: Uint8Array };
+  inferTokens: (tokens: readonly RawToken[]) => DistPredictions;
 }
 
 interface DistLabels {
@@ -235,7 +275,10 @@ interface DistLabels {
 
 interface DistEvaluation extends DistTokenizer, DistInference, DistLabels {
   weights: WeightsArtifact;
-  decodeRaw: (text: string) => {
+  decodeRaw: (
+    text: string,
+    overlay?: "on" | "off",
+  ) => {
     intent: ScheduleIntent;
     confidence: number;
     evidence?: {
@@ -256,10 +299,10 @@ interface DistEvaluation extends DistTokenizer, DistInference, DistLabels {
 /** A decoded runtime plus the provenance of the artifact it runs. */
 export interface Engine {
   artifactSha256: string;
-  parse: (text: string) => Promise<ParseResult>;
+  parse: (text: string, options?: { overlay?: "on" | "off" }) => Promise<ParseResult>;
   compile: (intent: ScheduleIntent) => CompileResult;
   tokenize: (text: string) => RawToken[];
-  inferTokens: (tokens: readonly RawToken[]) => { labels: Uint8Array };
+  inferTokens: (tokens: readonly RawToken[]) => DistPredictions;
   labelName: (id: number) => string;
   decodeRaw: DistEvaluation["decodeRaw"];
   dispose: () => Promise<void>;
@@ -406,54 +449,6 @@ function report(
   };
 }
 
-const WEEKDAY_ORDER = [
-  "monday",
-  "tuesday",
-  "wednesday",
-  "thursday",
-  "friday",
-  "saturday",
-  "sunday",
-] as const;
-
-function canonicalStrings<T extends string>(values: readonly T[] | undefined): T[] | undefined {
-  return values === undefined ? undefined : [...new Set(values)].sort();
-}
-
-/** Canonical semantic form used for evaluation; input arrays are never mutated. */
-export function canonicalizeIntent(intent: ScheduleIntent): ScheduleIntent {
-  const weekdayRank = new Map(WEEKDAY_ORDER.map((day, index) => [day, index]));
-
-  const weekdays =
-    intent.weekdays === undefined
-      ? undefined
-      : [...new Set(intent.weekdays)].sort(
-          (left, right) => (weekdayRank.get(left) ?? 99) - (weekdayRank.get(right) ?? 99),
-        );
-
-  const exceptionWeekdays =
-    intent.exceptions?.weekdays === undefined
-      ? undefined
-      : [...new Set(intent.exceptions.weekdays)].sort(
-          (left, right) => (weekdayRank.get(left) ?? 99) - (weekdayRank.get(right) ?? 99),
-        );
-
-  const exceptionDates = canonicalStrings(intent.exceptions?.dates);
-
-  return {
-    ...intent,
-    ...(weekdays === undefined ? {} : { weekdays }),
-    ...(intent.exceptions === undefined
-      ? {}
-      : {
-          exceptions: {
-            ...(exceptionDates === undefined ? {} : { dates: exceptionDates }),
-            ...(exceptionWeekdays === undefined ? {} : { weekdays: exceptionWeekdays }),
-          },
-        }),
-  };
-}
-
 function intentDifference(expected: ScheduleIntent, actual: ScheduleIntent): string {
   const fields = new Set([...Object.keys(expected), ...Object.keys(actual)]);
 
@@ -473,7 +468,7 @@ function goldLabelFor(
   token: RawToken,
   spans: GoldRecord["spans"],
   cursor: { index: number },
-): string | null {
+): Label {
   while (cursor.index < spans.length && spans[cursor.index]!.end <= token.start) {
     cursor.index += 1;
   }
@@ -492,8 +487,7 @@ export function parseCorpus(contents: string): GoldRecord[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => repairObservableGold(JSON.parse(line) as GoldRecord))
-    .map(repairInclusiveBoundGold)
+    .map((line) => JSON.parse(line) as GoldRecord)
     .map((item) =>
       item.intent === null ? item : { ...item, intent: canonicalizeIntent(item.intent) },
     );
@@ -501,29 +495,6 @@ export function parseCorpus(contents: string): GoldRecord[] {
   lintGoldRecords(records);
 
   return records;
-}
-
-/** Repair legacy held-out rows that rendered an exclusive end date after the
- * inclusive word "through". Newly generated rows already display end - 1. */
-export function repairInclusiveBoundGold(item: GoldRecord): GoldRecord {
-  const end = item.intent?.bounds?.end;
-
-  if (item.family !== "bounds" || end === undefined || !/\bthrough\b/i.test(item.text)) return item;
-  const shown = /\bthrough\s+(\d{4}-\d{2}-\d{2})\b/i.exec(item.text)?.[1];
-
-  if (shown !== end) return item;
-  const date = new Date(`${end}T00:00:00Z`);
-
-  if (Number.isNaN(date.getTime())) return item;
-  date.setUTCDate(date.getUTCDate() + 1);
-
-  return {
-    ...item,
-    intent: {
-      ...item.intent!,
-      bounds: { ...item.intent!.bounds, end: date.toISOString().slice(0, 10) },
-    },
-  };
 }
 
 /** Fail before scoring when the gold contract is malformed or unobservable. */
@@ -559,46 +530,232 @@ export function lintGoldRecords(records: readonly GoldRecord[]): void {
   }
 }
 
-/** Older reserved clock rows rendered a twelve-hour clock while keeping the
- * sampled 24-hour intent, so `1:30 daily` could secretly mean either 01:30 or
- * 13:30. Make the latent choice observable at evaluation time without writing
- * another generated JSONL artifact into Git. */
-export function repairObservableGold(item: GoldRecord): GoldRecord {
-  if (
-    item.family !== "time-of-day" ||
-    item.intent?.time === undefined ||
-    /\b(?:am|pm)\b/i.test(item.text)
-  ) {
-    return item;
+interface ParseScoreBuckets {
+  rawDecode: Accumulator;
+  exactAst: Accumulator;
+  compiledExpression: Accumulator;
+  selectiveOutcomes: SelectiveOutcome[];
+  rawSelectiveOutcomes: SelectiveOutcome[];
+}
+
+function emptyParseScoreBuckets(): ParseScoreBuckets {
+  return {
+    rawDecode: emptyAccumulator(),
+    exactAst: emptyAccumulator(),
+    compiledExpression: emptyAccumulator(),
+    selectiveOutcomes: [],
+    rawSelectiveOutcomes: [],
+  };
+}
+
+function emptyTypoReport(): TypoInvarianceReport {
+  return {
+    total: 0,
+    cleanCorrect: 0,
+    noisyCorrect: 0,
+    pairedCorrect: 0,
+    noisySilentWrong: 0,
+    noisyAccuracy: 0,
+    pairedAccuracy: 0,
+    byFamily: {},
+    byNoise: {},
+    failureCounts: {},
+    failures: [],
+  };
+}
+
+function finalizeTypo(report: TypoInvarianceReport): void {
+  report.noisyAccuracy = report.noisyCorrect / Math.max(report.total, 1);
+  report.pairedAccuracy = report.pairedCorrect / Math.max(report.total, 1);
+}
+
+function recordTypo(
+  report: TypoInvarianceReport,
+  item: GoldRecord,
+  canonicalExpected: ScheduleIntent,
+  astCorrect: boolean,
+  noisy: { noise: SpellingNoise; example: { text: string } },
+  noisyParsed: ParseResult,
+): void {
+  const noisyCorrect =
+    noisyParsed.ok && isDeepStrictEqual(canonicalizeIntent(noisyParsed.intent), canonicalExpected);
+
+  report.total += 1;
+  report.cleanCorrect += Number(astCorrect);
+  report.noisyCorrect += Number(noisyCorrect);
+  report.pairedCorrect += Number(astCorrect && noisyCorrect);
+  report.noisySilentWrong += Number(noisyParsed.ok && !noisyCorrect);
+  const family = (report.byFamily[item.family] ??= { total: 0, correct: 0 });
+
+  family.total += 1;
+  family.correct += Number(noisyCorrect);
+  const noise = (report.byNoise[noisy.noise] ??= { total: 0, correct: 0 });
+
+  noise.total += 1;
+  noise.correct += Number(noisyCorrect);
+
+  if (!noisyCorrect) {
+    const outcome = noisyParsed.ok
+      ? `intent:${intentDifference(canonicalExpected, noisyParsed.intent)}`
+      : `parse:${noisyParsed.code}`;
+
+    const category = `${item.family}/${noisy.noise}/${outcome}`;
+    const count = (report.failureCounts[category] ?? 0) + 1;
+
+    report.failureCounts[category] = count;
+
+    if (count <= MAX_FAILURES_PER_CATEGORY) {
+      report.failures.push({
+        id: item.id,
+        family: item.family,
+        noise: noisy.noise,
+        text: noisy.example.text,
+        expected: canonicalExpected,
+        actual: noisyParsed.ok
+          ? canonicalizeIntent(noisyParsed.intent)
+          : { ok: false, code: noisyParsed.code },
+      });
+    }
+  }
+}
+
+function scoreParsedGold(
+  engine: Engine,
+  item: GoldRecord,
+  parsed: ParseResult,
+  raw: ReturnType<Engine["decodeRaw"]> | null,
+  rawError: unknown,
+  buckets: ParseScoreBuckets,
+): { astCorrect: boolean } {
+  if (item.intent === null) {
+    const rejected = !parsed.ok;
+
+    buckets.rawSelectiveOutcomes.push({
+      accepted: raw !== null,
+      correct: raw === null,
+      confidence: raw?.confidence ?? 0,
+      negative: true,
+    });
+
+    record(buckets.rawDecode, item.family, raw === null, "negative-false-accept", {
+      id: item.id,
+      family: item.family,
+      detail: "expected no raw schedule",
+      expected: null,
+      actual: raw?.intent ?? String(rawError),
+    });
+
+    buckets.selectiveOutcomes.push({
+      accepted: parsed.ok,
+      correct: rejected,
+      confidence: parsed.confidence,
+      negative: true,
+    });
+
+    record(buckets.exactAst, item.family, rejected, "negative-false-accept", {
+      id: item.id,
+      family: item.family,
+      detail: "expected no schedule",
+      expected: null,
+      actual: parsed.ok ? parsed.intent : { ok: false, code: parsed.code },
+    });
+
+    record(buckets.compiledExpression, item.family, rejected, "negative-false-accept", {
+      id: item.id,
+      family: item.family,
+      detail: "expected no expression",
+      expected: item.expected,
+      actual: parsed.ok ? "parsed" : { ok: false, code: parsed.code },
+    });
+
+    return { astCorrect: false };
   }
 
-  const minute = [...item.spans].reverse().find((span) => span.label === "MINUTE");
+  const canonicalExpected = canonicalizeIntent(item.intent);
+  const canonicalRaw = raw === null ? null : canonicalizeIntent(raw.intent);
+  const rawCorrect = raw !== null && isDeepStrictEqual(canonicalRaw, canonicalExpected);
 
-  if (minute === undefined) return item;
-  const meridiem = item.intent.time.hour >= 12 ? "pm" : "am";
-  const insertion = minute.end;
-  const added = ` ${meridiem}`;
-
-  const spans = item.spans.map((span) =>
-    span.start >= insertion
-      ? { ...span, start: span.start + added.length, end: span.end + added.length }
-      : span,
-  );
-
-  spans.push({
-    start: insertion + 1,
-    end: insertion + added.length,
-    label: "MERIDIEM",
-    clauseStart: false,
+  buckets.rawSelectiveOutcomes.push({
+    accepted: raw !== null,
+    correct: rawCorrect,
+    confidence: raw?.confidence ?? 0,
+    negative: false,
   });
 
-  spans.sort((left, right) => left.start - right.start);
+  record(
+    buckets.rawDecode,
+    item.family,
+    rawCorrect,
+    raw === null ? "decode-error" : `intent:${intentDifference(canonicalExpected, raw.intent)}`,
+    {
+      id: item.id,
+      family: item.family,
+      detail: "pre-confidence intent mismatch",
+      expected: canonicalExpected,
+      actual: raw === null ? String(rawError) : canonicalRaw,
+    },
+  );
 
-  return {
-    ...item,
-    text: `${item.text.slice(0, insertion)}${added}${item.text.slice(insertion)}`,
-    spans,
-  };
+  const canonicalActual = parsed.ok ? canonicalizeIntent(parsed.intent) : null;
+  const astCorrect = parsed.ok && isDeepStrictEqual(canonicalActual, canonicalExpected);
+
+  buckets.selectiveOutcomes.push({
+    accepted: parsed.ok,
+    correct: astCorrect,
+    confidence: parsed.confidence,
+    negative: false,
+  });
+
+  const astCategory = parsed.ok
+    ? `intent:${intentDifference(canonicalExpected, parsed.intent)}`
+    : `parse:${parsed.code}`;
+
+  record(buckets.exactAst, item.family, astCorrect, astCategory, {
+    id: item.id,
+    family: item.family,
+    detail: "intent mismatch",
+    expected: canonicalExpected,
+    actual: parsed.ok ? canonicalActual : { ok: false, code: parsed.code },
+  });
+
+  const goldCompiled = engine.compile(canonicalExpected);
+
+  if (
+    goldCompiled.supported !== item.expected.supported ||
+    (goldCompiled.supported && goldCompiled.expression !== item.expected.expression) ||
+    (!goldCompiled.supported && item.expected.expression !== null)
+  ) {
+    throw new Error(`invalid gold compiler expectation: ${item.id}`);
+  }
+
+  const compiled = parsed.ok ? engine.compile(parsed.intent) : null;
+
+  const expressionCorrect = item.expected.supported
+    ? parsed.ok &&
+      compiled !== null &&
+      compiled.supported &&
+      compiled.expression === item.expected.expression
+    : parsed.ok &&
+      compiled !== null &&
+      !compiled.supported &&
+      !goldCompiled.supported &&
+      compiled.code === goldCompiled.code;
+
+  const compileCategory = !parsed.ok
+    ? `parse:${parsed.code}`
+    : compiled?.supported
+      ? "wrong-expression"
+      : `unsupported:${compiled?.code ?? "missing"}`;
+
+  record(buckets.compiledExpression, item.family, expressionCorrect, compileCategory, {
+    id: item.id,
+    family: item.family,
+    detail: "compiled expression mismatch",
+    expected: goldCompiled,
+    actual: compiled,
+  });
+
+  return { astCorrect };
 }
 
 /**
@@ -624,30 +781,24 @@ export async function evaluateCorpus(
   }
 
   const tokenRoles = emptyAccumulator();
-  const exactAst = emptyAccumulator();
-  const rawDecode = emptyAccumulator();
-  const compiledExpression = emptyAccumulator();
-  const selectiveOutcomes: SelectiveOutcome[] = [];
-  const rawSelectiveOutcomes: SelectiveOutcome[] = [];
-
-  const typoInvariance: TypoInvarianceReport = {
-    total: 0,
-    cleanCorrect: 0,
-    noisyCorrect: 0,
-    pairedCorrect: 0,
-    noisySilentWrong: 0,
-    noisyAccuracy: 0,
-    pairedAccuracy: 0,
-    byFamily: {},
-    byNoise: {},
-    failureCounts: {},
-    failures: [],
-  };
+  const overlayOn = emptyParseScoreBuckets();
+  const overlayOff = emptyParseScoreBuckets();
+  const typoInvariance = emptyTypoReport();
+  const typoOff = emptyTypoReport();
+  const attribution = emptyAttributionReport();
+  let speechActTotal = 0;
+  let speechActCorrect = 0;
+  let actionableTotal = 0;
+  let actionableCorrect = 0;
 
   for (const item of records) {
     const tokens = engine.tokenize(item.text);
     const predictions = engine.inferTokens(tokens);
     const cursor = { index: 0 };
+    const goldLabels: Label[] = [];
+    const predictedLabels: Label[] = [];
+    const goldActionable: boolean[] = [];
+    const predictedActionable: boolean[] = [];
 
     for (let index = 0; index < tokens.length; index += 1) {
       const token = tokens[index]!;
@@ -656,6 +807,16 @@ export async function evaluateCorpus(
       const gold = goldLabelFor(token, item.spans, cursor);
       const predicted = engine.labelName(predictions.labels[index]!);
       const correct = gold === predicted;
+
+      goldLabels.push(gold);
+      predictedLabels.push(predicted as Label);
+      const goldSpan = item.spans[cursor.index];
+
+      if (goldSpan?.actionable !== undefined) goldActionable.push(goldSpan.actionable);
+
+      if (predictions.actionable !== undefined) {
+        predictedActionable.push(predictions.actionable[index] === 1);
+      }
 
       record(
         tokenRoles,
@@ -672,6 +833,16 @@ export async function evaluateCorpus(
               actual: predicted,
             },
       );
+
+      if (goldSpan?.actionable !== undefined && predictions.actionable !== undefined) {
+        actionableTotal += 1;
+        actionableCorrect += Number((predictions.actionable[index] === 1) === goldSpan.actionable);
+      }
+    }
+
+    if (item.speechAct !== undefined && predictions.speechAct !== undefined) {
+      speechActTotal += 1;
+      speechActCorrect += Number(SPEECH_ACTS[predictions.speechAct] === item.speechAct);
     }
 
     const parsed = await engine.parse(item.text);
@@ -684,90 +855,91 @@ export async function evaluateCorpus(
       rawError = error;
     }
 
-    if (item.intent === null) {
-      const rejected = !parsed.ok;
+    const parsedOff = await engine.parse(item.text, { overlay: "off" });
+    let rawOff: ReturnType<Engine["decodeRaw"]> | null = null;
+    let rawOffError: unknown;
 
-      rawSelectiveOutcomes.push({
-        accepted: raw !== null,
-        correct: raw === null,
-        confidence: raw?.confidence ?? 0,
-        negative: true,
-      });
-
-      record(rawDecode, item.family, raw === null, "negative-false-accept", {
-        id: item.id,
-        family: item.family,
-        detail: "expected no raw schedule",
-        expected: null,
-        actual: raw?.intent ?? String(rawError),
-      });
-
-      selectiveOutcomes.push({
-        accepted: parsed.ok,
-        correct: rejected,
-        confidence: parsed.confidence,
-        negative: true,
-      });
-
-      record(exactAst, item.family, rejected, "negative-false-accept", {
-        id: item.id,
-        family: item.family,
-        detail: "expected no schedule",
-        expected: null,
-        actual: parsed.ok ? parsed.intent : { ok: false, code: parsed.code },
-      });
-
-      record(compiledExpression, item.family, rejected, "negative-false-accept", {
-        id: item.id,
-        family: item.family,
-        detail: "expected no expression",
-        expected: item.expected,
-        actual: parsed.ok ? "parsed" : { ok: false, code: parsed.code },
-      });
-
-      continue;
+    try {
+      rawOff = engine.decodeRaw(item.text, "off");
+    } catch (error) {
+      rawOffError = error;
     }
 
-    const canonicalExpected = canonicalizeIntent(item.intent);
-    const canonicalRaw = raw === null ? null : canonicalizeIntent(raw.intent);
-    const rawCorrect = raw !== null && isDeepStrictEqual(canonicalRaw, canonicalExpected);
+    const { astCorrect } = scoreParsedGold(engine, item, parsed, raw, rawError, overlayOn);
 
-    rawSelectiveOutcomes.push({
-      accepted: raw !== null,
-      correct: rawCorrect,
-      confidence: raw?.confidence ?? 0,
-      negative: false,
-    });
-
-    record(
-      rawDecode,
-      item.family,
-      rawCorrect,
-      raw === null ? "decode-error" : `intent:${intentDifference(canonicalExpected, raw.intent)}`,
-      {
-        id: item.id,
-        family: item.family,
-        detail: "pre-confidence intent mismatch",
-        expected: canonicalExpected,
-        actual: raw === null ? String(rawError) : canonicalRaw,
-      },
+    const { astCorrect: astCorrectOff } = scoreParsedGold(
+      engine,
+      item,
+      parsedOff,
+      rawOff,
+      rawOffError,
+      overlayOff,
     );
 
-    const canonicalActual = parsed.ok ? canonicalizeIntent(parsed.intent) : null;
-    const astCorrect = parsed.ok && isDeepStrictEqual(canonicalActual, canonicalExpected);
+    const exactMiss = item.intent === null ? parsedOff.ok : !astCorrectOff;
 
-    // Mutate only the gold-labeled schedule spans. The reserved wording never
-    // enters training; this is a paired behavioral evaluation of whether one
-    // realistic character error preserves the same meaning.
+    if (exactMiss) {
+      const oracleRecord: OracleRecord = {
+        id: item.id,
+        text: item.text,
+        spans: item.spans,
+        intent: item.intent,
+        speechAct: item.speechAct,
+        family: item.family,
+        source: "gold",
+      };
+
+      let predictedOracle: ReturnType<typeof oracleDecode> | undefined;
+
+      if (rawOff !== null) {
+        predictedOracle = { ok: true, intent: rawOff.intent };
+      } else if (rawOffError !== undefined) {
+        predictedOracle = {
+          ok: false,
+          error: rawOffError instanceof Error ? rawOffError.message : String(rawOffError),
+        };
+      }
+
+      addAttribution(attribution, {
+        id: item.id,
+        source: "reserved",
+        family: item.family,
+        bucket: attributeMiss({
+          text: item.text,
+          expectedIntent: item.intent,
+          accepted: parsedOff.ok,
+          actualIntent: parsedOff.ok ? parsedOff.intent : null,
+          goldSpans: item.spans,
+          goldSpeechAct: item.speechAct,
+          goldLabels,
+          predictedLabels,
+          goldActionable: goldActionable.length === 0 ? undefined : goldActionable,
+          predictedActionable: predictedActionable.length === 0 ? undefined : predictedActionable,
+          goldOracle: oracleDecode(oracleRecord),
+          predictedOracle,
+        }),
+      });
+    }
+
+    if (item.intent === null) continue;
+
+    const canonicalExpected = canonicalizeIntent(item.intent);
+
+    // Mutate only labels the decoder does not look up from the string
+    // (O / EDGE). Typos on WEEKDAY/HOUR/BOUND/RECUR-monthly are unreachable gold.
     let noisy = undefined;
 
     for (let attempt = 0; attempt < 64 && noisy === undefined; attempt += 1) {
       noisy = spellingVariant(
         {
           ...item,
-          spans: item.spans.map((span) => ({ ...span })),
+          spans: item.spans.map((span) => ({
+            ...span,
+            actionable: span.label !== "O" && !isStructural(span.label),
+          })),
           template: item.id,
           style: "evaluation",
+          speechAct: "request",
         },
         `${item.id}/evaluation/${attempt}`,
       );
@@ -776,112 +948,14 @@ export async function evaluateCorpus(
     if (noisy !== undefined) {
       const noisyParsed = await engine.parse(noisy.example.text);
 
-      const noisyCorrect =
-        noisyParsed.ok &&
-        isDeepStrictEqual(canonicalizeIntent(noisyParsed.intent), canonicalExpected);
+      recordTypo(typoInvariance, item, canonicalExpected, astCorrect, noisy, noisyParsed);
 
-      typoInvariance.total += 1;
-      typoInvariance.cleanCorrect += Number(astCorrect);
-      typoInvariance.noisyCorrect += Number(noisyCorrect);
-      typoInvariance.pairedCorrect += Number(astCorrect && noisyCorrect);
-      typoInvariance.noisySilentWrong += Number(noisyParsed.ok && !noisyCorrect);
-
-      const family = (typoInvariance.byFamily[item.family] ??= {
-        total: 0,
-        correct: 0,
+      const noisyParsedOff = await engine.parse(noisy.example.text, {
+        overlay: "off",
       });
 
-      family.total += 1;
-      family.correct += Number(noisyCorrect);
-
-      const noise = (typoInvariance.byNoise[noisy.noise] ??= {
-        total: 0,
-        correct: 0,
-      });
-
-      noise.total += 1;
-      noise.correct += Number(noisyCorrect);
-
-      if (!noisyCorrect) {
-        const outcome = noisyParsed.ok
-          ? `intent:${intentDifference(canonicalExpected, noisyParsed.intent)}`
-          : `parse:${noisyParsed.code}`;
-
-        const category = `${item.family}/${noisy.noise}/${outcome}`;
-        const count = (typoInvariance.failureCounts[category] ?? 0) + 1;
-
-        typoInvariance.failureCounts[category] = count;
-
-        if (count <= MAX_FAILURES_PER_CATEGORY) {
-          typoInvariance.failures.push({
-            id: item.id,
-            family: item.family,
-            noise: noisy.noise,
-            text: noisy.example.text,
-            expected: canonicalExpected,
-            actual: noisyParsed.ok
-              ? canonicalizeIntent(noisyParsed.intent)
-              : { ok: false, code: noisyParsed.code },
-          });
-        }
-      }
+      recordTypo(typoOff, item, canonicalExpected, astCorrectOff, noisy, noisyParsedOff);
     }
-
-    selectiveOutcomes.push({
-      accepted: parsed.ok,
-      correct: astCorrect,
-      confidence: parsed.confidence,
-      negative: false,
-    });
-
-    const astCategory = parsed.ok
-      ? `intent:${intentDifference(canonicalExpected, parsed.intent)}`
-      : `parse:${parsed.code}`;
-
-    record(exactAst, item.family, astCorrect, astCategory, {
-      id: item.id,
-      family: item.family,
-      detail: "intent mismatch",
-      expected: canonicalExpected,
-      actual: parsed.ok ? canonicalActual : { ok: false, code: parsed.code },
-    });
-
-    const goldCompiled = engine.compile(canonicalExpected);
-
-    if (
-      goldCompiled.supported !== item.expected.supported ||
-      (goldCompiled.supported && goldCompiled.expression !== item.expected.expression) ||
-      (!goldCompiled.supported && item.expected.expression !== null)
-    ) {
-      throw new Error(`invalid gold compiler expectation: ${item.id}`);
-    }
-
-    const compiled = parsed.ok ? engine.compile(parsed.intent) : null;
-
-    const expressionCorrect = item.expected.supported
-      ? parsed.ok &&
-        compiled !== null &&
-        compiled.supported &&
-        compiled.expression === item.expected.expression
-      : parsed.ok &&
-        compiled !== null &&
-        !compiled.supported &&
-        !goldCompiled.supported &&
-        compiled.code === goldCompiled.code;
-
-    const compileCategory = !parsed.ok
-      ? `parse:${parsed.code}`
-      : compiled?.supported
-        ? "wrong-expression"
-        : `unsupported:${compiled?.code ?? "missing"}`;
-
-    record(compiledExpression, item.family, expressionCorrect, compileCategory, {
-      id: item.id,
-      family: item.family,
-      detail: "compiled expression mismatch",
-      expected: goldCompiled,
-      actual: compiled,
-    });
   }
 
   const provenance = {
@@ -892,8 +966,8 @@ export async function evaluateCorpus(
     scope,
   };
 
-  typoInvariance.noisyAccuracy = typoInvariance.noisyCorrect / Math.max(typoInvariance.total, 1);
-  typoInvariance.pairedAccuracy = typoInvariance.pairedCorrect / Math.max(typoInvariance.total, 1);
+  finalizeTypo(typoInvariance);
+  finalizeTypo(typoOff);
 
   return {
     artifactSha256: engine.artifactSha256,
@@ -903,13 +977,26 @@ export async function evaluateCorpus(
     scope,
     contracts: [
       report("tokenRoles", tokenRoles, provenance),
-      report("rawDecode", rawDecode, provenance),
-      report("exactAst", exactAst, provenance),
-      report("compiledExpression", compiledExpression, provenance),
+      report("rawDecode", overlayOn.rawDecode, provenance),
+      report("exactAst", overlayOn.exactAst, provenance),
+      report("compiledExpression", overlayOn.compiledExpression, provenance),
     ],
-    selectivePrediction: riskCoverage(selectiveOutcomes),
-    rawSelectivePrediction: riskCoverage(rawSelectiveOutcomes),
+    selectivePrediction: riskCoverage(overlayOn.selectiveOutcomes),
+    rawSelectivePrediction: riskCoverage(overlayOn.rawSelectiveOutcomes),
     typoInvariance,
+    overlayOff: {
+      contracts: [
+        report("rawDecode", overlayOff.rawDecode, provenance),
+        report("exactAst", overlayOff.exactAst, provenance),
+        report("compiledExpression", overlayOff.compiledExpression, provenance),
+      ],
+      selectivePrediction: riskCoverage(overlayOff.selectiveOutcomes),
+      rawSelectivePrediction: riskCoverage(overlayOff.rawSelectiveOutcomes),
+      typoInvariance: typoOff,
+    },
+    ...(speechActTotal === 0 ? {} : { speechActAccuracy: speechActCorrect / speechActTotal }),
+    ...(actionableTotal === 0 ? {} : { actionableAccuracy: actionableCorrect / actionableTotal }),
+    attribution,
   };
 }
 
@@ -978,11 +1065,28 @@ if (import.meta.main) {
 
     await mkdir(dirname(out), { recursive: true });
     await writeFile(out, `${JSON.stringify(result, null, 2)}\n`);
+    const attributionPath = resolveRepo("packages/cron/training/results/attribution.json");
+
+    await writeAttributionFile(attributionPath, "reserved", result.attribution);
+    const overlayOnAst = result.contracts.find((contract) => contract.metric === "exactAst");
+
+    const overlayOffAst = result.overlayOff.contracts.find(
+      (contract) => contract.metric === "exactAst",
+    );
 
     for (const contract of result.contracts) {
       process.stdout.write(
         `${contract.metric}: ${contract.correct}/${contract.total} ` +
           `(${contract.accuracy.toFixed(3)})\n`,
+      );
+    }
+
+    if (overlayOnAst !== undefined && overlayOffAst !== undefined) {
+      process.stdout.write(
+        `overlay-on exactAst: ${overlayOnAst.correct}/${overlayOnAst.total} ` +
+          `(${overlayOnAst.accuracy.toFixed(3)}) overlay-off exactAst: ` +
+          `${overlayOffAst.correct}/${overlayOffAst.total} ` +
+          `(${overlayOffAst.accuracy.toFixed(3)})\n`,
       );
     }
 

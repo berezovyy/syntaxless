@@ -10,8 +10,9 @@ from __future__ import annotations
 import torch
 
 from dataset import SCHEDULE_KIND_NAMES as DATASET_SCHEDULE_KIND_NAMES
+from dataset import SPEECH_ACT_NAMES as DATASET_SPEECH_ACT_NAMES
 from dataset import schedule_kind_for_frame
-from model import SCHEDULE_KIND_NAMES, Tagger
+from model import SCHEDULE_KIND_NAMES, SPEECH_ACT_NAMES, Tagger
 
 FEATURE_ROWS = 772
 ROWS_PER_TOKEN = 32
@@ -42,13 +43,19 @@ def make_batch(content_length: int, padding_length: int, seed: int = 0):
     return rows, valid, neighbors
 
 
-def build_model() -> Tagger:
+def build_model(
+    *,
+    speech_act_classes: int = len(SPEECH_ACT_NAMES),
+    actionable_head: bool = True,
+) -> Tagger:
     torch.manual_seed(0)
     return Tagger(
         feature_rows=FEATURE_ROWS,
         rows_per_token=ROWS_PER_TOKEN,
         role_classes=ROLE_CLASSES,
         schedule_kind_classes=len(SCHEDULE_KIND_NAMES),
+        speech_act_classes=speech_act_classes,
+        actionable_head=actionable_head,
         hidden=HIDDEN,
     )
 
@@ -63,8 +70,20 @@ def test_padding_neutrality() -> None:
     for qat in (False, True):
         model.qat = qat
         with torch.no_grad():
-            base_roles, base_boundary, base_kind = model(*base)
-            padded_roles, padded_boundary, padded_kind = model(*padded)
+            (
+                base_roles,
+                base_boundary,
+                base_kind,
+                base_speech,
+                base_actionable,
+            ) = model(*base)
+            (
+                padded_roles,
+                padded_boundary,
+                padded_kind,
+                padded_speech,
+                padded_actionable,
+            ) = model(*padded)
         assert torch.allclose(
             base_roles[0, :content],
             padded_roles[0, :content],
@@ -80,6 +99,15 @@ def test_padding_neutrality() -> None:
         assert torch.allclose(base_kind, padded_kind, atol=1e-5, rtol=1e-4), (
             f"schedule-kind logits changed under padding (qat={qat})"
         )
+        assert torch.allclose(base_speech, padded_speech, atol=1e-5, rtol=1e-4), (
+            f"speech-act logits changed under padding (qat={qat})"
+        )
+        assert torch.allclose(
+            base_actionable[0, :content],
+            padded_actionable[0, :content],
+            atol=1e-5,
+            rtol=1e-4,
+        ), f"actionable logits changed under padding (qat={qat})"
     print(f"padding neutrality: ok (content={content}, padded width {padded[0].shape[1]})")
 
 
@@ -87,7 +115,7 @@ def test_finite_gradients() -> None:
     model = build_model().train()
     model.qat = True
     batch = make_batch(8, 5, seed=11)
-    roles, boundary, schedule_kind = model(*batch)
+    roles, boundary, schedule_kind, speech_act, actionable = model(*batch)
 
     target = torch.randint(0, ROLE_CLASSES, roles.shape[:-1])
     role_loss = torch.nn.functional.cross_entropy(
@@ -98,7 +126,12 @@ def test_finite_gradients() -> None:
     )
     kind_target = torch.randint(0, schedule_kind.shape[-1], schedule_kind.shape[:-1])
     kind_loss = torch.nn.functional.cross_entropy(schedule_kind, kind_target)
-    (role_loss + boundary_loss + kind_loss).backward()
+    speech_target = torch.randint(0, speech_act.shape[-1], speech_act.shape[:-1])
+    speech_loss = torch.nn.functional.cross_entropy(speech_act, speech_target)
+    actionable_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+        actionable, torch.zeros_like(actionable)
+    )
+    (role_loss + boundary_loss + kind_loss + speech_loss + actionable_loss).backward()
 
     checked = 0
     for name, parameter in model.named_parameters():
@@ -110,8 +143,19 @@ def test_finite_gradients() -> None:
     print(f"finite qat gradients: ok ({checked} tensors)")
 
 
+def test_legacy_heads_are_empty() -> None:
+    model = build_model(speech_act_classes=0, actionable_head=False).eval()
+    batch = make_batch(4, 2, seed=3)
+    with torch.no_grad():
+        _roles, _boundary, _kind, speech_act, actionable = model(*batch)
+    assert speech_act.numel() == 0
+    assert actionable.numel() == 0
+    print("legacy empty speech-act and actionable heads: ok")
+
+
 def test_schedule_kind_taxonomy() -> None:
     assert DATASET_SCHEDULE_KIND_NAMES == SCHEDULE_KIND_NAMES
+    assert DATASET_SPEECH_ACT_NAMES == SPEECH_ACT_NAMES
     expected = {
         "n-interval/every-n": "interval",
         "time-of-day/digits": "daily",
@@ -132,5 +176,6 @@ def test_schedule_kind_taxonomy() -> None:
 if __name__ == "__main__":
     test_padding_neutrality()
     test_finite_gradients()
+    test_legacy_heads_are_empty()
     test_schedule_kind_taxonomy()
     print("test_model: all checks passed")

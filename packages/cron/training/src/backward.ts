@@ -16,12 +16,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  coarseText,
-  fingerprintExample,
-  fingerprintPattern,
-  structuralPattern,
-} from "./fingerprint";
+import { coarseText, fingerprintExample, fingerprintPattern, framePattern } from "./fingerprint";
 import type { CorpusRecord, Split } from "./generate";
 import { expandKinds, iterateKinds, kindIds } from "./kinds";
 import type { ExampleSplit, KindExample, KindId } from "./kinds";
@@ -37,6 +32,8 @@ const SPLITS: readonly Split[] = ["train", "validation", "heldout"];
 const GENERATOR_SOURCES: readonly string[] = [
   "../../src/parser/lexicon.ts",
   "backward.ts",
+  "correction.ts",
+  "discourse.ts",
   "fingerprint.ts",
   "kinds.ts",
   "noise.ts",
@@ -174,12 +171,19 @@ export function parseArgs(argv: readonly string[]): BackwardOptions {
 /** Carrier wording cannot turn a known schedule construction into a new frame.
  * Negatives have no schedule slots; group them by normalized prose instead. */
 export function frameKey(example: KindExample): string {
-  if (example.intent === null) return `negative:${coarseText(example.example.text)}`;
   const splitExample = example.splitExample ?? example.example;
+  const hasScheduleLabels = splitExample.spans.some((span) => span.label !== "O");
 
-  return JSON.stringify(
-    structuralPattern(splitExample.text, splitExample.spans).filter((part) => part !== "O"),
-  );
+  if (example.intent === null && !hasScheduleLabels) {
+    return `negative:${coarseText(splitExample.text)}`;
+  }
+
+  const speechAct = splitExample.speechAct ?? (example.intent === null ? "none" : "request");
+  const pattern = framePattern(splitExample.text, splitExample.spans, speechAct);
+
+  if (example.intent === null) return JSON.stringify(pattern);
+
+  return JSON.stringify(pattern.filter((part) => part !== "O"));
 }
 
 /** Assign entire frames, globally and deterministically, rather than rows.
@@ -340,6 +344,7 @@ function toRecord(example: KindExample, index: number): CorpusRecord {
     fingerprint,
     text: example.example.text,
     intent: example.intent,
+    speechAct: example.example.speechAct,
     spans: example.example.spans,
   };
 }
@@ -444,14 +449,19 @@ export function writeBackward(options: BackwardOptions): BackwardSummary {
   // Only compact frame keys are retained. The catalog itself remains streamed,
   // so millions of rendered rows are never held in memory at once.
   const plan = splitPlan(iterateKinds(wanted));
+  const fingerprintSplit = new Map<string, Split>();
 
   try {
     for (const expanded of iterateKinds(wanted)) {
       const example = assignSplit(expanded, plan);
 
       if (options.split !== undefined && example.split !== options.split) continue;
-      const record = toRecord(example, index++);
+      const record = toRecord(example, index);
+      const prior = fingerprintSplit.get(record.fingerprint);
 
+      if (prior !== undefined && prior !== record.split) continue;
+      fingerprintSplit.set(record.fingerprint, record.split);
+      index += 1;
       chunk += `${JSON.stringify(record)}\n`;
       fingerprints.add(record.fingerprint);
       addSplitMetadata(metadata, record);

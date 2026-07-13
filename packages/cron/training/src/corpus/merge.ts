@@ -23,6 +23,9 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import type { Label } from "../../../src/model/labels.js";
+import { isStructural } from "../../../src/model/labels.js";
+import { SPEECH_ACTS } from "../../../src/model/speech-acts.js";
+import type { SpeechAct } from "../../../src/model/speech-acts.js";
 import { tokenize } from "../../../src/model/tokenizer.js";
 import type { ScheduleIntent } from "../../../src/types/intent.js";
 import { sha256Hex } from "../fingerprint.js";
@@ -60,6 +63,7 @@ export interface CorpusSpan {
   label: Label;
   clauseStart: boolean;
   value?: string | number;
+  actionable?: boolean;
 }
 
 /** The merged record contract. Every record traces back to one producer. */
@@ -70,6 +74,7 @@ export interface CorpusRecord {
   fingerprint: string;
   text: string;
   intent: ScheduleIntent | null;
+  speechAct?: SpeechAct;
   spans: CorpusSpan[];
   template?: string;
   source: CorpusSource;
@@ -92,6 +97,7 @@ export const corpusRecordSchema = z
     fingerprint: z.string(),
     text: z.string(),
     intent: scheduleIntentSchema.nullable(),
+    speechAct: z.enum(SPEECH_ACTS).optional(),
     spans: z.array(alignedSpanSchema),
     template: z.string().optional(),
     source: sourceSchema,
@@ -458,7 +464,40 @@ export function readJsonl(path: string): unknown[] {
   return values;
 }
 
+function resolvedSpeechAct(intent: ScheduleIntent | null, speechAct?: SpeechAct): SpeechAct {
+  return speechAct ?? (intent !== null ? "request" : "none");
+}
+
+function resolvedActionable(label: Label, speechAct: SpeechAct, actionable?: boolean): boolean {
+  if (actionable !== undefined) return actionable;
+  if (speechAct !== "request") return false;
+
+  return label !== "O" && !isStructural(label);
+}
+
+function hydrateDiscourse(
+  intent: ScheduleIntent | null,
+  spans: readonly CorpusSpan[],
+  speechAct?: SpeechAct,
+): { speechAct: SpeechAct; spans: CorpusSpan[] } {
+  const resolved = resolvedSpeechAct(intent, speechAct);
+
+  return {
+    speechAct: resolved,
+    spans: spans.map((span) => ({
+      ...span,
+      actionable: resolvedActionable(span.label, resolved, span.actionable),
+    })),
+  };
+}
+
 function fromRule(record: z.infer<typeof corpusRecordSchema>): CorpusRecord {
+  const discourse = hydrateDiscourse(
+    record.intent as ScheduleIntent | null,
+    record.spans as CorpusSpan[],
+    record.speechAct,
+  );
+
   return {
     id: record.id,
     split: record.split,
@@ -466,7 +505,8 @@ function fromRule(record: z.infer<typeof corpusRecordSchema>): CorpusRecord {
     fingerprint: record.fingerprint,
     text: record.text,
     intent: record.intent as ScheduleIntent | null,
-    spans: record.spans as CorpusSpan[],
+    speechAct: discourse.speechAct,
+    spans: discourse.spans,
     source: "rule",
     ...(record.template === undefined ? {} : { template: record.template }),
     ...(record.angleId === undefined ? {} : { angleId: record.angleId }),
@@ -525,14 +565,18 @@ export function readLlmRecords(path: string): CorpusRecord[] {
       throw new Error(`${path} record ${index + 1}: unknown angleId "${record.angleId}"`);
     }
 
+    const intent = record.intent as ScheduleIntent | null;
+    const discourse = hydrateDiscourse(intent, record.spans as CorpusSpan[]);
+
     return {
       id: llmId(record),
       split: "train" as Split,
       family,
       fingerprint: record.fingerprint,
       text: record.text,
-      intent: record.intent as ScheduleIntent | null,
-      spans: record.spans as CorpusSpan[],
+      intent,
+      speechAct: discourse.speechAct,
+      spans: discourse.spans,
       source: "llm" as const,
       angleId: record.angleId,
       model: record.model,

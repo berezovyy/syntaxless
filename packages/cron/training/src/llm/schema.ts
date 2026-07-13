@@ -93,6 +93,7 @@ export const alignedSpanSchema = z
     label: z.enum(LABELS),
     clauseStart: z.boolean(),
     value: z.union([z.string(), z.number()]).optional(),
+    actionable: z.boolean().optional(),
   })
   .strict();
 

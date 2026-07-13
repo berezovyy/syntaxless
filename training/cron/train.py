@@ -20,13 +20,23 @@ from torch.nn import functional as F
 
 import config as config_module
 from config import Config
-from dataset import Dataset, fingerprints_path, prepare, repo_root
-from model import SCHEDULE_KIND_NAMES, Tagger, parameter_counts
+from dataset import (
+    Dataset,
+    fingerprints_path,
+    merge_fingerprint_excludes,
+    prepare,
+    repo_root,
+)
+from model import SCHEDULE_KIND_NAMES, SPEECH_ACT_NAMES, Tagger, parameter_counts
 from report import write_report
 
 #: Weights the boundary term against the role term.
 BOUNDARY_LOSS_WEIGHT = 1.0
 SCHEDULE_KIND_LOSS_WEIGHT = 0.35
+#: Utterance CE; same order as schedule-kind. Do not mix with role accuracy.
+SPEECH_ACT_LOSS_WEIGHT = 0.35
+#: Per-token BCE-with-logits, masked like boundary.
+ACTIONABLE_LOSS_WEIGHT = 1.0
 #: Seed stride between regenerated training splits; large enough to never alias.
 EPOCH_SEED_STRIDE = 1_000_003
 #: Validation and heldout derive from the run seed with fixed offsets.
@@ -115,6 +125,7 @@ def train_epoch(
     balance_kinds: bool,
     balance_schedule_kinds: bool,
     frame_balance_power: float,
+    max_sequences: int | None = None,
 ) -> dict[str, float]:
     model.train()
     model.qat = qat
@@ -128,13 +139,14 @@ def train_epoch(
         balance_kinds=balance_kinds,
         balance_schedule_kinds=balance_schedule_kinds,
         frame_balance_power=frame_balance_power,
+        max_sequences=max_sequences,
     ):
         batch = dataset.batch(indices, device)
         labels = batch["labels"]
         mask = labels != -100
 
         optimizer.zero_grad(set_to_none=True)
-        roles, boundary, schedule_kind = model(
+        roles, boundary, schedule_kind, speech_act, actionable = model(
             batch["rows"], batch["valid"], batch["neighbors"]
         )
         role_loss = F.cross_entropy(
@@ -144,13 +156,30 @@ def train_epoch(
             boundary, batch["boundaries"], reduction="none"
         )
         boundary_loss = (boundary_loss * mask).sum() / mask.sum().clamp(min=1)
-        schedule_kind_loss = F.cross_entropy(
-            schedule_kind, batch["schedule_kinds"]
+        schedule_kind_loss = (
+            F.cross_entropy(schedule_kind, batch["schedule_kinds"])
+            if schedule_kind.shape[-1] > 0
+            else roles.new_zeros(())
         )
+        speech_act_loss = (
+            F.cross_entropy(speech_act, batch["speech_acts"])
+            if speech_act.shape[-1] > 0
+            else roles.new_zeros(())
+        )
+        if actionable.shape[-1] > 0:
+            actionable_loss = F.binary_cross_entropy_with_logits(
+                actionable, batch["actionable"], reduction="none"
+            )
+            actionable_loss = (actionable_loss * mask).sum() / mask.sum().clamp(min=1)
+        else:
+            actionable_loss = roles.new_zeros(())
+        # role + 1.0 * boundary + 0.35 * schedule_kind + 0.35 * speech_act + 1.0 * actionable
         loss = (
             role_loss
             + BOUNDARY_LOSS_WEIGHT * boundary_loss
             + SCHEDULE_KIND_LOSS_WEIGHT * schedule_kind_loss
+            + SPEECH_ACT_LOSS_WEIGHT * speech_act_loss
+            + ACTIONABLE_LOSS_WEIGHT * actionable_loss
         )
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), CLIP_NORM)
@@ -172,7 +201,11 @@ def train_epoch(
 
 @torch.no_grad()
 def evaluate(
-    model: Tagger, dataset: Dataset, batch_size: int, device: str
+    model: Tagger,
+    dataset: Dataset,
+    batch_size: int,
+    device: str,
+    max_sequences: int | None = None,
 ) -> dict[str, object]:
     model.eval()
     model.qat = True
@@ -189,6 +222,10 @@ def evaluate(
     schedule_kind_correct_by_class = np.zeros(
         len(SCHEDULE_KIND_NAMES), dtype=np.int64
     )
+    speech_act_correct = 0
+    actionable_true_positive = 0
+    actionable_false_positive = 0
+    actionable_false_negative = 0
     frame_kind_names = [name.split("/", 1)[0] for name in dataset.manifest.frame_names]
     kind_names = list(dict.fromkeys(frame_kind_names))
     kind_index = {name: index for index, name in enumerate(kind_names)}
@@ -198,11 +235,13 @@ def evaluate(
     kind_totals = np.zeros(len(kind_names), dtype=np.int64)
     kind_correct = np.zeros(len(kind_names), dtype=np.int64)
 
-    for indices in dataset.batches(batch_size):
+    for indices in dataset.batches(
+        batch_size, shuffle_seed=0, max_sequences=max_sequences
+    ):
         batch = dataset.batch(indices, device)
         labels = batch["labels"]
         mask = labels != -100
-        roles, boundary, schedule_kind = model(
+        roles, boundary, schedule_kind, speech_act, actionable = model(
             batch["rows"], batch["valid"], batch["neighbors"]
         )
         schedule_kind_correct += int(
@@ -220,6 +259,22 @@ def evaluate(
             weights=correct_numpy.astype(np.int64),
             minlength=len(SCHEDULE_KIND_NAMES),
         ).astype(np.int64)
+        if speech_act.shape[-1] > 0:
+            speech_act_correct += int(
+                (speech_act.argmax(dim=-1) == batch["speech_acts"]).sum()
+            )
+        if actionable.shape[-1] > 0:
+            predicted_actionable = (actionable >= 0) & mask
+            target_actionable = (batch["actionable"] >= 0.5) & mask
+            actionable_true_positive += int(
+                (predicted_actionable & target_actionable).sum()
+            )
+            actionable_false_positive += int(
+                (predicted_actionable & ~target_actionable).sum()
+            )
+            actionable_false_negative += int(
+                (~predicted_actionable & target_actionable).sum()
+            )
 
         predictions = roles.argmax(dim=-1)
         correct += int(((predictions == labels) & mask).sum())
@@ -282,10 +337,23 @@ def evaluate(
             ]
         )
     )
+    actionable_precision = actionable_true_positive / max(
+        actionable_true_positive + actionable_false_positive, 1
+    )
+    actionable_recall = actionable_true_positive / max(
+        actionable_true_positive + actionable_false_negative, 1
+    )
     return {
         "tokenAccuracy": correct / max(total_tokens, 1),
         "exactLabelAndBoundarySequence": exact_sequences / max(sequences, 1),
         "macroKindExactSequence": macro_kind_exact,
+        "speechActAccuracy": speech_act_correct / max(sequences, 1),
+        "actionableF1": (
+            2
+            * actionable_precision
+            * actionable_recall
+            / max(actionable_precision + actionable_recall, 1e-12)
+        ),
         "scheduleKindAccuracy": schedule_kind_correct / max(sequences, 1),
         "macroScheduleKindAccuracy": macro_schedule_kind_accuracy,
         "byScheduleKind": by_schedule_kind,
@@ -322,6 +390,9 @@ def save_checkpoint(
             "featureRows": model.feature_rows,
             "scheduleKindClasses": model.schedule_kind_classes,
             "scheduleKindLabels": list(SCHEDULE_KIND_NAMES),
+            "speechActClasses": model.speech_act_classes,
+            "speechActLabels": list(SPEECH_ACT_NAMES) if model.speech_act_classes > 0 else [],
+            "actionableHead": model.actionable_head_enabled,
         },
         path,
     )
@@ -382,6 +453,9 @@ def main(argv: list[str] | None = None) -> int:
         rows_per_token=validation.rows_per_token,
         role_classes=validation.role_classes,
         schedule_kind_classes=len(SCHEDULE_KIND_NAMES),
+        speech_act_classes=int(validation.manifest.speech_act_classes),
+        actionable_head="actionable" in validation.manifest.format
+        or int(validation.manifest.speech_act_classes) > 0,
         hidden=config.hidden,
         quantization_bits=config.quantization_bits,
     ).to(config.device)
@@ -393,7 +467,9 @@ def main(argv: list[str] | None = None) -> int:
         model.parameters(), lr=config.learning_rate, weight_decay=WEIGHT_DECAY
     )
     training_sequences = (
-        len(external_train) if external_train is not None else config.samples
+        min(len(external_train), config.samples)
+        if external_train is not None
+        else config.samples
     )
     steps_per_epoch = max(1, math.ceil(training_sequences / config.batch))
     scheduler = make_scheduler(
@@ -413,12 +489,19 @@ def main(argv: list[str] | None = None) -> int:
         if external_train is not None:
             train = external_train
         else:
+            train_exclude = merge_fingerprint_excludes(
+                [
+                    fingerprints_path(heldout_prefix),
+                    fingerprints_path(validation_prefix),
+                ],
+                data_dir / "train-exclude.fingerprints.json",
+            )
             train_prefix = prepare(
                 "train",
                 config.samples,
                 config.seed + epoch * EPOCH_SEED_STRIDE,
                 data_dir,
-                exclude=fingerprints_path(heldout_prefix),
+                exclude=train_exclude,
             )
             train = Dataset(train_prefix)
         assert_disjoint(train, heldout)
@@ -439,10 +522,17 @@ def main(argv: list[str] | None = None) -> int:
             config.balance_kinds,
             config.balance_schedule_kinds,
             config.frame_balance_power,
+            training_sequences if external_train is not None else None,
         )
         tokens_seen += int(train_metrics["trainTokens"])
 
-        metrics = evaluate(model, validation, config.batch, config.device)
+        metrics = evaluate(
+            model,
+            validation,
+            config.batch,
+            config.device,
+            config.eval_samples if external_train is not None else None,
+        )
         # Equalize checkpoint selection across sentence kinds. The global
         # sequence metric is dominated by large Cartesian schedule lattices;
         # macro-kind exactness makes terse and negative language count too.

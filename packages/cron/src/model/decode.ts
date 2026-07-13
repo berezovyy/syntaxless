@@ -24,6 +24,8 @@ export interface WeightsArtifact {
   readonly roleClasses: number;
   readonly scheduleKindClasses?: number;
   readonly scheduleKindLabels?: readonly string[];
+  readonly speechActClasses?: number;
+  readonly speechActLabels?: readonly string[];
   readonly boundaryThreshold: number;
   readonly labels: readonly string[];
   readonly q: string;

@@ -12,13 +12,33 @@ import { describe, expect, test } from "bun:test";
 import { renderIntent } from "../../training/src/renderer.js";
 import type { RenderedExample } from "../../training/src/renderer.js";
 import type { Rng } from "../../training/src/rng.js";
+import { Sentence } from "../../training/src/sentence.js";
 import type { Span } from "../../training/src/sentence.js";
 import { LABEL_COUNT, labelId } from "../model/labels.js";
+import { speechActFromId } from "../model/speech-acts.js";
+import type { SpeechAct } from "../model/speech-acts.js";
 import { tokenize } from "../model/tokenizer.js";
 import type { ScheduleIntent, Weekday } from "../types/intent.js";
-import { decodeIntent, UnknownRoleError } from "./decode.js";
+import { decodeIntent, UnknownRoleError, UnsafeScheduleContextError } from "./decode.js";
 import type { LabeledToken } from "./decode.js";
 import { WEEKDAY_SEQUENCE } from "./lexicon.js";
+import { resultFromLabeledTokens } from "./model.js";
+
+function actionable(labeled: readonly LabeledToken[]): LabeledToken[] {
+  return labeled.map((item) => ({
+    ...item,
+    actionable: item.actionable ?? true,
+  }));
+}
+
+function heads(
+  labeled: readonly LabeledToken[],
+  scheduleKind?: Parameters<typeof decodeIntent>[1],
+  sourceText?: string,
+  speechAct: SpeechAct = "request",
+) {
+  return decodeIntent(actionable(labeled), scheduleKind, sourceText, "off", speechAct);
+}
 
 /** Deterministic rng that never emits carrier prose, so phrases stay canonical. */
 const noCarrier: Rng = {
@@ -80,6 +100,7 @@ function concat(pieces: readonly RenderedExample[]): RenderedExample {
     spans,
     template: pieces.map((piece) => piece.template).join("+"),
     style: "combined",
+    speechAct: "request",
   };
 }
 
@@ -224,158 +245,66 @@ describe("perfect-label oracle over the Phase 03 table", () => {
     const example = renderPhrase(intent);
 
     expect(example.text.length).toBeGreaterThan(0);
-    const decoded = decodeIntent(labelTokens(example));
+    const decoded = heads(labelTokens(example));
 
     expect(decoded.intent).toEqual(intent);
   });
 });
 
 describe("range and interval rules", () => {
-  test("a requested cadence adverb survives an ambiguous global kind", () => {
-    const tokens = tokenize("Have it refresh hourly").filter((token) => token.kind !== 3);
-
-    const labeled: LabeledToken[] = tokens.map((token) => ({
-      token,
-      role: labelId.O,
-      boundary: false,
-      score: 1,
-    }));
-
-    expect(decodeIntent(labeled, { kind: "ambiguous", score: 1 }).intent).toEqual({
-      frequency: { unit: "hour", interval: 1 },
-    });
-  });
-
-  test("an explicit requested numeric clock survives missing neural roles", () => {
-    const tokens = tokenize("I want the audit generated daily at 18:35").filter(
-      (token) => token.kind !== 3,
-    );
-
-    const labeled: LabeledToken[] = tokens.map((token) => ({
-      token,
-      role: labelId.O,
-      boundary: false,
-      score: 1,
-    }));
-
-    expect(decodeIntent(labeled, { kind: "ambiguous", score: 1 }).intent).toEqual({
-      frequency: { unit: "day", interval: 1 },
-      time: { hour: 18, minute: 35 },
-    });
-  });
-
-  test("an explicit requested number-word clock survives missing neural roles", () => {
-    const tokens = tokenize("On Monday, send the digest at eight").filter(
-      (token) => token.kind !== 3,
-    );
-
-    const labeled: LabeledToken[] = tokens.map((token) => ({
-      token,
-      role: labelId.O,
-      boundary: false,
-      score: 1,
-    }));
-
-    expect(decodeIntent(labeled, { kind: "none", score: 1 }).intent).toEqual({
-      frequency: { unit: "week", interval: 1 },
-      weekdays: ["monday"],
-      time: { hour: 8, minute: 0 },
-    });
-  });
-
-  test("a requested weekly day survives an ambiguous global kind", () => {
-    const tokens = tokenize("Make Thursday the weekly maintenance day").filter(
-      (token) => token.kind !== 3,
-    );
-
-    const labeled: LabeledToken[] = tokens.map((token) => ({
-      token,
-      role: labelId.O,
-      boundary: false,
-      score: 1,
-    }));
-
-    expect(decodeIntent(labeled, { kind: "ambiguous", score: 1 }).intent).toEqual({
-      frequency: { unit: "week", interval: 1 },
-      weekdays: ["thursday"],
-    });
-  });
-
   test("monday through friday expands to an ordered weekday list", () => {
     const intent = weekdays(["monday", "tuesday", "wednesday", "thursday", "friday"]);
     const example = renderIntent(intent, "weekday-range", noCarrier, "through");
 
     expect(example.text).toBe("monday through friday");
-    const labeled = labelTokens(example);
-
-    expect(decodeIntent(labeled).intent).toEqual(intent);
+    expect(heads(labelTokens(example)).intent).toEqual(intent);
   });
 
-  test("explicit range evidence recovers a missed connector and endpoint", () => {
-    const tokens = tokenize("the span runs wednesday through sunday").filter(
-      (token) => token.kind !== 3,
-    );
+  test("labeled weekday range uses the connector and both endpoints", () => {
+    const tokens = tokenize("wednesday through sunday").filter((token) => token.kind !== 3);
 
     const labeled: LabeledToken[] = tokens.map((token) => ({
       token,
-      role: token.text === "wednesday" ? labelId.WEEKDAY : labelId.O,
+      role:
+        token.text === "through"
+          ? labelId.GLUE
+          : token.text === "wednesday" || token.text === "sunday"
+            ? labelId.WEEKDAY
+            : labelId.O,
       boundary: token.text === "wednesday",
       score: 1,
     }));
 
-    expect(decodeIntent(labeled).intent).toEqual({
+    expect(heads(labeled).intent).toEqual({
       frequency: { unit: "week", interval: 1 },
       weekdays: ["wednesday", "thursday", "friday", "saturday", "sunday"],
     });
   });
 
-  test("explicit ordinal weekday evidence repairs a plain weekly decode", () => {
-    const tokens = tokenize("set it for the third friday monthly").filter(
-      (token) => token.kind !== 3,
-    );
+  test("labeled ordinal weekday is monthly", () => {
+    const tokens = tokenize("third friday monthly").filter((token) => token.kind !== 3);
 
     const labeled: LabeledToken[] = tokens.map((token) => ({
       token,
       role:
         token.text === "third"
           ? labelId.ORDINAL
-          : token.text === "monthly"
-            ? labelId.RECUR
-            : labelId.O,
-      boundary: token.text === "friday",
+          : token.text === "friday"
+            ? labelId.WEEKDAY
+            : token.text === "monthly"
+              ? labelId.RECUR
+              : labelId.O,
+      boundary: token.text === "third",
       score: 1,
     }));
 
-    expect(decodeIntent(labeled).intent).toEqual({
+    expect(heads(labeled).intent).toEqual({
       frequency: { unit: "month", interval: 1 },
       ordinalWeekday: { ordinal: "third", weekday: "friday" },
     });
   });
 
-  test("explicit ordinal weekday evidence overrides a spurious numeric-day role", () => {
-    const tokens = tokenize("remind me to the fourth Monday, monthly").filter(
-      (token) => token.kind !== 3,
-    );
-
-    const labeled: LabeledToken[] = tokens.map((token) => ({
-      token,
-      role:
-        token.text === "fourth"
-          ? labelId.DOM
-          : token.text.toLowerCase() === "monday"
-            ? labelId.WEEKDAY
-            : labelId.O,
-      boundary: token.text === "fourth",
-      score: 1,
-    }));
-
-    expect(decodeIntent(labeled).intent).toEqual({
-      frequency: { unit: "month", interval: 1 },
-      ordinalWeekday: { ordinal: "fourth", weekday: "monday" },
-    });
-  });
-
-  test("explicit monthly day evidence recovers an all-O model decode", () => {
+  test("all-O labels do not recover a schedule from raw English", () => {
     const tokens = tokenize("remind me to the 24th day, monthly").filter(
       (token) => token.kind !== 3,
     );
@@ -387,10 +316,7 @@ describe("range and interval rules", () => {
       score: 1,
     }));
 
-    expect(decodeIntent(labeled).intent).toEqual({
-      frequency: { unit: "month", interval: 1 },
-      dayOfMonth: 24,
-    });
+    expect(() => heads(labeled)).toThrow(/no-actionable-span|no recognizable schedule/);
   });
 
   test("every other friday multiplies the interval by two", () => {
@@ -404,94 +330,58 @@ describe("range and interval rules", () => {
       score: 1,
     }));
 
-    expect(decodeIntent(labeled).intent).toEqual({
+    expect(heads(labeled).intent).toEqual({
       frequency: { unit: "week", interval: 2 },
       weekdays: ["friday"],
     });
   });
 
-  test("explicit cadence evidence keeps its number out of the clock", () => {
-    const tokens = tokenize("the cycle is 43 minutes").filter((token) => token.kind !== 3);
+  test("INTERVAL plus unit GLUE keeps the number out of the clock", () => {
+    const tokens = tokenize("every 43 minutes").filter((token) => token.kind !== 3);
 
     const labeled: LabeledToken[] = tokens.map((token) => ({
       token,
       role:
-        token.text === "43" ? labelId.MINUTE : token.text === "minutes" ? labelId.GLUE : labelId.O,
-      boundary: token.text === "43",
+        token.text === "every"
+          ? labelId.RECUR
+          : token.text === "43"
+            ? labelId.INTERVAL
+            : token.text === "minutes"
+              ? labelId.GLUE
+              : labelId.O,
+      boundary: token.text === "every",
       score: 1,
     }));
 
-    expect(decodeIntent(labeled).intent).toEqual({
+    expect(heads(labeled).intent).toEqual({
       frequency: { unit: "minute", interval: 43 },
     });
   });
 
-  test("explicit exception evidence cannot disappear behind O predictions", () => {
-    const tokens = tokenize("daily except friday and 2026-12-25").filter(
-      (token) => token.kind !== 3,
-    );
-
-    const labeled: LabeledToken[] = tokens.map((token, index) => ({
-      token,
-      role: index === 0 ? labelId.INTERVAL : labelId.O,
-      boundary: index === 0,
-      score: 1,
-    }));
-
-    expect(decodeIntent(labeled).intent).toEqual({
-      frequency: { unit: "day", interval: 1 },
-      exceptions: { weekdays: ["friday"], dates: ["2026-12-25"] },
-    });
-  });
-
-  test("an explicit selector plus exception recovers an all-O decode", () => {
-    const tokens = tokenize("excluding friday, every monday").filter((token) => token.kind !== 3);
+  test("labeled EXCEPT keeps the exception weekday", () => {
+    const tokens = tokenize("daily except friday").filter((token) => token.kind !== 3);
 
     const labeled: LabeledToken[] = tokens.map((token) => ({
       token,
-      role: labelId.O,
-      boundary: false,
+      role:
+        token.text === "daily"
+          ? labelId.INTERVAL
+          : token.text === "except"
+            ? labelId.EXCEPT
+            : token.text === "friday"
+              ? labelId.WEEKDAY
+              : labelId.O,
+      boundary: token.text === "daily",
       score: 1,
     }));
 
-    expect(decodeIntent(labeled).intent).toEqual({
-      frequency: { unit: "week", interval: 1 },
-      weekdays: ["monday"],
+    expect(heads(labeled).intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
       exceptions: { weekdays: ["friday"] },
     });
   });
 
-  test("an incomplete explicit exception fails instead of becoming unrestricted", () => {
-    const tokens = tokenize("daily except").filter((token) => token.kind !== 3);
-
-    const labeled: LabeledToken[] = tokens.map((token, index) => ({
-      token,
-      role: index === 0 ? labelId.INTERVAL : labelId.O,
-      boundary: index === 0,
-      score: 1,
-    }));
-
-    expect(() => decodeIntent(labeled)).toThrow(RangeError);
-  });
-
-  test("a predicted exception without a visible cue cannot invent a constraint", () => {
-    const tokens = tokenize("please every week monday").filter((token) => token.kind !== 3);
-    const roles = [labelId.EXCEPT, labelId.RECUR, labelId.GLUE, labelId.WEEKDAY];
-
-    const labeled: LabeledToken[] = tokens.map((token, index) => ({
-      token,
-      role: roles[index]!,
-      boundary: index === 1,
-      score: 1,
-    }));
-
-    expect(decodeIntent(labeled).intent).toEqual({
-      frequency: { unit: "week", interval: 1 },
-      weekdays: ["monday"],
-    });
-  });
-
-  test("weekday and month selectors constrain a mistaken frequency prediction", () => {
+  test("weekday selectors constrain a mistaken daily unit", () => {
     const weekday = labelTokens(
       renderIntent(
         { frequency: { unit: "week", interval: 1 }, weekdays: ["monday"] },
@@ -501,12 +391,11 @@ describe("range and interval rules", () => {
       ),
     ).map((item) => (item.role === labelId.GLUE ? item : { ...item, role: labelId.WEEKDAY }));
 
-    // Inject a spurious daily unit without removing the explicit weekday.
     const daily = tokenize("daily").filter((token) => token.kind !== 3)[0]!;
 
     expect(
-      decodeIntent([{ token: daily, role: labelId.INTERVAL, boundary: true, score: 1 }, ...weekday])
-        .intent.frequency.unit,
+      heads([{ token: daily, role: labelId.INTERVAL, boundary: true, score: 1 }, ...weekday]).intent
+        .frequency.unit,
     ).toBe("week");
 
     const monthly = labelTokens(
@@ -518,25 +407,7 @@ describe("range and interval rules", () => {
       ),
     );
 
-    expect(decodeIntent(monthly).intent.frequency.unit).toBe("month");
-  });
-
-  test("an explicit weekday list cue recovers a missed weekday role", () => {
-    const tokens = tokenize("please add days are thursday").filter((token) => token.kind !== 3);
-
-    const labeled: LabeledToken[] = tokens.map((token, index) => ({
-      token,
-      role: index === 2 ? labelId.GLUE : labelId.O,
-      boundary: index === 2,
-      score: 1,
-    }));
-
-    // Pretend the model found only a generic daily schedule in "add". The
-    // visible list cue and weekday must constrain the repaired result.
-    expect(decodeIntent(labeled).intent).toEqual({
-      frequency: { unit: "week", interval: 1 },
-      weekdays: ["thursday"],
-    });
+    expect(heads(monthly).intent.frequency.unit).toBe("month");
   });
 });
 
@@ -549,7 +420,7 @@ describe("confidence", () => {
       { token, role: labelId.INTERVAL, boundary: true, score: 0.05 },
     ];
 
-    const decoded = decodeIntent(labeled);
+    const decoded = heads(labeled);
 
     expect(decoded.intent).toEqual(intent);
     expect(decoded.confidence).toBeCloseTo(0.05);
@@ -558,7 +429,7 @@ describe("confidence", () => {
   test("does not treat an uncalibrated kind margin as sequence confidence", () => {
     const intent: ScheduleIntent = { frequency: { unit: "day", interval: 3 } };
 
-    const decoded = decodeIntent(labelTokens(renderPhrase(intent)), {
+    const decoded = heads(labelTokens(renderPhrase(intent)), {
       kind: "interval",
       score: 0.72,
     });
@@ -566,10 +437,27 @@ describe("confidence", () => {
     expect(decoded.intent).toEqual(intent);
     expect(decoded.confidence).toBe(1);
   });
+
+  test("confidence equals tokenMargin, never 1 from a raw-string hit", () => {
+    const labeled = labelTokens(
+      renderPhrase({
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
+        time: { hour: 9, minute: 0 },
+      }),
+      0.72,
+    );
+
+    const decoded = heads(labeled);
+
+    expect(decoded.evidence.tokenMargin).toBeCloseTo(0.72);
+    expect(decoded.confidence).toBe(decoded.evidence.tokenMargin);
+    expect(decoded.confidence).not.toBe(1);
+  });
 });
 
 describe("global schedule-kind safety", () => {
-  test("rejects a confident global kind that contradicts token semantics", () => {
+  test("token labels win over a contradicting global kind", () => {
     const labeled = tokenize("kindly execute daily")
       .filter((token) => token.kind !== 3)
       .map((token) => ({
@@ -579,12 +467,12 @@ describe("global schedule-kind safety", () => {
         score: 1,
       }));
 
-    expect(() => decodeIntent(labeled, { kind: "weekly", score: 0.9 })).toThrow(
-      "conflicts with global weekly kind",
-    );
+    expect(heads(labeled, { kind: "weekly", score: 0.9 }).intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+    });
   });
 
-  test("a confident negative kind rejects schedule-like token predictions", () => {
+  test("a confident none kind does not veto labeled INTERVAL", () => {
     const labeled = tokenize("kindly execute daily")
       .filter((token) => token.kind !== 3)
       .map((token) => ({
@@ -594,15 +482,15 @@ describe("global schedule-kind safety", () => {
         score: 1,
       }));
 
-    expect(() => decodeIntent(labeled, { kind: "none", score: 0.9 })).toThrow(
-      "global schedule kind is none",
-    );
+    expect(heads(labeled, { kind: "none", score: 0.9 }).intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+    });
   });
 
   test("an uncertain global kind does not override explicit token evidence", () => {
     const intent: ScheduleIntent = { frequency: { unit: "day", interval: 3 } };
 
-    const decoded = decodeIntent(labelTokens(renderPhrase(intent)), {
+    const decoded = heads(labelTokens(renderPhrase(intent)), {
       kind: "weekly",
       score: 0.2,
     });
@@ -615,15 +503,15 @@ describe("decodeIntent rejects corrupt input", () => {
   const base = labelTokens(renderPhrase({ frequency: { unit: "day", interval: 1 } }));
 
   test("a role id at LABEL_COUNT is an unknown role", () => {
-    expect(() => decodeIntent([{ ...base[0]!, role: LABEL_COUNT }])).toThrow(UnknownRoleError);
+    expect(() => heads([{ ...base[0]!, role: LABEL_COUNT }])).toThrow(UnknownRoleError);
   });
 
   test("a negative role id is an unknown role", () => {
-    expect(() => decodeIntent([{ ...base[0]!, role: -1 }])).toThrow(UnknownRoleError);
+    expect(() => heads([{ ...base[0]!, role: -1 }])).toThrow(UnknownRoleError);
   });
 
   test("a non-integer role id is an unknown role", () => {
-    expect(() => decodeIntent([{ ...base[0]!, role: 1.5 }])).toThrow(UnknownRoleError);
+    expect(() => heads([{ ...base[0]!, role: 1.5 }])).toThrow(UnknownRoleError);
   });
 
   test("an out-of-bounds day of month is rejected before compile", () => {
@@ -632,6 +520,312 @@ describe("decodeIntent rejects corrupt input", () => {
       dayOfMonth: 32,
     });
 
-    expect(() => decodeIntent(labelTokens(example))).toThrow(RangeError);
+    expect(() => heads(labelTokens(example))).toThrow(RangeError);
+  });
+
+  test("heads-only still throws UnknownRoleError on an out-of-range role", () => {
+    expect(() => heads([{ ...base[0]!, role: LABEL_COUNT, actionable: true }])).toThrow(
+      UnknownRoleError,
+    );
+  });
+});
+
+describe("heads-only decode", () => {
+  const descriptive = "This is a descriptive wrap of a timetable sentence.";
+
+  const weekdayNine = weekdays(["monday", "tuesday", "wednesday", "thursday", "friday"], {
+    hour: 9,
+    minute: 0,
+  });
+
+  test("missing speech-act is a model error, never a regex fallback", () => {
+    const labeled = labelTokens(renderPhrase(weekdayNine));
+
+    expect(() => decodeIntent(labeled, undefined, descriptive)).toThrow(
+      /heads-only requires a speech-act/,
+    );
+  });
+
+  test("request still skips the discourse regex catalog", () => {
+    const labeled = labelTokens(renderPhrase(weekdayNine)).map((item) => ({
+      ...item,
+      actionable: true,
+    }));
+
+    const decoded = decodeIntent(labeled, undefined, descriptive, "on", "request");
+
+    expect(decoded.intent).toEqual(weekdayNine);
+  });
+
+  test("at 9pm is 21:00 from HOUR and MERIDIEM labels", () => {
+    const intent: ScheduleIntent = {
+      frequency: { unit: "day", interval: 1 },
+      time: { hour: 21, minute: 0 },
+    };
+
+    const tokens = tokenize("at 9 pm").filter((token) => token.kind !== 3);
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role:
+        token.text === "at"
+          ? labelId.O
+          : token.text === "9"
+            ? labelId.HOUR
+            : token.text === "pm"
+              ? labelId.MERIDIEM
+              : labelId.O,
+      boundary: token.text === "9",
+      score: 1,
+      actionable: true,
+    }));
+
+    expect(heads(labeled).intent).toEqual(intent);
+  });
+});
+
+describe("overlay-off speech-act heads", () => {
+  const weekdayNine = weekdays(["monday", "tuesday", "wednesday", "thursday", "friday"], {
+    hour: 9,
+    minute: 0,
+  });
+
+  function actionableSchedule(): LabeledToken[] {
+    return labelTokens(renderPhrase(weekdayNine)).map((item) => ({
+      ...item,
+      actionable: true,
+    }));
+  }
+
+  test("descriptive speech-act refuses without using a noun regex", () => {
+    const labeled = actionableSchedule();
+
+    expect(() =>
+      decodeIntent(labeled, undefined, "the shop opens every weekday at 9", "off", "descriptive"),
+    ).toThrow(UnsafeScheduleContextError);
+
+    const result = resultFromLabeledTokens(
+      labeled,
+      undefined,
+      "the shop opens every weekday at 9",
+      "off",
+      "descriptive",
+    );
+
+    expect(result.ok).toBe(false);
+
+    if (!result.ok) {
+      expect(result.code).toBe("unsafe-context");
+      expect(result.diagnostics.some((note) => note.code === "descriptive")).toBe(true);
+    }
+  });
+
+  test("request speech-act with actionable tokens yields the weekday 09:00 intent", () => {
+    const decoded = decodeIntent(
+      actionableSchedule(),
+      undefined,
+      "every weekday at 9",
+      "off",
+      "request",
+    );
+
+    expect(decoded.intent).toEqual(weekdayNine);
+  });
+
+  test("correction keeps only Friday actionable tokens", () => {
+    const thursday = renderIntent(
+      { frequency: { unit: "week", interval: 1 }, weekdays: ["thursday"] },
+      "terse",
+      noCarrier,
+      "bare",
+    );
+
+    const friday = renderIntent(
+      { frequency: { unit: "week", interval: 1 }, weekdays: ["friday"] },
+      "terse",
+      noCarrier,
+      "bare",
+    );
+
+    const combined = concat([thursday, friday]);
+
+    const labeled = labelTokens(combined).map((item) => ({
+      ...item,
+      actionable: combined.text.slice(item.token.start, item.token.end) === friday.text,
+    }));
+
+    const decoded = decodeIntent(labeled, undefined, combined.text, "off", "correction");
+
+    expect(decoded.intent).toEqual({
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["friday"],
+    });
+  });
+
+  test.each(["question", "none"] as const)("overlay-off %s speech-act is unsafe-context", (act) => {
+    const result = resultFromLabeledTokens(
+      actionableSchedule(),
+      undefined,
+      "every weekday at 9",
+      "off",
+      act,
+    );
+
+    expect(result.ok).toBe(false);
+
+    if (!result.ok) {
+      expect(result.code).toBe("unsafe-context");
+      expect(result.diagnostics.some((note) => note.code === act)).toBe(true);
+    }
+  });
+
+  test("overlay-off request with no actionable tokens rejects", () => {
+    const labeled = labelTokens(renderPhrase(weekdayNine)).map((item) => ({
+      ...item,
+      actionable: false,
+    }));
+
+    const result = resultFromLabeledTokens(
+      labeled,
+      undefined,
+      "every weekday at 9",
+      "off",
+      "request",
+    );
+
+    expect(result.ok).toBe(false);
+
+    if (!result.ok) {
+      expect(result.code).toBe("unsafe-context");
+      expect(result.diagnostics.some((note) => note.code === "no-actionable-span")).toBe(true);
+    }
+  });
+
+  test("unknown speech-act id is never treated as request", () => {
+    expect(() => speechActFromId(99)).toThrow(RangeError);
+  });
+});
+
+test("a labeled ISO date without a bound keyword is a start bound", () => {
+  const sentence = new Sentence();
+
+  sentence.clause();
+  sentence.add("2026-05-26", "DOM");
+  sentence.add(",", "GLUE", "");
+  sentence.add("every", "RECUR");
+  sentence.add("day", "GLUE");
+
+  const decoded = heads(
+    labelTokens({
+      text: sentence.text,
+      spans: sentence.spans,
+      speechAct: "request",
+    }),
+  );
+
+  expect(decoded.intent).toEqual({
+    frequency: { unit: "day", interval: 1 },
+    bounds: { start: "2026-05-26" },
+  });
+});
+
+test("a labeled weekday description with a digit round-trips", () => {
+  const sentence = new Sentence();
+
+  sentence.clause();
+  sentence.add("every", "RECUR");
+  sentence.add("day 6 of the week", "WEEKDAY");
+
+  const decoded = heads(
+    labelTokens({
+      text: sentence.text,
+      spans: sentence.spans,
+      template: "description",
+      style: "description",
+      speechAct: "request",
+    }),
+  );
+
+  expect(decoded.intent).toEqual({
+    frequency: { unit: "week", interval: 1 },
+    weekdays: ["saturday"],
+  });
+});
+
+test("at <minute> past <hour> is a relative clock, not an hour after at", () => {
+  const sentence = new Sentence();
+
+  sentence.clause();
+  sentence.add("at", "GLUE");
+  sentence.add("one", "MINUTE");
+  sentence.add("minute past", "GLUE");
+  sentence.add("twelve", "HOUR");
+  sentence.add("am", "MERIDIEM");
+
+  const decoded = heads(
+    labelTokens({
+      text: sentence.text,
+      spans: sentence.spans,
+      template: "minute-past",
+      style: "minute-past",
+      speechAct: "request",
+    }),
+  );
+
+  expect(decoded.intent).toEqual({
+    frequency: { unit: "day", interval: 1 },
+    time: { hour: 0, minute: 1 },
+  });
+});
+
+test("structural GLUE and RECUR follow an actionable clause even when their bits are false", () => {
+  const sentence = new Sentence();
+
+  sentence.clause();
+  sentence.add("every", "RECUR", " ", false);
+  sentence.add("5", "INTERVAL", " ", true);
+  sentence.add("minutes", "GLUE", " ", false);
+
+  const labeled = labelTokens({
+    text: sentence.text,
+    spans: sentence.spans,
+    template: "every-n",
+    style: "every-n",
+    speechAct: "request",
+  }).map((item) => {
+    const span = sentence.spans.find(
+      (value) => item.token.start >= value.start && item.token.end <= value.end,
+    );
+
+    return { ...item, actionable: span?.actionable };
+  });
+
+  expect(decodeIntent(labeled, undefined, sentence.text, "off", "request").intent).toEqual({
+    frequency: { unit: "minute", interval: 5 },
+  });
+});
+
+test("a labeled through between ISO dates is an inclusive end bound", () => {
+  const sentence = new Sentence();
+
+  sentence.clause();
+  sentence.add("2026-02-14", "DOM");
+  sentence.add("through", "BOUND");
+  sentence.add("2027-12-28", "DOM");
+  sentence.add(",", "GLUE", "");
+  sentence.add("every", "RECUR");
+  sentence.add("day", "GLUE");
+
+  const decoded = heads(
+    labelTokens({
+      text: sentence.text,
+      spans: sentence.spans,
+      speechAct: "request",
+    }),
+  );
+
+  expect(decoded.intent).toEqual({
+    frequency: { unit: "day", interval: 1 },
+    bounds: { start: "2026-02-14", end: "2027-12-29" },
   });
 });

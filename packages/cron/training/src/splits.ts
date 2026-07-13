@@ -1,3 +1,9 @@
+import { compile } from "../../src/compiler/cron.js";
+import {
+  hour12From24,
+  inclusiveShownFromExclusiveEnd,
+  meridiemFrom24,
+} from "../../src/schedule-semantics.js";
 /**
  * Held-out renderer: reordered frames plus the reserved carriers.
  *
@@ -12,6 +18,7 @@ import type { ScheduleIntent, Weekday } from "../../src/types/intent";
 import { RESERVED_PHRASES } from "./background";
 import type { RenderedExample } from "./renderer";
 import type { Rng } from "./rng";
+import { createRng } from "./rng";
 import type { Family } from "./sampler";
 import { sampleIntent } from "./sampler";
 import { Sentence } from "./sentence";
@@ -122,11 +129,11 @@ function heldoutDayOfMonth(sentence: Sentence, intent: ScheduleIntent): void {
 
 function heldoutTimeOfDay(sentence: Sentence, intent: ScheduleIntent): void {
   const time = intent.time!;
-  const hour12 = time.hour % 12 === 0 ? 12 : time.hour % 12;
 
-  sentence.add(String(hour12), "HOUR");
+  sentence.add(String(hour12From24(time.hour)), "HOUR");
   sentence.add(":", "GLUE", "");
   sentence.add(String(time.minute).padStart(2, "0"), "MINUTE", "");
+  sentence.add(meridiemFrom24(time.hour), "MERIDIEM");
   sentence.add("daily", "RECUR");
 }
 
@@ -138,10 +145,10 @@ function heldoutBounds(sentence: Sentence, intent: ScheduleIntent): void {
 
     if (end !== undefined) {
       sentence.add("through", "BOUND");
-      const inclusiveEnd = new Date(`${end}T00:00:00Z`);
+      const inclusiveEnd = inclusiveShownFromExclusiveEnd(end);
 
-      inclusiveEnd.setUTCDate(inclusiveEnd.getUTCDate() - 1);
-      sentence.add(inclusiveEnd.toISOString().slice(0, 10), "DOM");
+      if (inclusiveEnd === undefined) throw new Error(`uninvertible bound end: ${end}`);
+      sentence.add(inclusiveEnd, "DOM");
     }
   } else {
     sentence.add("ending", "BOUND");
@@ -157,6 +164,7 @@ function heldoutException(sentence: Sentence, intent: ScheduleIntent): void {
   sentence.add("excluding", "EXCEPT");
   addWeekdayList(sentence, intent.exceptions!.weekdays!, "and");
   sentence.add(",", "GLUE", "");
+  sentence.clause();
   sentence.add("every", "RECUR");
 
   if (intent.weekdays !== undefined && intent.weekdays.length > 0) {
@@ -235,6 +243,64 @@ export function renderHeldout(family: Family, rng: Rng): HeldoutExample {
     spans: sentence.spans,
     template: `${family}/heldout`,
     style: "heldout",
+    speechAct: sample.intent === null ? "none" : "request",
     intent: sample.intent,
   };
+}
+
+const RESERVED_GOLD_FAMILIES: readonly Family[] = [
+  "interval",
+  "weekday-list",
+  "weekday-range",
+  "ordinal-weekday",
+  "day-of-month",
+  "time-of-day",
+  "bounds",
+  "exception",
+  "terse",
+];
+
+export const RESERVED_GOLD_SEED = 20260915;
+export const RESERVED_GOLD_PER_FAMILY = 40;
+
+export interface ReservedGoldRecord {
+  id: string;
+  family: Family;
+  text: string;
+  spans: HeldoutExample["spans"];
+  intent: ScheduleIntent | null;
+  expected: { supported: boolean; expression: string | null };
+}
+
+/** Rebuild the reserved-carrier gold file from the current held-out renderer. */
+export function generateReservedCarrierGold(
+  seed = RESERVED_GOLD_SEED,
+  perFamily = RESERVED_GOLD_PER_FAMILY,
+): ReservedGoldRecord[] {
+  const rng = createRng(seed);
+  const records: ReservedGoldRecord[] = [];
+  let index = 0;
+
+  for (let n = 0; n < perFamily; n += 1) {
+    for (const family of RESERVED_GOLD_FAMILIES) {
+      const example = renderHeldout(family, rng);
+      const compiled = example.intent === null ? null : compile(example.intent);
+
+      records.push({
+        id: `reserved-${String(index).padStart(6, "0")}`,
+        family,
+        text: example.text,
+        spans: example.spans,
+        intent: example.intent,
+        expected:
+          compiled === null || !compiled.supported
+            ? { supported: false, expression: null }
+            : { supported: true, expression: compiled.expression },
+      });
+
+      index += 1;
+    }
+  }
+
+  return records;
 }

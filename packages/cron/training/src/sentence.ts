@@ -19,6 +19,13 @@ export interface Span {
   end: number;
   label: Label;
   clauseStart: boolean;
+  /** 1 iff this token is in the schedule to execute. Renderer-assigned. */
+  actionable: boolean;
+}
+
+/** 1 iff the token belongs to the schedule the user is asking to run. */
+export function defaultActionable(label: Label): boolean {
+  return label !== "O";
 }
 
 export class Sentence {
@@ -49,7 +56,7 @@ export class Sentence {
    * Append `separator` (except at the start of the text), then `text`, and
    * record the resulting UTF-16 span.
    */
-  add(text: string, label: Label = "O", separator = " "): void {
+  add(text: string, label: Label = "O", separator = " ", actionable?: boolean): void {
     // The shipped model never sees raw user text: parseWithModel normalizes it
     // before tokenization. Normalize each renderer fragment before recording
     // offsets so training features and production features share exactly the
@@ -65,6 +72,13 @@ export class Sentence {
     const clauseStart = this.#pendingClause && label !== "O" && !isStructural(label);
 
     if (clauseStart) this.#pendingClause = false;
-    this.#spans.push({ start, end, label, clauseStart });
+
+    this.#spans.push({
+      start,
+      end,
+      label,
+      clauseStart,
+      actionable: actionable ?? defaultActionable(label),
+    });
   }
 }

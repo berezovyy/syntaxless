@@ -1,16 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { inferRows } from "../src/model/inference.ts";
-import { PADDING_ROW } from "../src/model/tokenizer.ts";
+import type { WeightsArtifact } from "../src/model/decode.ts";
+import { inferRows, inferTokens } from "../src/model/inference.ts";
+import { PADDING_ROW, tokenize } from "../src/model/tokenizer.ts";
 import { weights } from "../src/model/weights.gen.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
-const ROWS_PER_TOKEN = weights.rowsPerToken;
-const ROLE_CLASSES = weights.roleClasses;
-const SCHEDULE_KIND_CLASSES: number = weights.scheduleKindClasses ?? 0;
-const BOUNDARY_THRESHOLD = weights.boundaryThreshold;
+const ARTIFACT = weights as WeightsArtifact;
+const ROWS_PER_TOKEN = ARTIFACT.rowsPerToken;
+const ROLE_CLASSES = ARTIFACT.roleClasses;
+const SCHEDULE_KIND_CLASSES: number = ARTIFACT.scheduleKindClasses ?? 0;
+const SPEECH_ACT_CLASSES: number = ARTIFACT.speechActClasses ?? 0;
+
+const HAS_ACTIONABLE = ARTIFACT.segments.some(
+  (segment) => segment.name === "actionable_head.weight",
+);
+
+const BOUNDARY_THRESHOLD = ARTIFACT.boundaryThreshold;
 const TOLERANCE = 1e-3;
 
 function arrayBuffer(path: string): ArrayBuffer {
@@ -29,6 +37,16 @@ const fixtureScheduleKinds =
     ? new Float32Array()
     : new Float32Array(arrayBuffer(join(FIXTURES, "parity.schedule-kinds.bin")));
 
+const fixtureSpeechActs =
+  SPEECH_ACT_CLASSES === 0 || !existsSync(join(FIXTURES, "parity.speech-acts.bin"))
+    ? new Float32Array()
+    : new Float32Array(arrayBuffer(join(FIXTURES, "parity.speech-acts.bin")));
+
+const fixtureActionable =
+  !HAS_ACTIONABLE || !existsSync(join(FIXTURES, "parity.actionable.bin"))
+    ? new Float32Array()
+    : new Float32Array(arrayBuffer(join(FIXTURES, "parity.actionable.bin")));
+
 const sequences = offsets.length - 1;
 const tokens = sequences >= 0 ? offsets[sequences]! : 0;
 
@@ -38,6 +56,8 @@ interface Predictions {
   logits: Float32Array;
   boundaryLogits: Float32Array;
   scheduleKindLogits: Float32Array;
+  speechActLogits: Float32Array;
+  actionableLogits: Float32Array;
 }
 
 function append(
@@ -51,6 +71,8 @@ function append(
   target.logits.set(source.logits, tokenBase * ROLE_CLASSES);
   target.boundaryLogits.set(source.boundaryLogits, tokenBase);
   target.scheduleKindLogits.set(source.scheduleKindLogits, sequence * SCHEDULE_KIND_CLASSES);
+  target.speechActLogits.set(source.speechActLogits, sequence * SPEECH_ACT_CLASSES);
+  target.actionableLogits.set(source.actionableLogits, tokenBase);
 }
 
 /** Run one fixture sequence, optionally padding its tail to `padTo` tokens. */
@@ -70,6 +92,8 @@ function predictSequence(sequence: number, padTo = 0): Predictions {
     logits: result.logits!.subarray(0, length * ROLE_CLASSES),
     boundaryLogits: result.boundaryLogits!.subarray(0, length),
     scheduleKindLogits: result.scheduleKindLogits ?? new Float32Array(),
+    speechActLogits: result.speechActLogits ?? new Float32Array(),
+    actionableLogits: result.actionableLogits ?? new Float32Array(),
   };
 }
 
@@ -80,6 +104,8 @@ function predictAll(padTo = 0): Predictions {
     logits: new Float32Array(tokens * ROLE_CLASSES),
     boundaryLogits: new Float32Array(tokens),
     scheduleKindLogits: new Float32Array(sequences * SCHEDULE_KIND_CLASSES),
+    speechActLogits: new Float32Array(sequences * SPEECH_ACT_CLASSES),
+    actionableLogits: new Float32Array(tokens),
   };
 
   for (let sequence = 0; sequence < sequences; sequence++) {
@@ -162,6 +188,14 @@ describe("inference parity fixture", () => {
     expect(fixtureLogits.length).toBe(tokens * ROLE_CLASSES);
     expect(fixtureBoundaries.length).toBe(tokens);
     expect(fixtureScheduleKinds.length).toBe(sequences * SCHEDULE_KIND_CLASSES);
+
+    if (SPEECH_ACT_CLASSES > 0 && fixtureSpeechActs.length > 0) {
+      expect(fixtureSpeechActs.length).toBe(sequences * SPEECH_ACT_CLASSES);
+    }
+
+    if (HAS_ACTIONABLE && fixtureActionable.length > 0) {
+      expect(fixtureActionable.length).toBe(tokens);
+    }
   });
 
   test("reproduces the frozen logits and boundaries", () => {
@@ -177,6 +211,18 @@ describe("inference parity fixture", () => {
     expect(maximumArrayError(computed.scheduleKindLogits, fixtureScheduleKinds)).toBeLessThan(
       TOLERANCE,
     );
+
+    if (SPEECH_ACT_CLASSES > 0 && fixtureSpeechActs.length > 0) {
+      expect(maximumArrayError(computed.speechActLogits, fixtureSpeechActs)).toBeLessThan(
+        TOLERANCE,
+      );
+    }
+
+    if (HAS_ACTIONABLE && fixtureActionable.length > 0) {
+      expect(maximumArrayError(computed.actionableLogits, fixtureActionable)).toBeLessThan(
+        TOLERANCE,
+      );
+    }
   });
 
   test("short input keeps zero mismatches and a small logit error", () => {
@@ -238,6 +284,20 @@ describe("inference parity fixture", () => {
       );
     }
 
+    for (let index = 0; index < short.speechActLogits.length; index++) {
+      error = Math.max(
+        error,
+        Math.abs(padded.speechActLogits[index]! - short.speechActLogits[index]!),
+      );
+    }
+
+    for (let index = 0; index < short.actionableLogits.length; index++) {
+      error = Math.max(
+        error,
+        Math.abs(padded.actionableLogits[index]! - short.actionableLogits[index]!),
+      );
+    }
+
     console.log(`padding neutrality max delta: ${error}`);
     expect(error).toBeLessThan(TOLERANCE);
   });
@@ -251,5 +311,13 @@ describe("inference parity fixture", () => {
 
     console.log(`padded fixture max logit error: ${error}`);
     expect(error).toBeLessThan(TOLERANCE);
+  });
+
+  test("legacy artifacts omit speech-act and actionable fields", () => {
+    if (SPEECH_ACT_CLASSES > 0 || HAS_ACTIONABLE) return;
+    const predictions = inferTokens(tokenize("every weekday at 9"));
+
+    expect(predictions.speechAct).toBeUndefined();
+    expect(predictions.actionable).toBeUndefined();
   });
 });

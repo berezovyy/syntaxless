@@ -14,6 +14,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { SpeechAct } from "../../src/model/speech-acts";
 import type { ScheduleIntent } from "../../src/types/intent";
 import { fingerprintExample } from "./fingerprint";
 import type { RenderedExample } from "./renderer";
@@ -36,6 +37,7 @@ export interface CorpusRecord {
   fingerprint: string;
   text: string;
   intent: ScheduleIntent | null;
+  speechAct: SpeechAct;
   spans: Span[];
 }
 
@@ -78,6 +80,8 @@ const SPLITS: readonly Split[] = ["train", "validation", "heldout"];
  */
 const GENERATOR_SOURCES: readonly string[] = [
   "background.ts",
+  "correction.ts",
+  "discourse.ts",
   "fingerprint.ts",
   "generate.ts",
   "renderer.ts",
@@ -168,6 +172,7 @@ export function generate(options: GenerateOptions): GenerateResult {
       fingerprint,
       text: example.text,
       intent,
+      speechAct: example.speechAct,
       spans: example.spans,
     });
   }

@@ -22,6 +22,9 @@ Run development diagnostics from the repository root after building:
 bun run --cwd packages/cron/training evaluate:human
 ```
 
+`--partition regression` scores the union of consumed `human-v*` files as
+development evidence (H, H-neg, H-silent). It is never promotion.
+
 Do not run the `acceptance` partition until the candidate is otherwise frozen.
 
 The acceptance partition in `human-v1.jsonl` was consumed on 2026-09-15 and is
@@ -31,6 +34,33 @@ if unrelated partitions change or the file is copied. Final promotion requires a
 authored corpus with a different hash. After its one permitted acceptance run,
 copy `acceptancePartitionSha256` from the evaluation report into the ledger
 before further development.
+
+## After a miss: kinds, not nouns
+
+Development diagnoses _classes_ (reported speech, competing clocks, dotted
+clocks, correction, descriptive timetable, question, quoted, one-off, cancel,
+incomplete). After the acceptance hash is in `consumed.json`, do not patch
+`decode.ts` to match that wording.
+
+Legal response: a new abstract kind in `packages/cron/training/src/kinds.ts`
+(and the wrap renderer) whose inner schedule still carries real roles; retrain;
+re-run the overlay-off / heads-only gate. Also legal: a lexicon row for a true synonym or
+abbreviation; `normalize` for punctuation / meridiem / dotted-clock _form_; a
+compiler fix for an AST feature cron cannot represent.
+
+Discourse refuse is the speech-act head. Public parse is heads-only; overlay-on
+is not a published regex path. A human miss is a generator kind, never a parser
+regex. Consumed-set 100% after a decoder patch is still not promotion.
+
+Forbidden: a decoder regex whose distinguishing term is a noun or quote from
+the failed row (`flights`, `planes`, `bakery`, `clock strikes`, a quoted
+sentence fragment). Dotted-clock belongs in `normalize` (already). Do not add
+a `/bakery/` refuse pattern “because normalize doesn’t cover bakeries.”
+
+100% on a consumed set after those failures were used is a **regression suite
+result**, never promotion. Promotion requires a newly authored corpus with a
+different hash. The per-`human-vN` 100/100 scores below are the anti-pattern
+this section forbids repeating.
 
 `human-v2.jsonl` was authored by the coding agent at the user's explicit
 request, rather than by an independent human, and was consumed on 2026-09-15.

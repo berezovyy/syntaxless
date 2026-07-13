@@ -28,7 +28,7 @@ import torch
 
 from calibrate import Calibration, calibrate
 from dataset import Dataset, fingerprints_path, prepare, repo_root
-from model import SCHEDULE_KIND_NAMES, Tagger, parameter_counts
+from model import SCHEDULE_KIND_NAMES, SPEECH_ACT_NAMES, Tagger, parameter_counts
 
 #: The shipped format is int6 by contract.
 QUANTIZATION_BITS = 6
@@ -214,6 +214,11 @@ def build_decoded_model(artifact: dict, device: str = "cpu") -> Tagger:
         rows_per_token=int(artifact["rowsPerToken"]),
         role_classes=int(artifact["roleClasses"]),
         schedule_kind_classes=int(artifact.get("scheduleKindClasses", 0)),
+        speech_act_classes=int(artifact.get("speechActClasses", 0)),
+        actionable_head=any(
+            segment.get("name") == "actionable_head.weight"
+            for segment in artifact.get("segments", [])
+        ),
         hidden=int(artifact["hidden"]),
         quantization_bits=QUANTIZATION_BITS,
     ).to(device)
@@ -242,7 +247,7 @@ def evaluate(
         batch = dataset.batch(indices, device)
         labels = batch["labels"]
         mask = labels != -100
-        roles, boundary, schedule_kind = model(
+        roles, boundary, schedule_kind, _speech_act, _actionable = model(
             batch["rows"], batch["valid"], batch["neighbors"]
         )
         if schedule_kind.shape[-1] > 0:
@@ -306,6 +311,8 @@ def freeze_parity(
     logits_parts: list[np.ndarray] = []
     boundaries_parts: list[np.ndarray] = []
     schedule_kind_parts: list[np.ndarray] = []
+    speech_act_parts: list[np.ndarray] = []
+    actionable_parts: list[np.ndarray] = []
     offsets = [0]
     for index in range(count):
         start = int(dataset.offsets[index])
@@ -317,13 +324,23 @@ def freeze_parity(
         neighbor_tensor = (
             torch.as_tensor(neighbors.astype(np.int64)).unsqueeze(0).to(device)
         )
-        roles, boundary, schedule_kind = model(row_tensor, valid, neighbor_tensor)
+        roles, boundary, schedule_kind, speech_act, actionable = model(
+            row_tensor, valid, neighbor_tensor
+        )
         rows_parts.append(rows)
         logits_parts.append(roles[0].detach().cpu().numpy().astype(np.float32))
         boundaries_parts.append(boundary[0].detach().cpu().numpy().astype(np.float32))
         if schedule_kind.shape[-1] > 0:
             schedule_kind_parts.append(
                 schedule_kind[0].detach().cpu().numpy().astype(np.float32)
+            )
+        if speech_act.shape[-1] > 0:
+            speech_act_parts.append(
+                speech_act[0].detach().cpu().numpy().astype(np.float32)
+            )
+        if actionable.shape[-1] > 0:
+            actionable_parts.append(
+                actionable[0].detach().cpu().numpy().astype(np.float32)
             )
         offsets.append(offsets[-1] + (end - start))
 
@@ -344,6 +361,18 @@ def freeze_parity(
         files["scheduleKinds"] = (
             "parity.schedule-kinds.bin",
             schedule_kinds_all.tobytes(),
+        )
+    if speech_act_parts:
+        speech_acts_all = np.stack(speech_act_parts).astype(np.float32)
+        files["speechActs"] = (
+            "parity.speech-acts.bin",
+            speech_acts_all.tobytes(),
+        )
+    if actionable_parts:
+        actionable_all = np.concatenate(actionable_parts).astype(np.float32)
+        files["actionable"] = (
+            "parity.actionable.bin",
+            actionable_all.tobytes(),
         )
     summary = {
         "sequences": count,
@@ -476,6 +505,13 @@ def build_artifact(
     if schedule_kind_classes > 0:
         artifact["scheduleKindClasses"] = schedule_kind_classes
         artifact["scheduleKindLabels"] = list(checkpoint["scheduleKindLabels"])
+    speech_act_classes = int(checkpoint.get("speechActClasses", 0))
+    if speech_act_classes > 0:
+        labels = list(checkpoint.get("speechActLabels", SPEECH_ACT_NAMES))
+        if labels != list(SPEECH_ACT_NAMES):
+            raise ValueError("speechActLabels must match SPEECH_ACT_NAMES")
+        artifact["speechActClasses"] = speech_act_classes
+        artifact["speechActLabels"] = labels
     return artifact
 
 
@@ -556,6 +592,13 @@ def export(
         or schedule_kind_labels != list(SCHEDULE_KIND_NAMES)
     ):
         raise ValueError("checkpoint schedule-kind vocabulary does not match runtime")
+    speech_act_classes = int(checkpoint.get("speechActClasses", 0))
+    speech_act_labels = list(checkpoint.get("speechActLabels", []))
+    if speech_act_classes > 0 and (
+        speech_act_classes != len(SPEECH_ACT_NAMES)
+        or speech_act_labels != list(SPEECH_ACT_NAMES)
+    ):
+        raise ValueError("checkpoint speech-act vocabulary does not match runtime")
     hidden = int(state["embedding.weight"].shape[1])
 
     segments, q = pack_state(state)

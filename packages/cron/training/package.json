@@ -16,6 +16,8 @@
     "gen:kinds": "bun run src/backward.ts",
     "evaluate": "bun run src/evaluate.ts",
     "evaluate:human": "bun run src/human-evaluate.ts",
+    "oracle": "bun run src/oracle.ts",
+    "oracle:gate": "bun run src/oracle.ts --gate --seeds 50 --kinds-sample 200000",
     "gate": "bun run src/gate.ts"
   },
   "devDependencies": {

@@ -7,7 +7,8 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import { assertSameArtifact, decide, familyGuards, proportionGuard } from "./gate";
+import { assertSameArtifact, decide, decidePromotion, familyGuards, proportionGuard } from "./gate";
+import type { GateScores } from "./gate";
 
 describe("proportionGuard", () => {
   test("accepts a regression inside the tolerance band", () => {
@@ -58,6 +59,21 @@ describe("familyGuards", () => {
     expect(bounds?.reason).toBe("support mismatch");
   });
 });
+
+function passingScores(correct: number, total = 100): GateScores {
+  const terseCorrect = Math.min(40, correct);
+
+  return {
+    total,
+    correct,
+    byFamily: { terse: { total: 40, correct: terseCorrect } },
+    selective: {
+      silentMeaningChangeRate: 0,
+      negativeFalseAcceptanceRate: 0,
+      typoInvariance: 0.96,
+    },
+  };
+}
 
 describe("decide", () => {
   test("rejects equal counts with no strict improvement", () => {
@@ -121,6 +137,61 @@ describe("decide", () => {
     expect(decision.failures).toContain("silent meaning-change rate above 0.005");
     expect(decision.failures).toContain("negative false-acceptance rate above 0.01");
     expect(decision.failures).toContain("typo invariance below 0.95");
+  });
+});
+
+describe("decidePromotion", () => {
+  test("rejects overlay-on 1.0 when overlay-off is 0.7", () => {
+    const decision = decidePromotion(
+      {
+        overlayOn: passingScores(100),
+        overlayOff: passingScores(70),
+      },
+      {
+        overlayOn: passingScores(96),
+        overlayOff: passingScores(96),
+      },
+    );
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.failures.some((failure) => failure.includes("overlay-off"))).toBe(true);
+    expect(decision.failures.some((failure) => /overlay-on overall/.test(failure))).toBe(false);
+    expect(decision.failures).toContain("overlay-off overall accuracy below 0.95");
+  });
+
+  test("rejects overlay-off silent-change worse than overlay-on on the same artifact", () => {
+    const overlayOff = passingScores(96);
+
+    overlayOff.selective = {
+      silentMeaningChangeRate: 0.01,
+      negativeFalseAcceptanceRate: 0,
+      typoInvariance: 0.96,
+    };
+
+    const decision = decidePromotion(
+      {
+        overlayOn: passingScores(100),
+        overlayOff,
+      },
+      {
+        overlayOn: passingScores(94),
+        overlayOff: passingScores(94),
+      },
+    );
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.failures).toContain("overlay-off silent meaning-change worse than overlay-on");
+    expect(decision.failures).toContain("overlay-off silent meaning-change rate above 0.005");
+  });
+
+  test("missing overlay-off is a failed run, not an implied pass", () => {
+    const decision = decidePromotion(
+      { overlayOn: passingScores(100) },
+      { overlayOn: passingScores(96), overlayOff: passingScores(96) },
+    );
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.failures).toContain("missing overlay-off");
   });
 });
 

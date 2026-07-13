@@ -255,6 +255,50 @@ test("a gold record is never dropped for an llm duplicate", () => {
   });
 });
 
+test("legacy records without speechAct or actionable still merge", () => {
+  const rulePath = join(workdir, "legacy-rule.jsonl");
+
+  writeFileSync(
+    rulePath,
+    `${JSON.stringify({
+      id: "legacy-1",
+      split: "train",
+      family: "weekday-list",
+      fingerprint: "fp-legacy",
+      text: "every Monday",
+      intent: MONDAY,
+      spans: [{ start: 0, end: 12, label: "WEEKDAY", clauseStart: true }],
+      source: "rule",
+    })}\n`,
+  );
+
+  const [positive] = readRuleRecords(rulePath);
+
+  expect(positive?.speechAct).toBe("request");
+  expect(positive?.spans[0]?.actionable).toBe(true);
+
+  const negPath = join(workdir, "legacy-neg.jsonl");
+
+  writeFileSync(
+    negPath,
+    `${JSON.stringify({
+      id: "legacy-neg",
+      split: "train",
+      family: "negative",
+      fingerprint: "fp-neg",
+      text: "ordinary prose",
+      intent: null,
+      spans: [{ start: 0, end: 14, label: "O", clauseStart: false }],
+      source: "rule",
+    })}\n`,
+  );
+
+  const [negative] = readRuleRecords(negPath);
+
+  expect(negative?.speechAct).toBe("none");
+  expect(negative?.spans[0]?.actionable).toBe(false);
+});
+
 test("a missing source and unknown fields are rejected loudly", () => {
   const rulePath = join(workdir, "rule-invalid.jsonl");
 

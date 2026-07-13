@@ -12,6 +12,7 @@ import { decodeWeights } from "./decode.js";
 import type { WeightsArtifact } from "./decode.js";
 import { LABEL_COUNT, LABELS } from "./labels.js";
 import { SCHEDULE_KINDS } from "./schedule-kinds.js";
+import { SPEECH_ACTS } from "./speech-acts.js";
 import { featureRows, PADDING_ROW } from "./tokenizer.js";
 import type { RawToken } from "./tokenizer.js";
 import { weights } from "./weights.gen.js";
@@ -22,6 +23,7 @@ const FEATURE_ROWS = ARTIFACT.featureRows;
 const ROWS_PER_TOKEN = ARTIFACT.rowsPerToken;
 const ROLE_CLASSES = ARTIFACT.roleClasses;
 const SCHEDULE_KIND_CLASSES = ARTIFACT.scheduleKindClasses ?? 0;
+const SPEECH_ACT_CLASSES = ARTIFACT.speechActClasses ?? 0;
 const BOUNDARY_THRESHOLD = ARTIFACT.boundaryThreshold;
 const LAYER_NORM_EPSILON = 1e-5;
 
@@ -43,6 +45,15 @@ if (
     ARTIFACT.scheduleKindLabels?.length !== SCHEDULE_KINDS.length)
 ) {
   throw new Error("weights schedule-kind vocabulary does not match runtime");
+}
+
+if (
+  SPEECH_ACT_CLASSES > 0 &&
+  (SPEECH_ACT_CLASSES !== SPEECH_ACTS.length ||
+    ARTIFACT.speechActLabels?.some((label, id) => label !== SPEECH_ACTS[id]) ||
+    ARTIFACT.speechActLabels?.length !== SPEECH_ACTS.length)
+) {
+  throw new Error("weights speech-act vocabulary does not match runtime");
 }
 
 const tensors = decodeWeights(ARTIFACT);
@@ -85,6 +96,19 @@ const SCHEDULE_KIND_HEAD_WEIGHT =
 const SCHEDULE_KIND_HEAD_BIAS =
   SCHEDULE_KIND_CLASSES === 0 ? undefined : requireTensor("schedule_kind_head.bias");
 
+const SPEECH_ACT_HEAD_WEIGHT =
+  SPEECH_ACT_CLASSES === 0 ? undefined : requireTensor("speech_act_head.weight");
+
+const SPEECH_ACT_HEAD_BIAS =
+  SPEECH_ACT_CLASSES === 0 ? undefined : requireTensor("speech_act_head.bias");
+
+const ACTIONABLE_HEAD_WEIGHT = tensors.get("actionable_head.weight");
+const ACTIONABLE_HEAD_BIAS = tensors.get("actionable_head.bias");
+
+if (ACTIONABLE_HEAD_WEIGHT !== undefined && ACTIONABLE_HEAD_BIAS === undefined) {
+  throw new Error("missing weight tensor: actionable_head.bias");
+}
+
 /** Per-token model output. Padding positions are included for `inferRows`. */
 export interface Predictions {
   labels: Uint8Array;
@@ -97,6 +121,12 @@ export interface Predictions {
   scheduleKind?: number;
   scheduleKindScore?: number;
   scheduleKindLogits?: Float32Array;
+  speechAct?: number;
+  speechActScore?: number;
+  speechActLogits?: Float32Array;
+  actionable?: Uint8Array;
+  actionableScores?: Float32Array;
+  actionableLogits?: Float32Array;
 }
 
 function sigmoid(value: number): number {
@@ -454,6 +484,67 @@ export function inferRows(
     scheduleKindScore = 1 / total - Math.exp(second - best) / total;
   }
 
+  let speechAct: number | undefined;
+  let speechActScore: number | undefined;
+  let speechActLogits: Float32Array | undefined;
+
+  if (
+    SPEECH_ACT_CLASSES > 0 &&
+    SPEECH_ACT_HEAD_WEIGHT !== undefined &&
+    SPEECH_ACT_HEAD_BIAS !== undefined
+  ) {
+    speechActLogits = new Float32Array(SPEECH_ACT_CLASSES);
+    let best = -Infinity;
+    let second = -Infinity;
+    let bestIndex = 0;
+
+    for (let act = 0; act < SPEECH_ACT_CLASSES; act++) {
+      let value = SPEECH_ACT_HEAD_BIAS[act]!;
+
+      for (let hidden = 0; hidden < HIDDEN; hidden++) {
+        value += SPEECH_ACT_HEAD_WEIGHT[act * HIDDEN + hidden]! * pooled[hidden]!;
+      }
+
+      speechActLogits[act] = value;
+
+      if (value > best) {
+        second = best;
+        best = value;
+        bestIndex = act;
+      } else if (value > second) {
+        second = value;
+      }
+    }
+
+    let total = 0;
+
+    for (const value of speechActLogits) total += Math.exp(value - best);
+    speechAct = bestIndex;
+    speechActScore = 1 / total - Math.exp(second - best) / total;
+  }
+
+  let actionable: Uint8Array | undefined;
+  let actionableScores: Float32Array | undefined;
+  let actionableLogits: Float32Array | undefined;
+
+  if (ACTIONABLE_HEAD_WEIGHT !== undefined && ACTIONABLE_HEAD_BIAS !== undefined) {
+    actionable = new Uint8Array(width);
+    actionableScores = new Float32Array(width);
+    actionableLogits = new Float32Array(width);
+
+    for (let token = 0; token < width; token++) {
+      let value = ACTIONABLE_HEAD_BIAS[0]!;
+
+      for (let hidden = 0; hidden < HIDDEN; hidden++) {
+        value += ACTIONABLE_HEAD_WEIGHT[hidden]! * gated[token * HIDDEN + hidden]!;
+      }
+
+      actionableLogits[token] = value;
+      actionable[token] = Number(value >= 0);
+      actionableScores[token] = sigmoid(value);
+    }
+  }
+
   return {
     labels,
     boundaries,
@@ -462,8 +553,16 @@ export function inferRows(
     ...(scheduleKind === undefined || scheduleKindScore === undefined
       ? {}
       : { scheduleKind, scheduleKindScore }),
+    ...(speechAct === undefined || speechActScore === undefined
+      ? {}
+      : { speechAct, speechActScore }),
+    ...(actionable === undefined || actionableScores === undefined
+      ? {}
+      : { actionable, actionableScores }),
     ...(debug ? { logits, boundaryLogits } : {}),
     ...(debug && scheduleKindLogits !== undefined ? { scheduleKindLogits } : {}),
+    ...(debug && speechActLogits !== undefined ? { speechActLogits } : {}),
+    ...(debug && actionableLogits !== undefined ? { actionableLogits } : {}),
   };
 }
 

@@ -63,6 +63,7 @@ const NUMBER_WORDS = new Set([
 const CONTENT_LABELS = new Set(LABELS.filter((label) => label !== "O" && !isStructural(label)));
 
 function checkExample(example: RenderedExample, family: Family): void {
+  expect(example.speechAct).toBe(family === "negative" ? "none" : "request");
   const { text, spans } = example;
   const tokens = tokenize(text);
   const boundaries = new Set<number>();

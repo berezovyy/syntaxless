@@ -20,6 +20,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
 import { LABEL_COUNT, LABELS } from "../../src/model/labels.js";
+import { SPEECH_ACT_COUNT, SPEECH_ACTS } from "../../src/model/speech-acts.js";
 import { EMBEDDING_ROWS, FEATURE_COUNT, tokenize } from "../../src/model/tokenizer.js";
 import { corpusRecordSchema } from "./corpus/merge.js";
 import type { CorpusRecord } from "./corpus/merge.js";
@@ -79,6 +80,8 @@ interface SplitState {
     neighbors: BufferedWriter;
     offsets: BufferedWriter;
     frames: BufferedWriter;
+    speech: BufferedWriter;
+    actionable: BufferedWriter;
   };
   sequences: number;
   tokens: number;
@@ -89,6 +92,7 @@ interface SplitState {
   frameIds: Map<string, number>;
   frameNames: string[];
   frameCounts: number[];
+  actionableCounts: Record<0 | 1, number>;
 }
 
 export interface StreamingSplitSummary {
@@ -156,6 +160,8 @@ function createState(outputBase: string, split: Split): SplitState {
       neighbors: new BufferedWriter(shardPath(prefix, "neighbors")),
       offsets,
       frames: new BufferedWriter(shardPath(prefix, "frames")),
+      speech: new BufferedWriter(shardPath(prefix, "speech")),
+      actionable: new BufferedWriter(shardPath(prefix, "actionable")),
     },
     sequences: 0,
     tokens: 0,
@@ -166,6 +172,7 @@ function createState(outputBase: string, split: Split): SplitState {
     frameIds: new Map<string, number>(),
     frameNames: [],
     frameCounts: [],
+    actionableCounts: { 0: 0, 1: 0 },
   };
 }
 
@@ -195,6 +202,16 @@ function appendRecord(state: SplitState, record: CorpusRecord): void {
   state.writers.boundaries.append(shard.boundaries);
   state.writers.kinds.append(shard.kinds);
   state.writers.neighbors.append(shard.neighbors);
+  state.writers.speech.append(shard.speech);
+  state.writers.actionable.append(shard.actionable);
+
+  for (let index = 0; index < shard.tokenCount; index++) {
+    if (shard.kinds[index] === 3) continue;
+    const bit = shard.actionable[index]! === 1 ? 1 : 0;
+
+    state.actionableCounts[bit] += 1;
+  }
+
   const frameName = record.template ?? `${record.family}/unspecified`;
   let frameId = state.frameIds.get(frameName);
 
@@ -261,6 +278,9 @@ function writeManifest(state: SplitState): void {
     labelCounts: state.labelCounts,
     frameNames: state.frameNames,
     frameCounts: state.frameCounts,
+    speechActClasses: SPEECH_ACT_COUNT,
+    speechActNames: SPEECH_ACTS,
+    actionableCounts: state.actionableCounts,
     format: SHARD_FORMAT,
   };
 

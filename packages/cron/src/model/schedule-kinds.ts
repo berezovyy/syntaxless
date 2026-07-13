@@ -1,4 +1,5 @@
-/** Coarse utterance-level schedule classes predicted alongside token roles. */
+/** Coarse utterance-level schedule shape predicted alongside token roles.
+ * This is not speech-act; see `speech-acts.ts`. */
 export const SCHEDULE_KINDS = [
   "none",
   "interval",

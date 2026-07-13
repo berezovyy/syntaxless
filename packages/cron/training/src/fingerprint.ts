@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 
 import { isStructural } from "../../src/model/labels";
+import type { SpeechAct } from "../../src/model/speech-acts";
 import type { Span } from "./sentence";
 
 /** The one token a value slot contributes to a pattern. */
@@ -75,7 +76,30 @@ export function fingerprintSpans(text: string, spans: readonly Span[]): string {
   return sha256Hex(JSON.stringify(fingerprintPattern(text, spans)));
 }
 
-/** Fingerprint a rendered example. */
-export function fingerprintExample(example: { text: string; spans: readonly Span[] }): string {
-  return fingerprintSpans(example.text, example.spans);
+function inferLegacySpeechAct(spans: readonly Span[]): SpeechAct {
+  return spans.every((span) => span.label === "O") ? "none" : "request";
+}
+
+/**
+ * Structural pattern prefixed with speech-act so a descriptive wrap of the
+ * same inner schedule cannot share a split-assignment key with the request.
+ */
+export function framePattern(text: string, spans: readonly Span[], speechAct: SpeechAct): string[] {
+  return [speechAct, ...structuralPattern(text, spans)];
+}
+
+/** Fingerprint a rendered example. Speech-act is part of the hash. */
+export function fingerprintExample(example: {
+  text: string;
+  spans: readonly Span[];
+  speechAct?: SpeechAct;
+}): string {
+  const speechAct = example.speechAct ?? inferLegacySpeechAct(example.spans);
+
+  return sha256Hex(
+    JSON.stringify({
+      speechAct,
+      pattern: fingerprintPattern(example.text, example.spans),
+    }),
+  );
 }

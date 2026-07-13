@@ -7,10 +7,17 @@ import { coarseText } from "./fingerprint";
 import {
   assertAcceptanceFresh,
   assertHumanIsolation,
+  decideHumanPromotion,
+  loadRegressionRecords,
+  MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE,
+  MAX_SILENT_MEANING_CHANGE_RATE,
+  MIN_FAMILY_ACCURACY,
+  MIN_OVERALL_ACCURACY,
   parseArgs,
   parseHumanCorpus,
   selectCalibrationThreshold,
 } from "./human-evaluate";
+import type { HumanOverlayRates } from "./human-evaluate";
 
 const valid = {
   version: 1,
@@ -92,10 +99,95 @@ describe("assertHumanIsolation", () => {
 });
 
 describe("human evaluation CLI", () => {
+  test("promotion bars stay the existing overlay-off floors", () => {
+    expect(MIN_OVERALL_ACCURACY).toBe(0.95);
+    expect(MIN_FAMILY_ACCURACY).toBe(0.9);
+    expect(MAX_SILENT_MEANING_CHANGE_RATE).toBe(0.005);
+    expect(MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE).toBe(0.01);
+  });
+
+  test("overlay-on 1.0 / overlay-off 0.7 fails promotion", () => {
+    const overlayOn: HumanOverlayRates = {
+      accuracy: 1,
+      silentMeaningChangeRate: 0,
+      negativeFalseAcceptanceRate: 0,
+      byFamily: { interval: { total: 10, correct: 10 } },
+      criticalFailures: [],
+    };
+
+    const overlayOff: HumanOverlayRates = {
+      accuracy: 0.7,
+      silentMeaningChangeRate: 0,
+      negativeFalseAcceptanceRate: 0,
+      byFamily: { interval: { total: 10, correct: 7 } },
+      criticalFailures: [],
+    };
+
+    const decision = decideHumanPromotion("acceptance", overlayOn, overlayOff);
+
+    expect(decision.eligible).toBe(true);
+    expect(decision.passed).toBe(false);
+    expect(decision.failures.some((failure) => failure.includes("overlay-off"))).toBe(true);
+    expect(decision.failures).toContain("overlay-off overall accuracy below 0.95");
+  });
+
+  test("calibration cannot set promotion.eligible even when overlay-off meets bars", () => {
+    const passing: HumanOverlayRates = {
+      accuracy: 1,
+      silentMeaningChangeRate: 0,
+      negativeFalseAcceptanceRate: 0,
+      byFamily: { interval: { total: 10, correct: 10 } },
+      criticalFailures: [],
+    };
+
+    const decision = decideHumanPromotion("calibration", passing, passing);
+
+    expect(decision.eligible).toBe(false);
+    expect(decision.passed).toBe(false);
+    expect(decision.overlayOffEligibleForDefault).toBe(true);
+  });
+
   test("defaults to development and validates partitions", () => {
     expect(parseArgs([]).partition).toBe("development");
     expect(parseArgs(["--weights", "/tmp/candidate.ts"]).weights).toBe("/tmp/candidate.ts");
     expect(() => parseArgs(["--partition", "mystery"])).toThrow(/invalid human partition/);
+    const regression = parseArgs(["--partition", "regression"]);
+
+    expect(regression.partition).toBe("regression");
+    expect(regression.out).toBe("packages/cron/training/results/human-regression.json");
+  });
+
+  test("regression is never promotion-eligible", () => {
+    const passing: HumanOverlayRates = {
+      accuracy: 1,
+      silentMeaningChangeRate: 0,
+      negativeFalseAcceptanceRate: 0,
+      byFamily: { interval: { total: 10, correct: 10 } },
+      criticalFailures: [],
+    };
+
+    const decision = decideHumanPromotion("regression", passing, passing);
+
+    expect(decision.eligible).toBe(false);
+    expect(decision.passed).toBe(false);
+    expect(decision.overlayOffEligibleForDefault).toBe(false);
+  });
+
+  test("regression does not refuse a consumed acceptance hash", async () => {
+    await expect(
+      assertAcceptanceFresh(
+        "regression",
+        "d6a589e7b626e9689b2341ac19d7668263b53fd67746d6291c743ea0253d2e81",
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("regression union scores consumed acceptance records", async () => {
+    const loaded = await loadRegressionRecords();
+
+    expect(loaded.records).toHaveLength(1646);
+    expect(loaded.records.some((record) => record.partition === "acceptance")).toBe(true);
+    expect(loaded.records.filter((record) => record.partition === "acceptance")).toHaveLength(1590);
   });
 
   test("selects maximum coverage that satisfies both safety limits", () => {

@@ -1,14 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { tokenize } from "../../src/model/tokenizer";
-import type { GoldRecord } from "./evaluate";
-import {
-  canonicalizeIntent,
-  lintGoldRecords,
-  repairInclusiveBoundGold,
-  repairObservableGold,
-  riskCoverage,
-} from "./evaluate";
+import type { EvaluationResult, GoldRecord } from "./evaluate";
+import { canonicalizeIntent, lintGoldRecords, parseCorpus, riskCoverage } from "./evaluate";
 
 describe("canonicalizeIntent", () => {
   test("normalizes semantic sets without mutating the input", () => {
@@ -34,8 +28,8 @@ describe("canonicalizeIntent", () => {
   });
 });
 
-describe("repairObservableGold", () => {
-  test("makes a latent PM clock observable and keeps spans aligned", () => {
+describe("parseCorpus does not patch gold semantics", () => {
+  test("leaves 1:30 as 1:30 without inserting a meridiem", () => {
     const item: GoldRecord = {
       id: "clock",
       family: "time-of-day",
@@ -54,38 +48,38 @@ describe("repairObservableGold", () => {
       expected: { supported: true, expression: "30 13 * * *" },
     };
 
-    const repaired = repairObservableGold(item);
+    const [parsed] = parseCorpus(`${JSON.stringify(item)}\n`);
 
-    expect(repaired.text).toBe("remind me 1:30 pm daily");
+    expect(parsed?.text).toBe("remind me 1:30 daily");
+    expect(parsed?.spans.some((span) => span.label === "MERIDIEM")).toBe(false);
+    expect(parsed?.intent?.time).toEqual({ hour: 13, minute: 30 });
 
-    expect(repaired.spans.find((span) => span.label === "MERIDIEM")).toEqual({
-      start: 15,
-      end: 17,
-      label: "MERIDIEM",
-      clauseStart: false,
-    });
-
-    for (const token of tokenize(repaired.text).filter((value) => value.kind !== 3)) {
-      expect(
-        repaired.spans.some((span) => token.start >= span.start && token.end <= span.end),
-      ).toBe(true);
+    for (const token of tokenize(item.text).filter((value) => value.kind !== 3)) {
+      expect(item.spans.some((span) => token.start >= span.start && token.end <= span.end)).toBe(
+        true,
+      );
     }
   });
 
-  test("leaves already explicit and non-clock records byte-equivalent", () => {
-    const explicit: GoldRecord = {
-      id: "explicit",
-      family: "time-of-day",
-      text: "1:30 pm daily",
+  test("does not rewrite a through date into an exclusive end", () => {
+    const item: GoldRecord = {
+      id: "bounds",
+      family: "bounds",
+      text: "from 2026-01-01 through 2026-01-31, every day",
       spans: [],
       intent: {
         frequency: { unit: "day", interval: 1 },
-        time: { hour: 13, minute: 30 },
+        bounds: { start: "2026-01-01", end: "2026-01-31" },
       },
-      expected: { supported: true, expression: "30 13 * * *" },
+      expected: { supported: false, expression: null },
     };
 
-    expect(repairObservableGold(explicit)).toBe(explicit);
+    const [parsed] = parseCorpus(`${JSON.stringify(item)}\n`);
+
+    expect(parsed?.intent?.bounds).toEqual({
+      start: "2026-01-01",
+      end: "2026-01-31",
+    });
   });
 });
 
@@ -116,27 +110,6 @@ describe("lintGoldRecords", () => {
   });
 });
 
-describe("repairInclusiveBoundGold", () => {
-  test("turns a legacy through date into an exclusive end", () => {
-    const item: GoldRecord = {
-      id: "bounds",
-      family: "bounds",
-      text: "from 2026-01-01 through 2026-01-31, every day",
-      spans: [],
-      intent: {
-        frequency: { unit: "day", interval: 1 },
-        bounds: { start: "2026-01-01", end: "2026-01-31" },
-      },
-      expected: { supported: false, expression: null },
-    };
-
-    expect(repairInclusiveBoundGold(item).intent?.bounds).toEqual({
-      start: "2026-01-01",
-      end: "2026-02-01",
-    });
-  });
-});
-
 describe("riskCoverage", () => {
   test("reports acceptance risk, silent changes, and negative false accepts", () => {
     const [point] = riskCoverage(
@@ -159,5 +132,73 @@ describe("riskCoverage", () => {
       silentMeaningChangeRate: 0.5,
       negativeFalseAcceptanceRate: 0.5,
     });
+  });
+});
+
+describe("overlay-off report column", () => {
+  test("is a sibling of overlay-on contracts and never a fifth summed metric", () => {
+    const metrics: Array<EvaluationResult["contracts"][number]["metric"]> = [
+      "tokenRoles",
+      "rawDecode",
+      "exactAst",
+      "compiledExpression",
+    ];
+
+    expect(metrics).toHaveLength(4);
+
+    const overlayOff = {
+      contracts: [],
+      selectivePrediction: [],
+      rawSelectivePrediction: [],
+      typoInvariance: {
+        total: 0,
+        cleanCorrect: 0,
+        noisyCorrect: 0,
+        pairedCorrect: 0,
+        noisySilentWrong: 0,
+        noisyAccuracy: 0,
+        pairedAccuracy: 0,
+        byFamily: {},
+        byNoise: {},
+        failureCounts: {},
+        failures: [],
+      },
+    };
+
+    const result: EvaluationResult = {
+      artifactSha256: "0".repeat(64),
+      corpus: "unused.jsonl",
+      corpusSha256: "0".repeat(64),
+      familyDistribution: {},
+      scope: "unit",
+      contracts: [],
+      selectivePrediction: [],
+      rawSelectivePrediction: [],
+      typoInvariance: {
+        total: 0,
+        cleanCorrect: 0,
+        noisyCorrect: 0,
+        pairedCorrect: 0,
+        noisySilentWrong: 0,
+        noisyAccuracy: 0,
+        pairedAccuracy: 0,
+        byFamily: {},
+        byNoise: {},
+        failureCounts: {},
+        failures: [],
+      },
+      overlayOff,
+      attribution: {
+        ROLE: 0,
+        ACT: 0,
+        DECODE: 0,
+        CONF: 0,
+        GOLD: 0,
+        records: [],
+      },
+    };
+
+    expect(result.contracts).toEqual([]);
+    expect(result.overlayOff).toBe(overlayOff);
   });
 });

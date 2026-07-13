@@ -14,11 +14,18 @@ export interface NoisyExample {
 }
 
 export interface SpellingVariantOptions {
-  /** Restrict mutation to schedule roles that need targeted robustness. */
+  /** Restrict mutation to these labels. Default is {@link NOISE_SAFE_LABELS}. */
   labels?: readonly Label[];
   /** Bypass the ordinary one-in-four sampling for targeted equivalence rows. */
   force?: boolean;
 }
+
+/**
+ * Labels whose surface string the decoder never looks up. Mutating anything
+ * else (WEEKDAY, HOUR, BOUND, GLUE units, …) makes gold unreachable: the
+ * oracle cannot invert `wrd` back to wednesday.
+ */
+export const NOISE_SAFE_LABELS: readonly Label[] = ["O", "EDGE"];
 
 const NOISES: readonly SpellingNoise[] = [
   "deletion",
@@ -124,17 +131,14 @@ export function spellingVariant(
   const entropy = digest(`${seed}\0${example.text}`);
 
   if (options.force !== true && entropy[0]! % 4 !== 0) return undefined;
-  const eligibleLabels = options.labels === undefined ? undefined : new Set(options.labels);
+  const eligibleLabels = new Set(options.labels ?? NOISE_SAFE_LABELS);
 
   const candidates = tokenize(example.text).filter((token) => {
     if (token.kind !== 0 || [...token.text].length < 3) return false;
 
     return example.spans.some(
       (span) =>
-        span.label !== "O" &&
-        (eligibleLabels === undefined || eligibleLabels.has(span.label)) &&
-        token.start >= span.start &&
-        token.end <= span.end,
+        eligibleLabels.has(span.label) && token.start >= span.start && token.end <= span.end,
     );
   });
 

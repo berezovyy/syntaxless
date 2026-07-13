@@ -62,6 +62,11 @@ test("lexicon entries pin the canonical plan examples", () => {
   expect(LOOKUP.get("every")).toEqual({ label: "RECUR" });
   expect(LOOKUP.get("hourly")).toEqual({ label: "INTERVAL", value: "hour" });
   expect(LOOKUP.get("first")).toEqual({ label: "ORDINAL", value: 1 });
+  expect(LOOKUP.get("the stride is")).toEqual({ label: "GLUE" });
+  expect(LOOKUP.get("the weekdays are")).toEqual({ label: "GLUE" });
+  expect(LOOKUP.get("the range runs")).toEqual({ label: "GLUE" });
+  expect(LOOKUP.get("the omitted days are")).toEqual({ label: "EXCEPT" });
+  expect(LOOKUP.get("ending")).toEqual({ label: "BOUND" });
 });
 
 test("every surface maps to a valid label and never conflicts", () => {

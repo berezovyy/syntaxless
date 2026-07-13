@@ -177,8 +177,10 @@ export interface GateDecision {
 }
 
 /**
- * Pure decision over two score sets. Strict improvement is required; every
- * per-family guard and the bare-expression guard must pass.
+ * Pure decision over two overlay-off score sets. Strict improvement is
+ * required; every per-family guard and the bare-expression guard must pass.
+ * Overlay-on scores cannot rescue a failing overlay-off candidate; see
+ * {@link decidePromotion}.
  */
 export function decide(candidate: GateScores, baseline: GateScores): GateDecision {
   const failures: string[] = [];
@@ -250,6 +252,61 @@ export function decide(candidate: GateScores, baseline: GateScores): GateDecisio
     improvement,
     guards,
     bare: { family: BARE_FAMILY, guard: bareGuard },
+    failures,
+    accepted: failures.length === 0,
+  };
+}
+
+export interface OverlayScores {
+  overlayOn: GateScores;
+  overlayOff?: GateScores;
+}
+
+/**
+ * Promotion decision: floors and reserved-carrier improvement run on
+ * overlay-off. Overlay-on is diagnostic except for the same-artifact safety
+ * comparison (overlay-off must not worsen silent-change or false-accept).
+ * Missing overlay-off is a failed run, not an implied pass.
+ */
+export function decidePromotion(candidate: OverlayScores, baseline: OverlayScores): GateDecision {
+  if (candidate.overlayOff === undefined) {
+    const bare = proportionGuard({ total: 0, correct: 0 }, { total: 0, correct: 0 });
+
+    return {
+      criterion: CRITERION,
+      description: CRITERION_DESCRIPTION,
+      improvement: 0,
+      guards: [],
+      bare: { family: BARE_FAMILY, guard: bare },
+      failures: ["missing overlay-off"],
+      accepted: false,
+    };
+  }
+
+  const baselineOff = baseline.overlayOff ?? candidate.overlayOn;
+  const decision = decide(candidate.overlayOff, baselineOff);
+
+  const failures = decision.failures.map((failure) =>
+    failure.startsWith("overlay-off ") ? failure : `overlay-off ${failure}`,
+  );
+
+  const overlayOnSafety = candidate.overlayOn.selective;
+  const overlayOffSafety = candidate.overlayOff.selective;
+
+  if (overlayOnSafety !== undefined && overlayOffSafety !== undefined) {
+    if (overlayOffSafety.silentMeaningChangeRate > overlayOnSafety.silentMeaningChangeRate) {
+      failures.push("overlay-off silent meaning-change worse than overlay-on");
+    }
+
+    if (
+      overlayOffSafety.negativeFalseAcceptanceRate > overlayOnSafety.negativeFalseAcceptanceRate
+    ) {
+      failures.push("overlay-off negative false-accept worse than overlay-on");
+    }
+  }
+
+  return {
+    ...decision,
     failures,
     accepted: failures.length === 0,
   };
@@ -406,6 +463,14 @@ function contractOf(result: EvaluationResult, metric: Metric): ContractReport {
   return contract;
 }
 
+function overlayOffContract(result: EvaluationResult, metric: Metric): ContractReport {
+  const contract = result.overlayOff.contracts.find((item) => item.metric === metric);
+
+  if (contract === undefined) throw new Error(`missing overlay-off contract: ${metric}`);
+
+  return contract;
+}
+
 export interface GateOptions {
   dist: string;
   candidate: string;
@@ -419,15 +484,28 @@ export interface GateReport extends GateDecision {
   artifactSha256s: { candidate: string; baseline: string };
   candidate: GateScores;
   baseline: GateScores;
+  overlayOn: { candidate: GateScores; baseline: GateScores };
+  overlayOff: { candidate: GateScores; baseline: GateScores };
+  speechActAccuracy?: { candidate?: number; baseline?: number };
+  actionableAccuracy?: { candidate?: number; baseline?: number };
   leak: LeakReport;
 }
 
-function scoresOf(result: EvaluationResult, contract: ContractReport): GateScores {
-  const selective = result.selectivePrediction.find((point) => point.threshold === 0.5);
+function scoresOf(
+  result: EvaluationResult,
+  contract: ContractReport,
+  overlay: "on" | "off" = "on",
+): GateScores {
+  const curve =
+    overlay === "off" ? result.overlayOff.selectivePrediction : result.selectivePrediction;
+
+  const selective = curve.find((point) => point.threshold === 0.5);
 
   if (selective === undefined) {
     throw new Error("missing selective-prediction point at confidence 0.5");
   }
+
+  const typo = overlay === "off" ? result.overlayOff.typoInvariance : result.typoInvariance;
 
   return {
     total: contract.total,
@@ -436,7 +514,7 @@ function scoresOf(result: EvaluationResult, contract: ContractReport): GateScore
     selective: {
       silentMeaningChangeRate: selective.silentMeaningChangeRate,
       negativeFalseAcceptanceRate: selective.negativeFalseAcceptanceRate,
-      typoInvariance: result.typoInvariance.pairedAccuracy,
+      typoInvariance: typo.pairedAccuracy,
     },
   };
 }
@@ -451,12 +529,37 @@ export async function runGate(options: GateOptions): Promise<GateReport> {
     const candidateResult = await evaluateCorpus(candidateEngine, options.corpus, DEFAULT_SCOPE);
     const baselineResult = await evaluateCorpus(baselineEngine, options.corpus, DEFAULT_SCOPE);
 
-    assertSameArtifact(candidateResult.contracts);
-    assertSameArtifact(baselineResult.contracts);
+    if (candidateResult.overlayOff === undefined) {
+      throw new Error("missing overlay-off evaluation; not an implied pass");
+    }
 
-    const candidate = scoresOf(candidateResult, contractOf(candidateResult, "exactAst"));
-    const baseline = scoresOf(baselineResult, contractOf(baselineResult, "exactAst"));
-    const decision = decide(candidate, baseline);
+    if (baselineResult.overlayOff === undefined) {
+      throw new Error("missing overlay-off evaluation; not an implied pass");
+    }
+
+    assertSameArtifact([...candidateResult.contracts, ...candidateResult.overlayOff.contracts]);
+    assertSameArtifact([...baselineResult.contracts, ...baselineResult.overlayOff.contracts]);
+
+    const candidateOn = scoresOf(candidateResult, contractOf(candidateResult, "exactAst"), "on");
+
+    const candidateOff = scoresOf(
+      candidateResult,
+      overlayOffContract(candidateResult, "exactAst"),
+      "off",
+    );
+
+    const baselineOn = scoresOf(baselineResult, contractOf(baselineResult, "exactAst"), "on");
+
+    const baselineOff = scoresOf(
+      baselineResult,
+      overlayOffContract(baselineResult, "exactAst"),
+      "off",
+    );
+
+    const decision = decidePromotion(
+      { overlayOn: candidateOn, overlayOff: candidateOff },
+      { overlayOn: baselineOn, overlayOff: baselineOff },
+    );
 
     if (!leak.checked) {
       decision.failures.push("training split missing; leakage check was not performed");
@@ -481,8 +584,36 @@ export async function runGate(options: GateOptions): Promise<GateReport> {
         candidate: candidateEngine.artifactSha256,
         baseline: baselineEngine.artifactSha256,
       },
-      candidate,
-      baseline,
+      candidate: candidateOff,
+      baseline: baselineOff,
+      overlayOn: { candidate: candidateOn, baseline: baselineOn },
+      overlayOff: { candidate: candidateOff, baseline: baselineOff },
+      ...(candidateResult.speechActAccuracy === undefined &&
+      baselineResult.speechActAccuracy === undefined
+        ? {}
+        : {
+            speechActAccuracy: {
+              ...(candidateResult.speechActAccuracy === undefined
+                ? {}
+                : { candidate: candidateResult.speechActAccuracy }),
+              ...(baselineResult.speechActAccuracy === undefined
+                ? {}
+                : { baseline: baselineResult.speechActAccuracy }),
+            },
+          }),
+      ...(candidateResult.actionableAccuracy === undefined &&
+      baselineResult.actionableAccuracy === undefined
+        ? {}
+        : {
+            actionableAccuracy: {
+              ...(candidateResult.actionableAccuracy === undefined
+                ? {}
+                : { candidate: candidateResult.actionableAccuracy }),
+              ...(baselineResult.actionableAccuracy === undefined
+                ? {}
+                : { baseline: baselineResult.actionableAccuracy }),
+            },
+          }),
       leak,
     };
 

@@ -57,6 +57,8 @@ def load_model(checkpoint_path: Path, device: str) -> Tagger:
         rows_per_token=int(checkpoint["rowsPerToken"]),
         role_classes=int(checkpoint["roleClasses"]),
         schedule_kind_classes=int(checkpoint.get("scheduleKindClasses", 0)),
+        speech_act_classes=int(checkpoint.get("speechActClasses", 0)),
+        actionable_head=bool(checkpoint.get("actionableHead", False)),
         hidden=int(state["embedding.weight"].shape[1]),
         quantization_bits=int(checkpoint["quantizationBits"]),
     )
@@ -135,7 +137,7 @@ def diagnose(
 
     for indices in dataset.batches(batch_size):
         batch = dataset.batch(indices, device)
-        roles, boundary, _ = model(
+        roles, boundary, _, _, _ = model(
             batch["rows"], batch["valid"], batch["neighbors"]
         )
         # One transfer per tensor avoids a GPU synchronization for every

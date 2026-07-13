@@ -18,6 +18,7 @@ export { parse } from "./parser/parse.js";
 export type {
   Diagnostic,
   ModelParserOptions,
+  OverlayMode,
   ParseFailureCode,
   ParseResult,
   ParseSource,

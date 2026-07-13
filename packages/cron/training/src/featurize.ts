@@ -9,15 +9,19 @@
  *
  * Rule and LLM records take the identical path. The shard contract is owned
  * here and is authoritative for the Python reader: `uint16` sparse feature rows
- * token), `uint8` labels/boundaries/kinds, `int16` neighbour pairs, and a
- * `uint32` sequence-offset table of length `N + 1`, and one `uint32` wording
- * frame id per sequence.
+ * token), `uint8` labels/boundaries/kinds/speech/actionable, `int16` neighbour
+ * pairs, a `uint32` sequence-offset table of length `N + 1`, and one `uint32`
+ * wording frame id per sequence. Speech-act is one uint8 per sequence;
+ * actionable is one uint8 per token.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { LABEL_COUNT, labelId, LABELS } from "../../src/model/labels.js";
+import type { Label } from "../../src/model/labels.js";
+import { SPEECH_ACT_COUNT, SPEECH_ACTS, speechActId } from "../../src/model/speech-acts.js";
+import type { SpeechAct } from "../../src/model/speech-acts.js";
 import {
   EMBEDDING_ROWS,
   FEATURE_COUNT,
@@ -51,6 +55,8 @@ export const SHARD_FORMAT = {
   neighbors: { suffix: ".neighbors.bin", dtype: "int16" },
   offsets: { suffix: ".offsets.bin", dtype: "uint32" },
   frames: { suffix: ".frames.bin", dtype: "uint32" },
+  speech: { suffix: ".speech.bin", dtype: "uint8" },
+  actionable: { suffix: ".actionable.bin", dtype: "uint8" },
 } as const;
 
 export type ShardFormat = typeof SHARD_FORMAT;
@@ -64,6 +70,9 @@ export interface FeaturizeManifest {
   labelCounts: Record<string, number>;
   frameNames: string[];
   frameCounts: number[];
+  speechActClasses: number;
+  speechActNames: readonly SpeechAct[];
+  actionableCounts: Record<0 | 1, number>;
   format: ShardFormat;
 }
 
@@ -89,6 +98,9 @@ export interface FeaturizedShard {
   fingerprints: string[];
   frameNames: string[];
   frameCounts: number[];
+  speech: Uint8Array;
+  actionable: Uint8Array;
+  actionableCounts: Record<0 | 1, number>;
 }
 
 export interface FeaturizeSummary {
@@ -111,6 +123,8 @@ export interface PerRecord {
   neighbors: Int16Array;
   tokenCount: number;
   labelCounts: Record<string, number>;
+  speech: Uint8Array;
+  actionable: Uint8Array;
 }
 
 /**
@@ -118,6 +132,24 @@ export interface PerRecord {
  * spans share UTF-16 offsets, so alignment is a comparison of half-open
  * intervals.
  */
+function isSpeechAct(value: string): value is SpeechAct {
+  return (SPEECH_ACTS as readonly string[]).includes(value);
+}
+
+function speechActForRecord(record: CorpusRecord): SpeechAct {
+  const name = record.speechAct ?? (record.intent !== null ? "request" : "none");
+
+  if (!isSpeechAct(name)) throw new RangeError(`unknown speechAct: ${name}`);
+
+  return name;
+}
+
+function defaultActionableBit(label: Label, speechAct: SpeechAct): boolean {
+  if (speechAct !== "request") return false;
+
+  return label !== "O";
+}
+
 export function featurizeRecord(
   record: CorpusRecord,
   tokens: ReturnType<typeof tokenize>,
@@ -126,10 +158,12 @@ export function featurizeRecord(
   const labels = new Uint8Array(tokens.length).fill(PADDING_LABEL);
   const boundaries = new Uint8Array(tokens.length);
   const kinds = new Uint8Array(tokens.length);
+  const actionable = new Uint8Array(tokens.length);
   const neighbors = new Int16Array(tokens.length * 2).fill(-1);
   const labelCounts: Record<string, number> = {};
 
   for (const label of LABELS) labelCounts[label] = 0;
+  const speechAct = speechActForRecord(record);
 
   let spanIndex = 0;
   let previousNonSpace = -1;
@@ -159,6 +193,7 @@ export function featurizeRecord(
       labels[index] = labelId[span.label];
       labelCounts[span.label] = (labelCounts[span.label] ?? 0) + 1;
       boundaries[index] = Number(span.clauseStart && token.start === span.start);
+      actionable[index] = Number(span.actionable ?? defaultActionableBit(span.label, speechAct));
     }
 
     neighbors[index * 2] = previousNonSpace;
@@ -180,6 +215,8 @@ export function featurizeRecord(
     neighbors,
     tokenCount: tokens.length,
     labelCounts,
+    speech: Uint8Array.of(speechActId[speechAct]),
+    actionable,
   };
 }
 
@@ -237,8 +274,11 @@ export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedSh
   const boundaryChunks: Uint8Array[] = [];
   const kindChunks: Uint8Array[] = [];
   const neighborChunks: Int16Array[] = [];
+  const speechChunks: Uint8Array[] = [];
+  const actionableChunks: Uint8Array[] = [];
   const offsets: number[] = [0];
   const frames: number[] = [];
+  const actionableCounts: Record<0 | 1, number> = { 0: 0, 1: 0 };
   const frameIds = new Map<string, number>();
   const frameNames: string[] = [];
   const frameCounts: number[] = [];
@@ -271,6 +311,16 @@ export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedSh
     boundaryChunks.push(shard.boundaries);
     kindChunks.push(shard.kinds);
     neighborChunks.push(shard.neighbors);
+    speechChunks.push(shard.speech);
+    actionableChunks.push(shard.actionable);
+
+    for (let index = 0; index < shard.tokenCount; index++) {
+      if (shard.kinds[index] === 3) continue;
+      const bit = shard.actionable[index]! === 1 ? 1 : 0;
+
+      actionableCounts[bit] += 1;
+    }
+
     const frameName = record.template ?? `${record.family}/unspecified`;
     let frameId = frameIds.get(frameName);
 
@@ -308,6 +358,9 @@ export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedSh
     fingerprints: [...new Set(records.map((record) => record.fingerprint))].sort(),
     frameNames,
     frameCounts,
+    speech: concatUint8(speechChunks),
+    actionable: concatUint8(actionableChunks),
+    actionableCounts,
   };
 }
 
@@ -354,6 +407,8 @@ export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
     neighbors: shardPath(out, "neighbors"),
     offsets: shardPath(out, "offsets"),
     frames: shardPath(out, "frames"),
+    speech: shardPath(out, "speech"),
+    actionable: shardPath(out, "actionable"),
     manifest: `${out}.json`,
   };
 
@@ -364,6 +419,8 @@ export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
   writeBinary(files.neighbors, shard.neighbors);
   writeBinary(files.offsets, shard.offsets);
   writeBinary(files.frames, shard.frames);
+  writeBinary(files.speech, shard.speech);
+  writeBinary(files.actionable, shard.actionable);
 
   const manifest: FeaturizeManifest = {
     fingerprints: shard.fingerprints,
@@ -373,6 +430,9 @@ export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
     labelCounts: shard.labelCounts,
     frameNames: shard.frameNames,
     frameCounts: shard.frameCounts,
+    speechActClasses: SPEECH_ACT_COUNT,
+    speechActNames: SPEECH_ACTS,
+    actionableCounts: shard.actionableCounts,
     format: SHARD_FORMAT,
   };
 

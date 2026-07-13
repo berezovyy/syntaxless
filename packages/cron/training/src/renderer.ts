@@ -1,3 +1,4 @@
+import type { SpeechAct } from "../../src/model/speech-acts";
 /**
  * Deterministic renderer: sampled {@link ScheduleIntent} -> surface text + spans.
  *
@@ -37,6 +38,7 @@ export interface RenderedExample {
   /** `${family}/${style}`; recorded as the example's template name. */
   template: string;
   style: string;
+  speechAct: SpeechAct;
 }
 
 const STYLES: Record<Family, readonly string[]> = {
@@ -530,6 +532,7 @@ export function renderIntent(
     spans: sentence.spans,
     template: `${family}/${chosen}`,
     style: chosen,
+    speechAct: "request",
   };
 }
 
@@ -547,5 +550,6 @@ export function renderNegative(rng: Rng): RenderedExample {
     spans: sentence.spans,
     template: "negative/prose",
     style: "prose",
+    speechAct: "none",
   };
 }

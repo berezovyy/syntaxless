@@ -669,6 +669,7 @@ export const END_BOUND_PREFIXES = [
   "ending before",
   "stopping before",
   "but not on or after",
+  "ending",
 ] as const;
 
 export const INCLUSIVE_END_BOUND_PREFIXES = ["ending on", "through and including"] as const;
@@ -775,6 +776,17 @@ export const WORDS = {
     excluding: "excluding",
     but: "but",
     not: "not",
+  },
+  correction: {
+    iMeant: "i meant",
+    ratherThan: "rather than",
+    insteadOf: "instead of",
+    use: "use",
+    sorry: "sorry",
+    not: "not",
+    makeThat: "make that",
+    correction: "correction",
+    dash: "—",
   },
   meridiem: { am: "am", pm: "pm" },
   suffix: { st: "st", nd: "nd", rd: "rd", th: "th" },
@@ -918,6 +930,27 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
   for (const phrase of INTERVAL_FRAME_SUFFIXES) entries[phrase] = surface("EDGE");
   entries["the interval is"] = surface("GLUE");
   entries["the cadence is"] = surface("GLUE");
+  entries["the cycle is"] = surface("GLUE");
+  entries["the period is"] = surface("GLUE");
+  entries["the spacing is"] = surface("GLUE");
+  entries["the stride is"] = surface("GLUE");
+  entries["the step is"] = surface("GLUE");
+  entries["the gap is"] = surface("GLUE");
+  entries["the rhythm is"] = surface("GLUE");
+  entries["the days are"] = surface("GLUE");
+  entries["days are"] = surface("GLUE");
+  entries["the selected days are"] = surface("GLUE");
+  entries["the weekdays are"] = surface("GLUE");
+  entries["the active days are"] = surface("GLUE");
+  entries["the chosen days are"] = surface("GLUE");
+  entries["the span runs"] = surface("GLUE");
+  entries["the window runs"] = surface("GLUE");
+  entries["the range runs"] = surface("GLUE");
+  entries["the stretch runs"] = surface("GLUE");
+  entries["the coverage runs"] = surface("GLUE");
+  entries["the omitted days are"] = surface("EXCEPT");
+  entries["the skipped days are"] = surface("EXCEPT");
+  entries["the exceptions are"] = surface("EXCEPT");
   entries["a cycle of"] = surface("GLUE");
   entries["between runs"] = surface("EDGE");
   entries["the recurrence interval is"] = surface("GLUE");

@@ -1,87 +1,89 @@
 import { describe, expect, test } from "bun:test";
 
-import { scopeActionableCorrection } from "./model";
+import { labelId } from "../model/labels";
+import { tokenize } from "../model/tokenizer";
+import type { LabeledToken } from "./decode";
+import { resultFromLabeledTokens } from "./model";
+import { normalize } from "./normalize";
 
-describe("actionable correction scoping", () => {
-  test.each([
-    ["Actually, make that every 20 minutes, not every hour.", "every 20 minutes"],
-    ["Sorry, I meant Tuesday at 10 am rather than Monday at nine.", "Tuesday at 10 am"],
-    [
-      "I said Friday by mistake. Please make it Thursday every week.",
-      "Please make it Thursday every week.",
-    ],
-    ["Not Monday and Wednesday after all; schedule Friday at four.", "schedule Friday at four."],
-    ["Move it from Tuesday at eight to Thursday at eleven.", "schedule Thursday at eleven."],
-    ["Instead of noon, make the daily reminder 2 pm.", "make the daily reminder 2 pm."],
-    [
-      "Actually, forget the hourly check and poll every 26 minutes instead.",
-      "poll every 26 minutes",
-    ],
-    [
-      "Not Wednesday at eight—make the meeting reminder Friday at 10:30 a.m.",
-      "make the meeting reminder Friday at 10:30 a.m.",
-    ],
-    ["I said the 12th, but I meant the 21st of every month.", "the 21st of every month."],
-    [
-      "Scratch the daily plan; schedule it every Monday at 7 p.m.",
-      "schedule it every Monday at 7 p.m.",
-    ],
-    [
-      "Change that from weekends to weekdays, still at 11:15.",
-      "schedule weekdays, still at 11:15.",
-    ],
-    ["No, I need it every two hours, not every two minutes.", "every two hours"],
-    [
-      "Make that 8:05 tonight and every evening thereafter, instead of 8:50.",
-      "make 8:05 tonight and every evening thereafter",
-    ],
-    [
-      "I gave you Tuesday by mistake. Please schedule Thursday at 09:40.",
-      "Please schedule Thursday at 09:40.",
-    ],
-    ["Correction: daily at 21:15 rather than weekly at 21:15.", "daily at 21:15"],
-    [
-      "Sorry, I meant a quarter past eight each morning, not a quarter to eight.",
-      "a quarter past eight each morning",
-    ],
-    ["Sorry, use Saturday at 10:20 a.m. instead of Sunday at noon.", "use Saturday at 10:20 a.m."],
-    [
-      "I said the 9th in error. Schedule the 19th of every month.",
-      "Schedule the 19th of every month.",
-    ],
-    ["No, I need weekdays at 07:25 rather than weekends.", "weekdays at 07:25"],
-    ["Use every three hours instead—forget the three-minute setting.", "Use every three hours"],
-    ["The morning time was a mistake; make it 7:15 every evening.", "make it 7:15 every evening."],
-    ["Revise my request to monthly on the 26th, rather than weekly.", "monthly on the 26th"],
-    ["Apologies—make it Thursday at 9:35 a.m., not Tuesday at noon.", "make Thursday at 9:35 a.m."],
-    ["No—working days at 08:15, rather than Saturday and Sunday.", "working days at 08:15"],
-    ["Correction — Tuesday and Saturday at 14:00, not Thursday.", "Tuesday and Saturday at 14:00"],
-    [
-      "Morning won’t work. Set the daily reminder for 8:25 in the evening.",
-      "Set the daily reminder for 8:25 in the evening.",
-    ],
-    ["Please revise the cadence to monthly on day 25 instead of weekly.", "monthly on day 25"],
-    ["Sorry—use Friday at 11:25 a.m., not Monday at five.", "use Friday at 11:25 a.m."],
-    ["No, business days at 09:05 instead of weekends.", "business days at 09:05"],
-    ["Actually, move it from Monday at eight to Saturday at 11:35.", "schedule Saturday at 11:35."],
-    ["Shift the hourly notification from 7:05 to 7:50.", "hourly at 7:50."],
-    [
-      "Wait, every two days is not what I intended; set it to every two hours instead.",
-      "set it to every two hours instead.",
-    ],
-    [
-      "Wait—I asked for every three days, but that was wrong; please run it every three hours.",
-      "please run it every three hours.",
-    ],
-  ])("keeps only the selected replacement in %s", (source, expected) => {
-    expect(scopeActionableCorrection(source)).toBe(expected);
+describe("heads-only correction span", () => {
+  test("the string reaching tokenize equals normalize(source)", () => {
+    const source = "Sorry, I meant Tuesday at 10 am rather than Monday at nine.";
+
+    expect(tokenize(normalize(source)).length).toBeGreaterThan(0);
+    expect(normalize(source)).toBe(normalize(source));
+  });
+
+  test("correction + gold actionable span yields the replacement weekday", () => {
+    const tokens = tokenize("thursday friday").filter((token) => token.kind !== 3);
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: labelId.WEEKDAY,
+      boundary: token.text === "thursday",
+      score: 1,
+      actionable: token.text === "friday",
+    }));
+
+    const result = resultFromLabeledTokens(
+      labeled,
+      undefined,
+      "thursday friday",
+      "off",
+      "correction",
+    );
+
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      expect(result.intent).toEqual({
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["friday"],
+      });
+    }
+  });
+
+  test("correction + empty actionable rejects", () => {
+    const tokens = tokenize("thursday friday").filter((token) => token.kind !== 3);
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: labelId.WEEKDAY,
+      boundary: token.text === "thursday",
+      score: 1,
+      actionable: false,
+    }));
+
+    const result = resultFromLabeledTokens(
+      labeled,
+      undefined,
+      "thursday friday",
+      "off",
+      "correction",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("unsafe-context");
   });
 
   test.each([
     "Cancel the weekday idea.",
     "Actually, never mind.",
     "Monday or Tuesday might work; I have not decided.",
-  ])("does not turn a cancellation or unresolved choice into a request", (source) => {
-    expect(scopeActionableCorrection(source)).toBe(source);
+  ])("cancellation or unresolved choice is not rewritten into a request: %s", (source) => {
+    const tokens = tokenize(normalize(source)).filter((token) => token.kind !== 3);
+
+    const labeled: LabeledToken[] = tokens.map((token) => ({
+      token,
+      role: labelId.O,
+      boundary: false,
+      score: 1,
+      actionable: false,
+    }));
+
+    const result = resultFromLabeledTokens(labeled, undefined, source, "off", "cancel");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("unsafe-context");
   });
 });

@@ -3,7 +3,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from dataset import group_frame_members
+import json
+import tempfile
+from pathlib import Path
+
+from dataset import (
+    CONTENT_LABEL_IDS,
+    SPEECH_ACT_NAMES,
+    group_frame_members,
+    merge_fingerprint_excludes,
+)
 
 
 def test_group_frame_members() -> None:
@@ -21,7 +30,36 @@ def test_group_frame_members_rejects_invalid_ids() -> None:
         raise AssertionError("out-of-range frame id was accepted")
 
 
+def test_merge_fingerprint_excludes_unions_and_sorts():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        left = root / "a.json"
+        right = root / "b.json"
+        left.write_text('{"fingerprints": ["b", "a"]}\n')
+        right.write_text('{"fingerprints": ["c", "a"]}\n')
+        out = merge_fingerprint_excludes([left, right], root / "union.json")
+        assert json.loads(out.read_text())["fingerprints"] == ["a", "b", "c"]
+
+
+def test_speech_act_vocabulary_is_contiguous_and_frozen():
+    assert SPEECH_ACT_NAMES == (
+        "none",
+        "request",
+        "descriptive",
+        "question",
+        "quoted",
+        "correction",
+        "one-off",
+        "cancel",
+        "incomplete",
+    )
+    assert 2 in CONTENT_LABEL_IDS  # INTERVAL
+    assert 0 not in CONTENT_LABEL_IDS  # O
+
+
 if __name__ == "__main__":
     test_group_frame_members()
     test_group_frame_members_rejects_invalid_ids()
+    test_speech_act_vocabulary_is_contiguous_and_frozen()
+    test_merge_fingerprint_excludes_unions_and_sorts()
     print("test_dataset: all checks passed")

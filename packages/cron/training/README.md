@@ -17,8 +17,22 @@ The corpus pipeline is:
 5. **hand off to Python** — the Phase 14 Python harness under `training/cron/`
    consumes the featurized corpus for training.
 
+A human miss is a **kind**, not a decoder patch. After a consumed acceptance
+run, add an abstract wrap in `kinds.ts` and retrain; do not match a noun from
+the failed row in `decode.ts`. See
+[`packages/cron/evaluation/README.md`](../evaluation/README.md). Consumed
+human JSONL never feeds `backward.ts`, `generate.ts`, `featurize.ts`, or the
+Python trainer.
+
 Sources import `../../src/**` directly; this package declares no runtime
 dependencies.
+
+Oracle decode (gold spans → shipped `decodeIntent`) is a CI gate. Train does
+not start while it is red:
+
+```sh
+bun run --cwd packages/cron/training oracle:gate
+```
 
 ## Generated data
 
