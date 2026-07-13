@@ -859,6 +859,33 @@ describe("human-style decoder regressions", () => {
       "Run each day, leaving 2077-01-02 out.",
       { frequency: { unit: "day", interval: 1 }, exceptions: { dates: ["2077-01-02"] } },
     ],
+    [
+      "At eleven minutes after every hour, poll the queue.",
+      { frequency: { unit: "hour", interval: 1 }, time: { hour: 0, minute: 11 } },
+    ],
+    [
+      "Every day at 1745 hours, run the export.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 17, minute: 45 } },
+    ],
+    [
+      "Set it for three thirty-five in the evening every day.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 15, minute: 35 } },
+    ],
+    [
+      "Use each month's first calendar day at 00:25.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 1, time: { hour: 0, minute: 25 } },
+    ],
+    [
+      "On every month's first calendar day at 00:35, execute the task.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 1, time: { hour: 0, minute: 35 } },
+    ],
+    [
+      "Repeat daily, skipping 2078-04-03 and 2078-04-10.",
+      {
+        frequency: { unit: "day", interval: 1 },
+        exceptions: { dates: ["2078-04-03", "2078-04-10"] },
+      },
+    ],
   ] as const)("preserves explicit evidence in %s", async (text, intent) => {
     const result = await parse(text);
 
@@ -876,6 +903,13 @@ describe("human-style decoder regressions", () => {
     "My membership renews monthly on the 9th.",
     "This evaluation sentence mentions every nine weeks.",
     "Create one reminder for midday.",
+    "The bicycle shop operates on weekdays from seven until three.",
+    "A quarter of an hour contains fifteen minutes.",
+    "The appliance checks itself every four hours.",
+    "We want to know whether the parser accepts every six hours.",
+    "Pick a date near the start of every month.",
+    "Reserve the 21st for my appointment.",
+    "Run daily beginning 2089-01-01 until",
   ])("rejects non-recurring or incomplete language: %s", async (text) => {
     const result = await parse(text);
 

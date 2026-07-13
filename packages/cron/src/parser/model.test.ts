@@ -69,6 +69,10 @@ describe("actionable correction scoping", () => {
       "Wait, every two days is not what I intended; set it to every two hours instead.",
       "set it to every two hours instead.",
     ],
+    [
+      "Wait—I asked for every three days, but that was wrong; please run it every three hours.",
+      "please run it every three hours.",
+    ],
   ])("keeps only the selected replacement in %s", (source, expected) => {
     expect(scopeActionableCorrection(source)).toBe(expected);
   });

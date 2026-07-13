@@ -145,3 +145,14 @@ and the public day-rule spelling is `last_day_of_month`. Both fixture hashes
 are permanently consumed; the corrected audited baseline is 96/120. After the
 failures drove safety and decoder work, the corrected set reached 120/120 only
 as development regression evidence. It is not fresh promotion evidence.
+
+`human-v14.jsonl` is a thirteenth coding-agent-authored, non-independent set of
+120 examples across twelve equally supported families. It passed runtime AST
+schema validation, compiler-gold linting, generator isolation, and normalized
+wording-overlap checks before its one permitted fresh run. That run scored
+101/120 (84.2%), with 17 silent meaning changes and 10 false accepts, so the
+promotion gate failed. Its hash was immediately consumed. Any result after
+using those failures for development is regression evidence only. After the
+failures drove additional discourse-safety and explicit-value reconciliation
+work, v14 reached 120/120 and the combined v2-v13 suite reached 1310/1310 as
+development regressions; neither result authorizes promotion.

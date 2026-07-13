@@ -111,7 +111,7 @@ export function scopeActionableCorrection(text: string): string {
     ],
     [/^shift\b.*\bfrom\b.*?\bto\s+(.+)$/i, (match) => `schedule ${match[1]!}`],
     [
-      /^wait,?\s+.+?;\s*((?:make|run|schedule|send|set|use)\b.+?)(?:\s+instead)?$/i,
+      /^wait\s*[-,:]?\s*.+?;\s*((?:please\s+)?(?:make|run|schedule|send|set|use)\b.+?)(?:\s+instead)?$/i,
       (match) => match[1]!,
     ],
     [
