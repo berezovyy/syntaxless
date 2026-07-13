@@ -526,3 +526,52 @@ describe("consumed human-v11 behavioral corpus", () => {
     expect(records.filter((record) => priorKeys.has(normalizeForKey(record.text)))).toEqual([]);
   });
 });
+
+describe("consumed human-v12 behavioral corpus", () => {
+  test("remains isolated, balanced, unique, and unavailable as fresh acceptance", async () => {
+    const path = resolveRepo("packages/cron/evaluation/human-v12.jsonl");
+    const records = parseHumanCorpus(await readFile(path, "utf8"));
+
+    expect(records).toHaveLength(120);
+    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
+    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
+
+    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
+      checked: true,
+      outsideTrainingData: true,
+      incompatibleWithTrainingSchema: true,
+      absentFromGeneratorSources: true,
+    });
+
+    await expect(
+      assertAcceptanceFresh(
+        "acceptance",
+        "5f09f3c5681b0236c78024a1dcf67cd8aa69ec328688a8aadea2eb4f5dbc2e14",
+      ),
+    ).rejects.toThrow(/already been consumed/);
+
+    const familyCounts = new Map<string, number>();
+
+    for (const record of records) {
+      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
+    }
+
+    expect(familyCounts.size).toBe(12);
+    for (const support of familyCounts.values()) expect(support).toBe(10);
+
+    const priorKeys = new Set<string>();
+
+    for (const name of [
+      ...Array.from({ length: 11 }, (_, index) => `human-v${index + 1}.jsonl`),
+      "human-calibration-v2.jsonl",
+    ]) {
+      const prior = parseHumanCorpus(
+        await readFile(resolveRepo(`packages/cron/evaluation/${name}`), "utf8"),
+      );
+
+      for (const record of prior) priorKeys.add(normalizeForKey(record.text));
+    }
+
+    expect(records.filter((record) => priorKeys.has(normalizeForKey(record.text)))).toEqual([]);
+  });
+});

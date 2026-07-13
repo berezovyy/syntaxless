@@ -24,6 +24,7 @@ export const WEEKDAY_ALIASES: Record<string, Weekday> = {
   "tue.": "tuesday",
   "tues.": "tuesday",
   wednesday: "wednesday",
+  wensday: "wednesday",
   wed: "wednesday",
   "wed.": "wednesday",
   thursday: "thursday",
@@ -37,6 +38,7 @@ export const WEEKDAY_ALIASES: Record<string, Weekday> = {
   fri: "friday",
   "fri.": "friday",
   saturday: "saturday",
+  satrday: "saturday",
   sat: "saturday",
   "sat.": "saturday",
   sunday: "sunday",
@@ -126,6 +128,7 @@ export const WEEKDAY_GROUPS: Record<string, Weekday[]> = {
   "working day": ["monday", "tuesday", "wednesday", "thursday", "friday"],
   "working days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
   "working week": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  wkdays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
   weekend: ["saturday", "sunday"],
   weekends: ["saturday", "sunday"],
   "weekend day": ["saturday", "sunday"],
@@ -443,7 +446,9 @@ export const NAMED_HOURS: Readonly<Record<string, number>> = {
   midday: 12,
   "twelve noon": 12,
   midnight: 0,
+  midnite: 0,
   "twelve midnight": 0,
+  lunchtime: 12,
 };
 
 export const MINUTE_IDIOMS: Readonly<Record<string, number>> = {
@@ -631,6 +636,7 @@ export const EXCEPTION_PREFIXES = [
   "but not on",
   "other than",
   "apart from",
+  "save for",
   "although not on",
   "unless the day is",
 ] as const;

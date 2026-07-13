@@ -12,9 +12,13 @@ export function normalize(text: string): string {
 
   value = value.replace(/[\u2013\u2014]/g, "-");
   value = value.replace(/[\u2018\u2019]/g, "'");
+
   // Fold punctuated meridiems without consuming an ordinary article followed
   // by an `m` word (`a monthly reminder` must not become `amonthly reminder`).
-  value = value.replace(/\ba\.\s*m\.?/g, "am").replace(/\bp\.\s*m\.?/g, "pm");
+  value = value
+    .replace(/(?:\b|(?<=\d))a\.\s*m\.?/g, "am")
+    .replace(/(?:\b|(?<=\d))p\.\s*m\.?/g, "pm");
+
   // A dotted clock is common in prose and some locales. Restrict the rewrite
   // to values carrying an explicit meridiem so decimal/version numbers remain
   // untouched.

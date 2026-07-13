@@ -280,6 +280,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       (/\bbetween\b.*\band\b/.test(text) && hasCompetingScheduleValues) ||
       (/^compare\b/.test(text) && hasCompetingScheduleValues) ||
       /\bone\s+of\s+the\s+weekdays?\b.*\b(?:whichever|unsure|not sure)\b/.test(text) ||
+      /\b(?:something|anything)\s+like\b.*\b(?:cadence|daily|hourly|monthly|weekly)\b/.test(text) ||
       (/\bor\b/.test(text) && hasCompetingScheduleValues));
 
   if (uncertainAlternative) return "uncertain-alternative";
@@ -351,10 +352,10 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     !hasDirectScheduleRequest(text) &&
     (/\b(?:i|we) (?:normally|usually)\b/.test(text) ||
       /\baccording to\b/.test(text) ||
-      /\b(?:brochure|card|description|documentation|event|graph|guide|log|manual|recipe|sign|test|timetable|tooltip)\b.*\b(?:contains?|displays?|mentions?|prints?|reads?|recommend(?:s|ed)?|says?|shows?|suggest(?:s|ed)?|written)\b/.test(
+      /\b(?:benchmark|brochure|card|description|documentation|event|graph|guide|help\s+panel|log|manual|panel|recipe|sign|test|timetable|tooltip)\b.*\b(?:contains?|displays?|mentions?|prints?|reads?|recommend(?:s|ed)?|says?|shows?|suggest(?:s|ed)?|written)\b/.test(
         text,
       ) ||
-      /\b(?:contains?|displays?|mentions?|prints?|reads?|says?|shows?|written)\b.*\b(?:brochure|card|description|documentation|event|graph|log|manual|recipe|sign|test|timetable|tooltip)\b/.test(
+      /\b(?:contains?|displays?|mentions?|prints?|reads?|says?|shows?|written)\b.*\b(?:benchmark|brochure|card|description|documentation|event|graph|guide|help\s+panel|log|manual|panel|recipe|sign|test|timetable|tooltip)\b/.test(
         text,
       ) ||
       /^(?:her|his|our|the|their)\b.*\b(?:arrives?|billed|charged|chimes?|is collected|is open|renews?|works?)\b/.test(
@@ -382,10 +383,14 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "descriptive-statement";
   }
 
+  if (/^a\s+(?:quarter|half)\s+hour\b.*\b(?:consists?|contains?|equals?|has)\b/.test(text)) {
+    return "descriptive-statement";
+  }
+
   if (
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    /^[a-z]+\s+(?:attends?|calls?|goes?|phones?|visits?|walks?|works?)\b/.test(text)
+    /^[a-z]+\s+(?:attends?|calls?|goes?|phones?|practices?|visits?|walks?|works?)\b/.test(text)
   ) {
     return "descriptive-statement";
   }
@@ -514,6 +519,13 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "non-scheduling-language";
   }
 
+  if (
+    (/\b(?:at|ending)\s*[?.,;:]?$/.test(text) && scheduleCue.test(text)) ||
+    (/\b\d{4}-\d{2}-\d{2}\b/.test(text) && /\bending\s*[?.,;:]?$/.test(text))
+  ) {
+    return "non-scheduling-language";
+  }
+
   if (/^at\s+(?:half|quarter|[a-z]+|\d{1,2})\s+(?:past|after|to|before)\s*[?.,;:]?$/.test(text)) {
     return "non-scheduling-language";
   }
@@ -584,9 +596,16 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       /\bnext\s+(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b.*\bonly\b/.test(
         text,
       ) ||
-      /\b(?:(?:in|after)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|ninety)\s+(?:minutes?|hours?|days?|weeks?)|once\s+(?:at|on)|one[-\s]+time\s+(?:alarm\s+for|at|on))\b/.test(
+      /\b(?:(?:in|after)\s+(?:\d+|[a-z]+)\s+(?:minutes?|hours?|days?|weeks?)|once\s+(?:at|on)|one[-\s]+time\s+(?:alarm\s+for|at|on)|single\s+reminder\s+for)\b/.test(
         text,
       ) ||
+      (/\bthis\s+(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/.test(
+        text,
+      ) &&
+        !/\b(?:through|to|until|daily|each|every|monthly|weekly)\b/.test(text)) ||
+      (/\b(?:book|make)\s+(?:the\s+)?\d{1,2}(?:st|nd|rd|th)\b/.test(text) &&
+        !/\b(?:daily|each|every|hourly|monthly|weekly)\b/.test(text)) ||
+      (/\b\d{4}-\d{2}-\d{2}\b/.test(text) && /\bonce\b/.test(text)) ||
       /\b(?:appointment|meeting)\b.*\b(?:for|on)\s+(?:the\s+)?\d{1,2}(?:st|nd|rd|th)?\b/.test(
         text,
       ));
@@ -661,7 +680,7 @@ function unrequestedDeclarativeContext(text: string): boolean {
  * schedule values by itself. */
 function hasDirectScheduleRequest(text: string): boolean {
   return (
-    /(?:^|[,;]\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|archive|arrange|begin|book|charge|check|close|configure|continue|create|do|enable|give|have|issue|keep|let|make|meet|notify|perform|ping|poll|put|refresh|remind|repeat|run|schedule|send|set|start|take|trigger|use|wake)\b/.test(
+    /(?:^|[,;]\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|alert|archive|arrange|begin|book|charge|check|close|configure|continue|create|do|enable|give|have|issue|keep|let|make|meet|notify|perform|ping|poll|put|refresh|remind|repeat|run|schedule|send|set|start|take|trigger|use|wake)\b/.test(
       text,
     ) ||
     /\bplease\s+(?:add|arrange|book|configure|create|make|perform|remind|run|schedule|send|set)\b/.test(
@@ -805,6 +824,10 @@ function regexEscape(text: string): string {
 function explicitDayGroup(entries: readonly Entry[]): Weekday[] | undefined {
   const text = joinEntries(entries);
 
+  if (/\bduring\s+(?:the\s+)?workweek\b/.test(text)) {
+    return ["monday", "tuesday", "wednesday", "thursday", "friday"];
+  }
+
   for (const [surface, weekdays] of Object.entries(WEEKDAY_GROUPS).sort(
     ([left], [right]) => right.length - left.length,
   )) {
@@ -816,6 +839,8 @@ function explicitDayGroup(entries: readonly Entry[]): Weekday[] | undefined {
 
     if (
       pattern.test(text) ||
+      new RegExp(`\\bduring\\s+(?:the\\s+)?${phrase}\\b`).test(text) ||
+      new RegExp(`^${phrase}\\s+at\\s+(?:\\d{1,2}(?::\\d{2})?|[a-z]+)\\b`).test(text) ||
       (hasDirectScheduleRequest(text) && new RegExp(`^${phrase}\\b`).test(text))
     ) {
       return [...weekdays];
@@ -1030,11 +1055,19 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
     return { unit: "month", interval: 1, valueStart: -1, valueEnd: -1 };
   }
 
+  if (/\bdaly\b/.test(text) && hasDirectScheduleRequest(text)) {
+    return { unit: "day", interval: 1, valueStart: -1, valueEnd: -1 };
+  }
+
   const halfHour = /\bevery\s+(?:one\s+)?half[-\s]+hour\b|\bhalf[-\s]+hour\s+intervals?\b/.exec(
     text,
   );
 
   if (halfHour !== null) return { unit: "minute", interval: 30, valueStart: -1, valueEnd: -1 };
+
+  if (/\bhalf[-\s]+hourly\b/.test(text)) {
+    return { unit: "minute", interval: 30, valueStart: -1, valueEnd: -1 };
+  }
 
   if (
     /\b(?:(?:every\s+(?:other|second))|alternat(?:e|ing))\s+(?:mon(?:day)?s?|tue(?:sday)?s?|wed(?:nesday)?s?|thu(?:rsday)?s?|fri(?:day)?s?|sat(?:urday)?s?|sun(?:day)?s?)\b/.test(
@@ -1110,7 +1143,7 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
     }
   }
 
-  const pattern = new RegExp(`\\b(${numberSurface})\\s+([a-z]+)\\b`, "g");
+  const pattern = new RegExp(`\\b(${numberSurface})[-\\s]+([a-z]+)\\b`, "g");
 
   for (const match of text.matchAll(pattern)) {
     const interval = numberFrom(match[1]!);
@@ -1137,7 +1170,7 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
       !/\b(?:every|each|once\s+per|interval(?:\s+is|\s+of)?|cadence(?:\s+is|\s+of)?|cycle(?:\s+is|\s+of)?|recurring\s+every)\s*$/.test(
         prefix,
       ) &&
-      !/^\s*(?:between\s+runs|apart|cycle)\b/.test(suffix)
+      !/^\s*(?:between\s+runs|apart|cadence|cycle)\b/.test(suffix)
     ) {
       continue;
     }
@@ -1158,7 +1191,7 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
   // evidence, e.g. `evrry day`.
   const normalized = normalizeGrammarWords(
     text,
-    ["every", "each", ...Object.keys(UNIT_ALIASES)],
+    ["every", "each", "daily", "hourly", "monthly", "weekly", ...Object.keys(UNIT_ALIASES)],
     3,
   );
 
@@ -1350,7 +1383,21 @@ function calendarDateCandidates(text: string): DateCandidate[] {
 
 /** Extract only visibly schedule-scoped recurrence bounds. */
 function explicitBounds(entries: readonly Entry[]): RecurrenceBounds | undefined {
-  const text = joinEntries(entries);
+  let text = joinEntries(entries);
+
+  const exceptionCue =
+    /\b(?:apart from|but not|except|excluding|leave|omit|save for|skip|unless)\b/.exec(text);
+
+  if (exceptionCue !== null) {
+    const candidates = calendarDateCandidates(text);
+
+    if (candidates.length > 0 && exceptionCue.index > candidates[candidates.length - 1]!.end) {
+      text = text.slice(0, exceptionCue.index);
+    } else {
+      return undefined;
+    }
+  }
+
   const dates = calendarDateCandidates(text);
 
   if (dates.length === 0) {
@@ -1364,10 +1411,6 @@ function explicitBounds(entries: readonly Entry[]): RecurrenceBounds | undefined
       throw new RangeError("decodeIntent: invalid bound date");
     }
 
-    return undefined;
-  }
-
-  if (/\b(?:apart from|but not|except|excluding|leave|omit|skip|unless)\b/.test(text)) {
     return undefined;
   }
 
@@ -1457,7 +1500,7 @@ function explicitBounds(entries: readonly Entry[]): RecurrenceBounds | undefined
   }
 
   if (
-    /\b(?:from|start\b.*\bon|starting|starting\s+on|starting\s+from|begin|begin\b.*\bon|beginning\s+on|beginning\s+from|as\s+of|on\s+or\s+after|effective|effective\s+on|commencing|commencing\s+on)\s*$/.test(
+    /\b(?:from|start\b.*\bon|starting|starting\s+on|starting\s+from|begin|begin\b.*\bon|beginning|beginning\s+on|beginning\s+from|as\s+of|on\s+or\s+after|effective|effective\s+on|commencing|commencing\s+on)\s*$/.test(
       before,
     )
   ) {
@@ -1658,6 +1701,24 @@ function explicitDayOfMonth(entries: readonly Entry[]): number | undefined {
     return undefined;
   }
 
+  const dayOrdinalAliases = Object.fromEntries(DAY_ORDINALS.map((surface) => [surface, surface]));
+
+  for (const match of text.matchAll(/[a-z]+/g)) {
+    if (!/\b(?:on\s+(?:the\s+)?|the\s+)$/.test(text.slice(0, match.index))) continue;
+
+    if (
+      /^\s+(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/.test(
+        text.slice(match.index! + match[0].length),
+      )
+    ) {
+      continue;
+    }
+
+    const surface = uniqueSingleEditAlias(match[0], dayOrdinalAliases, 4);
+
+    if (surface !== undefined) return DAY_ORDINALS.indexOf(surface) + 1;
+  }
+
   const wordOrdinals = [...DAY_ORDINALS]
     .sort((left, right) => right.length - left.length)
     .map((value) => regexEscape(value).replace(/\ /g, "\\s+"))
@@ -1712,6 +1773,14 @@ function explicitDayOfMonth(entries: readonly Entry[]): number | undefined {
 
     if (validateDayOfMonth(numeric) === null) return numeric;
     throw new RangeError(`decodeIntent: invalid explicit day of month: ${numeric}`);
+  }
+
+  const compoundCardinal = /\bday\s+([a-z]+(?:[-\s][a-z]+))\b/.exec(text);
+
+  if (compoundCardinal !== null) {
+    const numeric = numberFrom(compoundCardinal[1]!);
+
+    if (numeric !== undefined && validateDayOfMonth(numeric) === null) return numeric;
   }
 
   const cardinal = new RegExp(`\\bday\\s+(${numberSurfaceForDay()})\\b`).exec(text);
@@ -1788,12 +1857,39 @@ function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefin
 function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined {
   const text = joinEntries(entries);
 
+  const grammarText = normalizeGrammarWords(
+    text,
+    ["every", "each", "daily", "weekly", "monthly"],
+    3,
+  );
+
+  const scheduleShapedClock =
+    /^(?:daily|each|every|monthly|weekly)\b/.test(grammarText) ||
+    /^(?:mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)(?:\s*[+,/&]\s*(?:mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?))+\b/.test(
+      text,
+    ) ||
+    explicitDayGroup(entries) !== undefined ||
+    explicitWeekdaySelector(entries) !== undefined ||
+    explicitOrdinalWeekday(entries) !== undefined;
+
   if (
     !hasDirectScheduleRequest(text) &&
+    !scheduleShapedClock &&
     !/^(?:daily|each\s+day|every\s+day|monthly|weekly)\b/.test(text) &&
-    !/^at\b.*\b(?:daily|each\s+day|every\s+day)\b/.test(text)
+    !/^at\b.*\b(?:daily|each\s+day|every\s+day)\b/.test(text) &&
+    !/\b(?:recur|recurring|repeat)\b/.test(text)
   ) {
     return undefined;
+  }
+
+  const military = /\b(?:at|around)\s+([a-z]+(?:-[a-z]+)?)\s+hundred\b/.exec(text);
+
+  if (military !== null) {
+    const militaryHour = numberFrom(military[1]!);
+
+    if (militaryHour !== undefined && militaryHour >= 0 && militaryHour <= 23) {
+      return { hour: militaryHour, minute: 0 };
+    }
   }
 
   if (/\bat\s+(?:[a-z]+(?:-[a-z]+)?|\d+)[-\s]+(?:minutes?|hours?)[-\s]+intervals?\b/.test(text)) {
@@ -1821,7 +1917,10 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
           : numberFrom(match[1]!);
   }
 
-  if ((match === null || hour === undefined) && hasDirectScheduleRequest(text)) {
+  if (
+    (match === null || hour === undefined) &&
+    (hasDirectScheduleRequest(text) || scheduleShapedClock)
+  ) {
     match = /\b(\d{1,2}):(\d{2})\b/.exec(text);
     hour = match === null ? undefined : Number(match[1]);
   }
@@ -1913,12 +2012,15 @@ function explicitNamedTime(entries: readonly Entry[]): TimeOfDay | undefined {
     !/^(?:at\b|daily\b|each\b|every\b|hourly\b|monthly\b|on\b|weekly\b|weekdays?\b|weekends?\b)/.test(
       text,
     ) &&
+    explicitOrdinalWeekday(entries) === undefined &&
     !/\b(?:recur|repeat)\b.*\b(?:at|around)\s+(?:midnight|noon|midday)\b/.test(text)
   ) {
     return undefined;
   }
 
-  const match = /\b(?:at|for|around|make|use)\s+(midnight|noon|midday)\b/.exec(text);
+  const match = /(?:\b(?:at|for|around|make|use)\s+|@\s*)(midnight|noon|midday|lunchtime)\b/.exec(
+    text,
+  );
 
   if (match === null) return undefined;
   const hour = NAMED_HOURS[match[1]!];
@@ -1935,7 +2037,11 @@ function dailyCueIntroducesWeekdayRange(text: string): boolean {
 }
 
 function hasContradictoryDailyCue(text: string): boolean {
-  return /\b(?:every|each)\s+day\b/.test(text) && !dailyCueIntroducesWeekdayRange(text);
+  return (
+    /\b(?:every|each)\s+day\b/.test(text) &&
+    !dailyCueIntroducesWeekdayRange(text) &&
+    !/\bduring\s+(?:the\s+)?workweek\b/.test(text)
+  );
 }
 
 function explicitExceptions(entries: readonly Entry[]): ExplicitExceptionEvidence | undefined {
@@ -2576,7 +2682,7 @@ export function decodeIntent(
     }
   }
 
-  if (ordinalEvidence !== undefined) {
+  if (ordinalEvidence !== undefined && dayGroupEvidence === undefined) {
     const visibleOrdinalWeekdays = weekdaysIn(text, true);
 
     if (
@@ -2608,6 +2714,9 @@ export function decodeIntent(
 
     intent.frequency.unit = "week";
     intent.weekdays = normalizeWeekdays([...(intent.weekdays ?? []), ...dayGroupEvidence]);
+    delete intent.dayOfMonth;
+    delete intent.ordinalWeekday;
+    delete intent.day;
   }
 
   if (daySpecEvidence !== undefined) {
@@ -2696,13 +2805,20 @@ export function decodeIntent(
       text,
     );
 
-  if (positionalWeekdayList !== null) {
+  const possessivePositionalWeekdayList =
+    /\b(?:the\s+)?week's\s+((?:first|second|third|fourth|fifth|sixth|seventh)(?:\s*(?:,|and)\s*(?:first|second|third|fourth|fifth|sixth|seventh))+?)\s+days?\b/.exec(
+      text,
+    );
+
+  const visiblePositionalWeekdays = positionalWeekdayList ?? possessivePositionalWeekdayList;
+
+  if (visiblePositionalWeekdays !== null) {
     const positions = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh"];
 
     intent.frequency.unit = "week";
 
     intent.weekdays = [
-      ...positionalWeekdayList[1]!.matchAll(/first|second|third|fourth|fifth|sixth|seventh/g),
+      ...visiblePositionalWeekdays[1]!.matchAll(/first|second|third|fourth|fifth|sixth|seventh/g),
     ].map((match) => WEEKDAY_SEQUENCE[positions.indexOf(match[0])]!);
 
     delete intent.dayOfMonth;

@@ -124,3 +124,13 @@ Both the original and corrected fixture hashes are consumed. After using the
 failures for safety and decoder development, the corrected gold moved the
 audited baseline to 97/120 and ultimately reached 120/120 only as regression
 evidence; those later results are not fresh promotion evidence.
+
+`human-v12.jsonl` is an eleventh coding-agent-authored, non-independent set of
+120 balanced examples across twelve families. It was gold-linted and checked
+for normalized wording overlap before its single frozen-candidate acceptance
+run. That fresh run scored 83/120 (69.2%), with 29 silent meaning changes and
+12 false accepts, so promotion failed. Its hash was immediately consumed. The
+failures then drove false-positive guards, correction scoping, typo-aware
+evidence recovery, clock reconciliation, and additional wording support. The
+later 120/120 score is development regression evidence only and does not alter
+the original acceptance result or authorize promotion.

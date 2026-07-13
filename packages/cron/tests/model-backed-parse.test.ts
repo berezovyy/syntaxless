@@ -808,6 +808,65 @@ describe("exact lexical schedule and rejection surfaces", () => {
   });
 });
 
+describe("human-style decoder regressions", () => {
+  test.each([
+    [
+      "Keep auditing the inbox on a 17-minute cadence.",
+      { frequency: { unit: "minute", interval: 17 } },
+    ],
+    [
+      "During the workweek, run the sync every day at 6:35 a.m.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: [...WEEKDAYS],
+        time: { hour: 6, minute: 35 },
+      },
+    ],
+    [
+      "make it daly at 6.25p.m.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 18, minute: 25 } },
+    ],
+    [
+      "mon+wed, 08:35, every week",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["monday", "wednesday"],
+        time: { hour: 8, minute: 35 },
+      },
+    ],
+    [
+      "No—business days at 08:25, rather than Saturday and Sunday.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: [...WEEKDAYS],
+        time: { hour: 8, minute: 25 },
+      },
+    ],
+    [
+      "I said every three weeks by mistake; make it every three hours.",
+      { frequency: { unit: "hour", interval: 3 } },
+    ],
+  ] as const)("preserves explicit evidence in %s", async (text, intent) => {
+    const result = await parse(text);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.intent as unknown).toEqual(intent);
+  });
+
+  test.each([
+    "A half hour contains thirty minutes.",
+    "The support panel displays monthly on the 8th.",
+    "Use something like a weekly cadence.",
+    "Starting 2068-03-11 and ending",
+    "Arrange a meeting this Thursday at noon.",
+  ])("rejects non-recurring or incomplete language: %s", async (text) => {
+    const result = await parse(text);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("unsafe-context");
+  });
+});
+
 describe("confidence bands", () => {
   const labeledWith = (text: string, roles: number[], score: number): LabeledToken[] => {
     const tokens = tokenize(text).filter((token) => token.kind !== 3);
