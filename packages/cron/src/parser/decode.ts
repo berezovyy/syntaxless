@@ -348,10 +348,10 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     !hasDirectScheduleRequest(text) &&
     (/\b(?:i|we) (?:normally|usually)\b/.test(text) ||
       /\baccording to\b/.test(text) ||
-      /\b(?:card|description|documentation|event|guide|manual|recipe|sign|timetable)\b.*\b(?:contains?|reads?|recommend(?:s|ed)?|says?|shows?|suggest(?:s|ed)?|written)\b/.test(
+      /\b(?:brochure|card|description|documentation|event|graph|guide|log|manual|recipe|sign|test|timetable)\b.*\b(?:contains?|mentions?|prints?|reads?|recommend(?:s|ed)?|says?|shows?|suggest(?:s|ed)?|written)\b/.test(
         text,
       ) ||
-      /\b(?:contains?|reads?|says?|shows?|written)\b.*\b(?:card|description|documentation|event|manual|recipe|sign|timetable)\b/.test(
+      /\b(?:contains?|mentions?|prints?|reads?|says?|shows?|written)\b.*\b(?:brochure|card|description|documentation|event|graph|log|manual|recipe|sign|test|timetable)\b/.test(
         text,
       ) ||
       /^(?:her|his|our|the|their)\b.*\b(?:arrives?|billed|charged|chimes?|is collected|is open|renews?|works?)\b/.test(
@@ -382,7 +382,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
-    /^(?:every\s+(?:minute|hour|day|week|month)\b.*\b(?:consists?|contains?|equals?|has|is made up)\b|each\s+day\b.*\b(?:consists?|contains?|is made up)\b|(?:that|this|the)\s+(?:chart|report|spreadsheet)\b.*\b(?:averages|bars|entries|totals|rows|columns)\b|i\s+(?:drink|exercise|jog|read|sleep|walk)\b|.+\bcosts?\b)/.test(
+    /^(?:every\s+(?:minute|hour|day|week|month)\b.*\b(?:consists?|contains?|equals?|has|is made up)\b|each\s+(?:minute|hour|day|week|month)\b.*\b(?:consists?|contains?|equals?|has|is made up)\b|(?:that|this|the)\s+(?:chart|graph|report|spreadsheet)\b.*\b(?:averages|bars|contains?|entries|has|totals|rows|columns)\b|i\s+(?:drink|exercise|jog|read|sleep|walk)\b|.+\bcosts?\b)/.test(
       text,
     )
   ) {
@@ -520,6 +520,10 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "non-scheduling-language";
   }
 
+  if (/\bevery\s+(?:a\s+)?handful\s+of\s+(?:minutes?|hours?|days?|weeks?|months?)\b/.test(text)) {
+    return "non-scheduling-language";
+  }
+
   if (/\bevery\s+(?:several|some)\s+(?:minutes?|hours?|days?|weeks?|months?)\b/.test(text)) {
     return "non-scheduling-language";
   }
@@ -544,6 +548,24 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   ) {
     return "non-scheduling-language";
   }
+
+  // A cron intent describes recurrence. Relative, explicitly single-use, and
+  // date-local requests must not be silently widened into recurring schedules.
+  const oneOffRequest =
+    hasDirectScheduleRequest(text) &&
+    ((/\b(?:today|tomorrow|tonight|this\s+(?:week|month|year))\b/.test(text) &&
+      !/\b(?:daily|each|every|hourly|monthly|weekly)\b/.test(text)) ||
+      /\bnext\s+(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b.*\bonly\b/.test(
+        text,
+      ) ||
+      /\b(?:in\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:minutes?|hours?|days?|weeks?)|once\s+at|one\s+time\s+at)\b/.test(
+        text,
+      ) ||
+      /\b(?:appointment|meeting)\b.*\b(?:for|on)\s+(?:the\s+)?\d{1,2}(?:st|nd|rd|th)?\b/.test(
+        text,
+      ));
+
+  if (oneOffRequest) return "non-scheduling-language";
 
   if (
     /\b(?:near|around)\s+the\s+(?:beginning|middle|end)\s+of\s+(?:each|every|the)\s+month\b/.test(
@@ -613,10 +635,10 @@ function unrequestedDeclarativeContext(text: string): boolean {
  * schedule values by itself. */
 function hasDirectScheduleRequest(text: string): boolean {
   return (
-    /(?:^|[,;]\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|archive|arrange|begin|book|charge|check|close|configure|continue|create|do|enable|give|have|issue|keep|let|make|meet|notify|ping|poll|put|refresh|remind|repeat|run|schedule|send|set|start|take|trigger|use)\b/.test(
+    /(?:^|[,;]\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|archive|arrange|begin|book|charge|check|close|configure|continue|create|do|enable|give|have|issue|keep|let|make|meet|notify|perform|ping|poll|put|refresh|remind|repeat|run|schedule|send|set|start|take|trigger|use)\b/.test(
       text,
     ) ||
-    /\bplease\s+(?:add|arrange|book|configure|create|make|remind|run|schedule|send|set)\b/.test(
+    /\bplease\s+(?:add|arrange|book|configure|create|make|perform|remind|run|schedule|send|set)\b/.test(
       text,
     ) ||
     /\b(?:i(?:'d| would) like|i(?:\s+still)?\s+(?:need|want)|let's)\b/.test(text) ||
@@ -2653,6 +2675,8 @@ export function decodeIntent(
 
   const explicitScheduleEvidence =
     (frequencyEvidence !== undefined && frequencyEvidence.contextual !== true) ||
+    (hasDirectScheduleRequest(text) &&
+      /\b(?:once|one\s+[a-z]+)\s+(?:a|per)\s+(?:minute|hour|day|week|month)\b/.test(text)) ||
     scopedOrdinalEvidence !== undefined ||
     dayOfMonthEvidence !== undefined ||
     daySpecEvidence !== undefined ||
@@ -2711,12 +2735,11 @@ export function decodeIntent(
     boundaryMargin = Math.min(boundaryMargin, entry.boundaryScore);
   }
 
-  // Preserve the established public behavior while exposing the individual
-  // evidence below. A replacement score must be calibrated end to end before
-  // it is allowed to reject schedules that the active parser accepts.
+  // Global-kind agreement alone cannot promote a weak token margin: calibration
+  // showed that a confident interval kind may still describe a one-off duration.
   let confidence = tokenMargin;
 
-  if (explicitScheduleEvidence || globalKindConsistent) confidence = 1;
+  if (explicitScheduleEvidence) confidence = 1;
 
   const evidence: SequenceConfidenceEvidence = {
     tokenMargin,

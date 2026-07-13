@@ -447,3 +447,30 @@ describe("consumed human-v10 behavioral corpus", () => {
     for (const support of familyCounts.values()) expect(support).toBe(10);
   });
 });
+
+describe("human calibration-v2 behavioral corpus", () => {
+  test("is isolated, distributed by family, and restricted to calibration", async () => {
+    const path = resolveRepo("packages/cron/evaluation/human-calibration-v2.jsonl");
+    const records = parseHumanCorpus(await readFile(path, "utf8"));
+
+    expect(records).toHaveLength(100);
+    expect(records.every((record) => record.partition === "calibration")).toBe(true);
+    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
+
+    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
+      checked: true,
+      outsideTrainingData: true,
+      incompatibleWithTrainingSchema: true,
+      absentFromGeneratorSources: true,
+    });
+
+    const familyCounts = new Map<string, number>();
+
+    for (const record of records) {
+      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
+    }
+
+    expect(familyCounts.size).toBe(11);
+    for (const support of familyCounts.values()) expect(support).toBeGreaterThanOrEqual(5);
+  });
+});

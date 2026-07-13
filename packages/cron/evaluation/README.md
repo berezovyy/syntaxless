@@ -99,3 +99,16 @@ balanced examples. Its only fresh run scored 88/100, with 9 silent meaning
 changes and 6 false accepts, so promotion failed. Its later 100/100 result is
 development regression evidence only; its wording and hash are permanently
 consumed.
+
+`human-calibration-v2.jsonl` is a separate coding-agent-authored calibration
+set created with the user's explicit permission. It contains 100 deliberately
+distributed examples: 40 positive recurring schedules and 60 difficult
+negatives covering reported or quoted schedules, questions, ambiguity,
+cancellations, incomplete requests, and one-off requests. It is not independent
+acceptance evidence and must never enter training. The frozen candidate initially
+scored 85/100. After
+discourse-safety fixes and removal of the unsafe global-kind confidence boost,
+the public parser scored 100/100. On raw decoding, the maximum safe-coverage
+point is a 0.4 threshold (40% coverage, zero observed risk); the existing 0.5
+public floor is therefore retained rather than tuned downward. This result is
+calibration/development evidence only and does not authorize model promotion.
