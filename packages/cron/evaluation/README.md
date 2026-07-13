@@ -156,3 +156,13 @@ using those failures for development is regression evidence only. After the
 failures drove additional discourse-safety and explicit-value reconciliation
 work, v14 reached 120/120 and the combined v2-v13 suite reached 1310/1310 as
 development regressions; neither result authorizes promotion.
+
+`human-v15.jsonl` is a fourteenth coding-agent-authored, non-independent set of
+120 new examples across the same twelve balanced families. It passed schema,
+compiler-gold, generator-isolation, and normalized wording-overlap checks
+before its single acceptance run. The frozen candidate scored 88/120 (73.3%),
+with 22 silent meaning changes and 12 negative false accepts, so promotion
+failed. The result exposed limits in rate expressions, clock phrasing,
+relative weekdays, bounds, corrections, noisy input, ordinary prose,
+historical statements, ambiguity, and one-off requests. Its hash is consumed;
+future runs are development regressions only.
