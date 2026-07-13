@@ -134,8 +134,22 @@ test(
       expect(invoked(first.steps, "regen")).toBe(true);
       expect(invoked(first.steps, "featurize")).toBe(true);
       expect(first.steps.some((step) => step.step === "oracle" && !step.skipped)).toBe(true);
-      expect(first.steps.some((step) => step.step === "train" && !step.skipped)).toBe(true);
+      const train = first.steps.find((step) => step.step === "train");
+
+      expect(train?.skipped).toBe(false);
+      expect(train?.argv).toContain("--h-per-epoch");
       expect(first.steps.some((step) => step.step === "export" && !step.skipped)).toBe(true);
+
+      const report = JSON.parse(
+        readFileSync(join(storage, "s4-skip-1", "report.json"), "utf8"),
+      ) as {
+        config?: { h_per_epoch?: boolean };
+        history?: Array<{ epoch: number; h: unknown }>;
+      };
+
+      expect(report.config?.h_per_epoch).toBe(true);
+      expect(report.history?.length).toBeGreaterThan(0);
+      expect(report.history?.[0]?.h).toBeTruthy();
 
       const second = main([
         "--name",

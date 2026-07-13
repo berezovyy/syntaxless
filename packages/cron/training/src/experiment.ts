@@ -416,6 +416,7 @@ export function runExperiment(options: ExperimentOptions): ExperimentResult {
       device,
       "--val-max-sequences",
       String(evalSamples),
+      "--h-per-epoch",
       ...(options.freshEachEpoch ? ["--fresh-each-epoch"] : []),
     ],
     root,
