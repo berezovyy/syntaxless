@@ -315,6 +315,8 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "quoted-schedule";
   }
 
+  if (/^(?:copy|remove|translate)\b.*["'‘’“”].*["'‘’“”]/.test(text)) return "quoted-schedule";
+
   if (/\b(?:typed|wrote)\b.*["'‘’“”].*\b(?:every|monthly|weekly|daily|hourly)\b/.test(text)) {
     return "quoted-schedule";
   }
@@ -350,6 +352,16 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       /^the\s+manual\b.*\brecommends?\b/.test(text) ||
       /^this\b.*\b(?:costs?|charges?)\b.*\bper\s+(?:day|week|month)\b/.test(text) ||
       /^the\s+clock\b.*\bstrikes?\b/.test(text))
+  ) {
+    return "descriptive-statement";
+  }
+
+  if (
+    !hasDirectScheduleRequest(text) &&
+    (/^my\b.*\bleaves?\b/.test(text) ||
+      /^(?:her|his|their)\b.*\brenews?\b/.test(text) ||
+      /^the\s+(?:guide|handbook|manual)\b.*\b(?:recommends?|suggests?)\b/.test(text) ||
+      /^the\s+(?:alarm|bell|clock)\b.*\b(?:rings?|strikes?)\b/.test(text))
   ) {
     return "descriptive-statement";
   }
@@ -405,6 +417,10 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   }
 
   if (/\b(?:and|or|from|through)\s*[?.,;:]?$/.test(text) && scheduleCue.test(text)) {
+    return "non-scheduling-language";
+  }
+
+  if (/^at\s+(?:half|quarter|[a-z]+|\d{1,2})\s+(?:past|after|to|before)\s*[?.,;:]?$/.test(text)) {
     return "non-scheduling-language";
   }
 
@@ -1252,7 +1268,7 @@ function explicitBounds(entries: readonly Entry[]): RecurrenceBounds | undefined
   }
 
   if (
-    /\b(?:from|starting|starting\s+on|starting\s+from|begin|begin\b.*\bon|beginning\s+on|beginning\s+from|as\s+of|on\s+or\s+after|effective|effective\s+on|commencing|commencing\s+on)\s*$/.test(
+    /\b(?:from|start\b.*\bon|starting|starting\s+on|starting\s+from|begin|begin\b.*\bon|beginning\s+on|beginning\s+from|as\s+of|on\s+or\s+after|effective|effective\s+on|commencing|commencing\s+on)\s*$/.test(
       before,
     )
   ) {
@@ -1561,7 +1577,7 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
   }
 
   const match =
-    /\b(?:at|around|(?:alert|notification|reminder)(?:\s+for)?)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
+    /\b(?:at|around|everyday|(?:alert|notification|reminder)(?:\s+for)?)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
       text,
     );
 

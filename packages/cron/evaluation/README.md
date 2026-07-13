@@ -57,3 +57,7 @@ immediately consumed; all later use is development-only.
 `human-v4.jsonl` is the third non-independent acceptance set. Its only frozen
 run scored 82/100 (82.0%), with 13 silent meaning changes and 8 false accepts.
 Its hash is consumed and it is development-only from this point onward.
+
+`human-v5.jsonl` is the fourth non-independent acceptance set. Its only frozen
+run scored 90/100 (90.0%), with 10 silent meaning changes and 7 false accepts.
+Its hash is consumed and it is development-only from this point onward.

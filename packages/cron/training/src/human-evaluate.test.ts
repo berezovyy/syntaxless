@@ -253,3 +253,27 @@ describe("consumed human-v4 behavioral corpus", () => {
     ).rejects.toThrow(/already been consumed/);
   });
 });
+
+describe("consumed human-v5 behavioral corpus", () => {
+  test("remains isolated and permanently unavailable as fresh acceptance", async () => {
+    const path = resolveRepo("packages/cron/evaluation/human-v5.jsonl");
+    const records = parseHumanCorpus(await readFile(path, "utf8"));
+
+    expect(records).toHaveLength(100);
+    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
+
+    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
+      checked: true,
+      outsideTrainingData: true,
+      incompatibleWithTrainingSchema: true,
+      absentFromGeneratorSources: true,
+    });
+
+    await expect(
+      assertAcceptanceFresh(
+        "acceptance",
+        "989896ccaa1191fa95532281569a562cde630e7317c3a2765a8a0b3820bfd07a",
+      ),
+    ).rejects.toThrow(/already been consumed/);
+  });
+});

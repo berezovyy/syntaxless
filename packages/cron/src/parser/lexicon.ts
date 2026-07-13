@@ -554,6 +554,7 @@ export const DAY_RULES = {
   "very last day": "last_day_of_month",
   "final day": "last_day_of_month",
   "last calendar day": "last_day_of_month",
+  "final calendar day": "last_day_of_month",
   "last business day": "last_business_day",
   "final business day": "last_business_day",
   "final working day": "last_business_day",
