@@ -16,6 +16,7 @@ export const WEEKDAY_SEQUENCE: Weekday[] = [
 /** Full weekday names plus the accepted abbreviations. */
 export const WEEKDAY_ALIASES: Record<string, Weekday> = {
   monday: "monday",
+  mnday: "monday",
   mon: "monday",
   "mon.": "monday",
   tuesday: "tuesday",
@@ -35,6 +36,7 @@ export const WEEKDAY_ALIASES: Record<string, Weekday> = {
   "thur.": "thursday",
   "thurs.": "thursday",
   friday: "friday",
+  firday: "friday",
   fri: "friday",
   "fri.": "friday",
   saturday: "saturday",
@@ -76,9 +78,13 @@ export const WEEKDAY_DESCRIPTIONS: Readonly<Record<string, Weekday>> = (() => {
     entries[`the day after ${previous}`] = day;
     entries[`the day following ${previous}`] = day;
     entries[`the day immediately after ${previous}`] = day;
+    entries[`the day directly after ${previous}`] = day;
+    entries[`day directly after ${previous}`] = day;
     entries[`the day before ${next}`] = day;
     entries[`the day preceding ${next}`] = day;
     entries[`the day immediately before ${next}`] = day;
+    entries[`the day directly before ${next}`] = day;
+    entries[`day directly before ${next}`] = day;
     entries[`the ${positions[index]} day of the ISO week`] = day;
     entries[`the ${positions[index]} day in an ISO week`] = day;
     entries[`the ${positions[index]} day of a Monday-first week`] = day;
@@ -295,6 +301,7 @@ export function numberWord(value: number): string {
 export const UNIT_ALIASES: Record<string, FrequencyUnit> = {
   minute: "minute",
   minutes: "minute",
+  minits: "minute",
   min: "minute",
   mins: "minute",
   hour: "hour",

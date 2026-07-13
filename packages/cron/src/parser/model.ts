@@ -103,9 +103,17 @@ export function scopeActionableCorrection(text: string): string {
     [/^let me revise that:\s*(.+)$/i, (match) => match[1]!],
     [/^not\b[^;]*;\s*(.+)$/i, (match) => match[1]!],
     [/^not\b.+?\s*-\s*((?:make|run|schedule|send|set|trigger|use)\b.+)$/i, (match) => match[1]!],
-    [/^move\b.*\bfrom\b.*?\bto\s+(.+)$/i, (match) => `schedule ${match[1]!}`],
+    [/^(?:actually,?\s+)?move\b.*\bfrom\b.*?\bto\s+(.+)$/i, (match) => `schedule ${match[1]!}`],
     [/^change\b.*\bfrom\b.*?\bto\s+(.+)$/i, (match) => `schedule ${match[1]!}`],
+    [
+      /^shift\s+the\s+(daily|hourly|weekly|monthly)\b.*\bfrom\b.*?\bto\s+(.+)$/i,
+      (match) => `${match[1]!} at ${match[2]!}`,
+    ],
     [/^shift\b.*\bfrom\b.*?\bto\s+(.+)$/i, (match) => `schedule ${match[1]!}`],
+    [
+      /^wait,?\s+.+?;\s*((?:make|run|schedule|send|set|use)\b.+?)(?:\s+instead)?$/i,
+      (match) => match[1]!,
+    ],
     [
       /^no,?\s+(?:i need it|make it|schedule it|set it|use)\s+(.+?),\s+not\b/i,
       (match) => match[1]!,

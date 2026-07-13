@@ -239,6 +239,133 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const INTENT_WEEKDAYS = new Set([
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+]);
+
+const INTENT_UNITS = new Set(["minute", "hour", "day", "week", "month"]);
+const INTENT_ORDINALS = new Set(["first", "second", "third", "fourth", "last"]);
+const INTENT_DAY_TYPES = new Set(["last_business_day", "last_day_of_month"]);
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const allowed = new Set(keys);
+
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+/** Runtime-check the full public AST instead of trusting a TypeScript cast.
+ * This keeps malformed gold (especially misspelled enum members) from passing
+ * merely because the compiler rejects both the malformed and intended shape. */
+function assertHumanIntent(value: Record<string, unknown>, id: string): void {
+  const fail = () => {
+    throw new Error(`${id}: invalid ScheduleIntent gold`);
+  };
+
+  if (
+    !hasOnlyKeys(value, [
+      "frequency",
+      "time",
+      "weekdays",
+      "dayOfMonth",
+      "ordinalWeekday",
+      "day",
+      "bounds",
+      "exceptions",
+    ]) ||
+    !isObject(value.frequency) ||
+    !hasOnlyKeys(value.frequency, ["unit", "interval"]) ||
+    !INTENT_UNITS.has(String(value.frequency.unit)) ||
+    !Number.isInteger(value.frequency.interval) ||
+    Number(value.frequency.interval) < 1
+  ) {
+    fail();
+  }
+
+  if (value.time !== undefined) {
+    if (
+      !isObject(value.time) ||
+      !hasOnlyKeys(value.time, ["hour", "minute"]) ||
+      !Number.isInteger(value.time.hour) ||
+      Number(value.time.hour) < 0 ||
+      Number(value.time.hour) > 23 ||
+      !Number.isInteger(value.time.minute) ||
+      Number(value.time.minute) < 0 ||
+      Number(value.time.minute) > 59
+    ) {
+      fail();
+    }
+  }
+
+  if (
+    value.weekdays !== undefined &&
+    (!Array.isArray(value.weekdays) ||
+      value.weekdays.length === 0 ||
+      !value.weekdays.every((day) => INTENT_WEEKDAYS.has(String(day))))
+  ) {
+    fail();
+  }
+
+  if (
+    value.dayOfMonth !== undefined &&
+    (!Number.isInteger(value.dayOfMonth) ||
+      Number(value.dayOfMonth) < 1 ||
+      Number(value.dayOfMonth) > 31)
+  ) {
+    fail();
+  }
+
+  if (value.ordinalWeekday !== undefined) {
+    if (
+      !isObject(value.ordinalWeekday) ||
+      !hasOnlyKeys(value.ordinalWeekday, ["ordinal", "weekday"]) ||
+      !INTENT_ORDINALS.has(String(value.ordinalWeekday.ordinal)) ||
+      !INTENT_WEEKDAYS.has(String(value.ordinalWeekday.weekday))
+    ) {
+      fail();
+    }
+  }
+
+  if (value.day !== undefined) {
+    if (
+      !isObject(value.day) ||
+      !hasOnlyKeys(value.day, ["type"]) ||
+      !INTENT_DAY_TYPES.has(String(value.day.type))
+    ) {
+      fail();
+    }
+  }
+
+  const validDateObject = (candidate: unknown): boolean =>
+    isObject(candidate) &&
+    hasOnlyKeys(candidate, ["start", "end"]) &&
+    [candidate.start, candidate.end].every(
+      (date) => date === undefined || /^\d{4}-\d{2}-\d{2}$/.test(String(date)),
+    );
+
+  if (value.bounds !== undefined && !validDateObject(value.bounds)) fail();
+
+  if (value.exceptions !== undefined) {
+    if (
+      !isObject(value.exceptions) ||
+      !hasOnlyKeys(value.exceptions, ["dates", "weekdays"]) ||
+      (value.exceptions.dates !== undefined &&
+        (!Array.isArray(value.exceptions.dates) ||
+          !value.exceptions.dates.every((date) => /^\d{4}-\d{2}-\d{2}$/.test(String(date))))) ||
+      (value.exceptions.weekdays !== undefined &&
+        (!Array.isArray(value.exceptions.weekdays) ||
+          !value.exceptions.weekdays.every((day) => INTENT_WEEKDAYS.has(String(day)))))
+    ) {
+      fail();
+    }
+  }
+}
+
 export function parseHumanCorpus(contents: string): HumanEvaluationRecord[] {
   const records: HumanEvaluationRecord[] = [];
   const ids = new Set<string>();
@@ -286,6 +413,7 @@ export function parseHumanCorpus(contents: string): HumanEvaluationRecord[] {
       throw new Error(`${value.id}: a schedule needs a compiler expectation`);
     }
 
+    if (isObject(value.intent)) assertHumanIntent(value.intent, value.id);
     records.push(value as unknown as HumanEvaluationRecord);
   }
 

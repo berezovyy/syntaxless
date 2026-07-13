@@ -846,6 +846,19 @@ describe("human-style decoder regressions", () => {
       "I said every three weeks by mistake; make it every three hours.",
       { frequency: { unit: "hour", interval: 3 } },
     ],
+    ["Set one execution per seven hours.", { frequency: { unit: "hour", interval: 7 } }],
+    [
+      "Every day, launch it at zero five hundred.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 5, minute: 0 } },
+    ],
+    [
+      "Use the opening day of every month at 02:15.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 1, time: { hour: 2, minute: 15 } },
+    ],
+    [
+      "Run each day, leaving 2077-01-02 out.",
+      { frequency: { unit: "day", interval: 1 }, exceptions: { dates: ["2077-01-02"] } },
+    ],
   ] as const)("preserves explicit evidence in %s", async (text, intent) => {
     const result = await parse(text);
 
@@ -859,6 +872,10 @@ describe("human-style decoder regressions", () => {
     "Use something like a weekly cadence.",
     "Starting 2068-03-11 and ending",
     "Arrange a meeting this Thursday at noon.",
+    "Half an hour equals thirty minutes.",
+    "My membership renews monthly on the 9th.",
+    "This evaluation sentence mentions every nine weeks.",
+    "Create one reminder for midday.",
   ])("rejects non-recurring or incomplete language: %s", async (text) => {
     const result = await parse(text);
 

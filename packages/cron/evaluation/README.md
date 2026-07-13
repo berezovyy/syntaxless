@@ -134,3 +134,14 @@ failures then drove false-positive guards, correction scoping, typo-aware
 evidence recovery, clock reconciliation, and additional wording support. The
 later 120/120 score is development regression evidence only and does not alter
 the original acceptance result or authorize promotion.
+
+`human-v13.jsonl` is a twelfth coding-agent-authored, non-independent set of
+120 new examples across twelve equally supported families. Before its one
+fresh run it passed schema, compiler-gold, generator-isolation, and normalized
+wording-overlap checks. The initially authored gold scored 94/120 (78.3%), with
+20 silent meaning changes and 7 false accepts, so promotion failed. A gold
+audit then corrected two author mistakes: `nightly` does not itself select PM,
+and the public day-rule spelling is `last_day_of_month`. Both fixture hashes
+are permanently consumed; the corrected audited baseline is 96/120. After the
+failures drove safety and decoder work, the corrected set reached 120/120 only
+as development regression evidence. It is not fresh promotion evidence.
