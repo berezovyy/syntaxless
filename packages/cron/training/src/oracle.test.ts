@@ -128,6 +128,7 @@ describe("parseOracleArgs", () => {
     });
 
     expect(parseOracleArgs(["--gate"]).kindsSample).toBe(200000);
+    expect(parseOracleArgs(["--gate", "--kinds-sample", "0"]).kindsSample).toBe(0);
 
     expect(parseOracleArgs(["--gate", "--seeds", "2", "--kinds-sample", "10"])).toMatchObject({
       gate: true,

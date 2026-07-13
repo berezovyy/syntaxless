@@ -513,6 +513,8 @@ export function parseOracleArgs(argv: readonly string[]): OracleCliOptions {
     gate: false,
   };
 
+  let kindsSampleExplicit = false;
+
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
 
@@ -526,6 +528,7 @@ export function parseOracleArgs(argv: readonly string[]): OracleCliOptions {
 
       if (value === undefined) throw new RangeError("missing value for --kinds-sample");
       options.kindsSample = Number(value);
+      kindsSampleExplicit = true;
     } else if (arg === "--out") {
       const value = argv[++index];
 
@@ -538,7 +541,7 @@ export function parseOracleArgs(argv: readonly string[]): OracleCliOptions {
     }
   }
 
-  if (options.gate && options.kindsSample === 0) options.kindsSample = KINDS_SAMPLE;
+  if (options.gate && !kindsSampleExplicit) options.kindsSample = KINDS_SAMPLE;
 
   return options;
 }

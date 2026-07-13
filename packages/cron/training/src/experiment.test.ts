@@ -8,7 +8,24 @@ import {
   assertLedgerComplete,
   hashExperimentInputs,
   LEDGER_REQUIRED,
+  main,
 } from "./experiment";
+import type { StepRecord } from "./experiment";
+
+function skipped(steps: readonly StepRecord[], prefix: string): boolean {
+  const matched = steps.filter((step) => step.step.startsWith(prefix));
+
+  return matched.length > 0 && matched.every((step) => step.skipped);
+}
+
+function invoked(steps: readonly StepRecord[], prefix: string): boolean {
+  return steps.some(
+    (step) =>
+      step.step.startsWith(prefix) &&
+      !step.skipped &&
+      step.argv.some((arg) => arg.includes(prefix === "regen" ? "generate.ts" : `${prefix}.ts`)),
+  );
+}
 
 test("hashExperimentInputs is stable for the shipped kinds/noise/splits/background/labels files", () => {
   const first = hashExperimentInputs();
@@ -76,3 +93,87 @@ test("appendLedgerRow writes EXEC/FA@cov/RT/stack", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test(
+  "a second run with unchanged hashed inputs skips regen and featurize",
+  () => {
+    const dir = mkdtempSync(join(tmpdir(), "cron-experiment-run-"));
+    const work = join(dir, "work");
+    const ledger = join(dir, "EXPERIMENTS.md");
+    const storage = join(dir, "runs");
+
+    writeFileSync(ledger, "# ledger\n");
+
+    const shared = [
+      "--samples",
+      "8",
+      "--eval-samples",
+      "4",
+      "--epochs",
+      "1",
+      "--batch",
+      "4",
+      "--oracle-seeds",
+      "0",
+      "--kinds-sample",
+      "0",
+      "--device",
+      "cpu",
+      "--work",
+      work,
+      "--ledger",
+      ledger,
+      "--storage",
+      storage,
+    ];
+
+    try {
+      const first = main(["--name", "s4-skip-1", "--change", "tiny fixture first run", ...shared]);
+
+      expect(first.skippedRegen).toBe(false);
+      expect(invoked(first.steps, "regen")).toBe(true);
+      expect(invoked(first.steps, "featurize")).toBe(true);
+      expect(first.steps.some((step) => step.step === "oracle" && !step.skipped)).toBe(true);
+      expect(first.steps.some((step) => step.step === "train" && !step.skipped)).toBe(true);
+      expect(first.steps.some((step) => step.step === "export" && !step.skipped)).toBe(true);
+
+      const second = main([
+        "--name",
+        "s4-skip-2",
+        "--change",
+        "tiny fixture second run",
+        ...shared,
+      ]);
+
+      expect(second.inputHash).toBe(first.inputHash);
+      expect(second.skippedRegen).toBe(true);
+      expect(second.skippedFeaturize).toBe(true);
+      expect(skipped(second.steps, "regen")).toBe(true);
+      expect(skipped(second.steps, "featurize")).toBe(true);
+      const recorded = JSON.parse(readFileSync(join(work, "steps.json"), "utf8")) as StepRecord[];
+
+      expect(skipped(recorded, "regen")).toBe(true);
+      expect(skipped(recorded, "featurize")).toBe(true);
+      expect(second.steps.some((step) => step.step === "oracle" && !step.skipped)).toBe(true);
+
+      const row = readFileSync(ledger, "utf8")
+        .split("\n")
+        .find((line) => line.includes("| s4-skip-1 |"));
+
+      expect(row).toBeDefined();
+
+      const cells = row!
+        .split("|")
+        .map((cell) => cell.trim())
+        .filter((cell) => cell.length > 0);
+
+      expect(cells[8]).toMatch(/^\d+\/\d+$/);
+      expect(cells[9]!.length).toBeGreaterThan(0);
+      expect(cells[10]!.length).toBeGreaterThan(0);
+      expect(cells[11]).toBe("tagger-typed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+  { timeout: 180_000 },
+);
