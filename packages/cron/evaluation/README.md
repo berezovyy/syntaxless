@@ -61,3 +61,13 @@ Its hash is consumed and it is development-only from this point onward.
 `human-v5.jsonl` is the fourth non-independent acceptance set. Its only frozen
 run scored 90/100 (90.0%), with 10 silent meaning changes and 7 false accepts.
 Its hash is consumed and it is development-only from this point onward.
+
+`human-v6.jsonl` is a fifth coding-agent-authored, non-independent acceptance
+set, created only after the prior candidate and decoder were frozen. It has 100
+examples across ten equally supported broad families. Its one permitted fresh
+run scored 83/100 (83.0%), with 11 silent meaning changes and 6 false accepts.
+The failures exposed replacement-correction, reported-speech, cancellation,
+vague-cadence, and clock-reconciliation gaps. Its hash was immediately recorded
+in `consumed.json`; after those gaps were fixed it reached 100/100 only as a
+development regression. That later result is not fresh promotion evidence, and
+the original 83% result remains the honest acceptance score.

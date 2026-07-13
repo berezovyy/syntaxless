@@ -46,17 +46,33 @@ export function scopeActionableCorrection(text: string): string {
     .trim();
 
   const patterns: Array<[RegExp, (match: RegExpExecArray) => string]> = [
+    [
+      /^actually,?\s+forget\b.+?\band\s+((?:poll|run|schedule|send|set|trigger)\b.+?)\s+instead[.!]?$/i,
+      (match) => match[1]!,
+    ],
     [/^actually,?\s+make that\s+(.+?),\s+not\b/i, (match) => match[1]!],
+    [/^make that\s+(.+?),\s+instead of\b/i, (match) => `make ${match[1]!}`],
     [/^(?:sorry,?\s+)?i meant\s+(.+?)\s+rather than\b/i, (match) => match[1]!],
+    [/^i said\b.+?,\s+but i meant\s+(.+)$/i, (match) => match[1]!],
     [/^change\b[^:]*:\s*(.+?),\s*not\b/i, (match) => match[1]!],
     [/^no,?\s+use\s+(.+?)\s+instead of\b/i, (match) => `use ${match[1]!}`],
     [/^correction[-:]\s*(.+?),\s*not\b/i, (match) => match[1]!],
     [/^forget\b[^;]*;\s*(.+)$/i, (match) => match[1]!],
+    [
+      /^(?:discard|scratch)\b[^;]*;\s*((?:make|run|schedule|send|set|trigger)\b.+)$/i,
+      (match) => match[1]!,
+    ],
     [/^i said\b.*?\bby mistake\.\s*(.+)$/i, (match) => match[1]!],
     [/^(use\s+.+?)\s*-\s*ignore\b/i, (match) => match[1]!],
     [/^let me revise that:\s*(.+)$/i, (match) => match[1]!],
     [/^not\b[^;]*;\s*(.+)$/i, (match) => match[1]!],
+    [/^not\b.+?\s*-\s*((?:make|run|schedule|send|set|trigger|use)\b.+)$/i, (match) => match[1]!],
     [/^move\b.*\bfrom\b.*?\bto\s+(.+)$/i, (match) => `schedule ${match[1]!}`],
+    [/^change\b.*\bfrom\b.*?\bto\s+(.+)$/i, (match) => `schedule ${match[1]!}`],
+    [
+      /^no,?\s+(?:i need it|make it|schedule it|set it|use)\s+(.+?),\s+not\b/i,
+      (match) => match[1]!,
+    ],
     [/^the\b[^;]*\bwas wrong;\s*(.+)$/i, (match) => match[1]!],
     [/^revise that to\s+(.+?),\s*not\b/i, (match) => match[1]!],
     [/^instead of\b[^,]*,\s*(.+)$/i, (match) => match[1]!],

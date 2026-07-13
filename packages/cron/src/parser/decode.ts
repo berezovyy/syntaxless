@@ -303,7 +303,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
 
   const metaQuotation =
     quotedSchedule &&
-    /\b(?:article|documentation|docs?|example|guide|handbook|manual|message|phrase|sample|sentence|text|tooltip|tutorial|quote|quoted|wrote|contains?|mentions?|reads?|says?|shows?|uses?)\b/.test(
+    /\b(?:article|documentation|documenting|docs?|example|guide|handbook|manual|message|parsed|parser|phrase|sample|sentence|text|tooltip|tutorial|quote|quoted|wrote|contains?|mentions?|reads?|says?|shows?|uses?)\b/.test(
       text,
     );
 
@@ -339,6 +339,22 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
       /^(?:he|she|they)\s+(?:arrives?|leaves?|meets?|works?)\b/.test(text));
 
   if (reportedOrHabitual) return "descriptive-statement";
+
+  if (
+    scheduleCue.test(text) &&
+    !hasDirectScheduleRequest(text) &&
+    /^(?:i|we|you)\s+(?:eat|have|meet|work)\b/.test(text)
+  ) {
+    return "descriptive-statement";
+  }
+
+  if (
+    scheduleCue.test(text) &&
+    !hasDirectScheduleRequest(text) &&
+    /^(?:he|she|they)\s+(?:mentioned|reported|said|told)\b/.test(text)
+  ) {
+    return "descriptive-statement";
+  }
 
   if (
     !hasDirectScheduleRequest(text) &&
@@ -378,7 +394,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
 
   const historical =
     scheduleCue.test(text) &&
-    (/\b(?:arrived|formerly|had|happened|met|occurred|previously|ran|rang|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
+    (/\b(?:arrived|fired|formerly|had|happened|met|occurred|previous|previously|ran|rang|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
       text,
     ) ||
       /\b(?:already|earlier today|last (?:month|week|year)|years? ago)\b/.test(text) ||
@@ -440,6 +456,16 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "non-scheduling-language";
   }
 
+  if (/^(?:cancel|delete|disable|remove)\b/.test(text)) return "non-scheduling-language";
+
+  if (/^stop\b/.test(text) && !/\bbefore\s+\d{4}-\d{2}-\d{2}\b/.test(text)) {
+    return "non-scheduling-language";
+  }
+
+  if (/\bevery\s+(?:a\s+)?few\s+(?:minutes?|hours?|days?|weeks?|months?)\b/.test(text)) {
+    return "non-scheduling-language";
+  }
+
   const recurrenceCues = [...text.matchAll(/\b(?:daily|each|every|hourly|monthly|weekly)\b/g)]
     .length;
 
@@ -484,7 +510,7 @@ function unrequestedDeclarativeContext(text: string): boolean {
  * schedule values by itself. */
 function hasDirectScheduleRequest(text: string): boolean {
   return (
-    /(?:^|,\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|arrange|begin|book|check|configure|continue|create|enable|have|issue|keep|let|make|notify|ping|remind|repeat|run|schedule|send|set|start|trigger|use)\b/.test(
+    /(?:^|,\s*)(?:actually[,:]?\s+|for now,?\s+|from now on[,:]?\s+|kindly\s+|please\s+)?(?:just\s+)?(?:add|arrange|begin|book|check|configure|continue|create|enable|give|have|issue|keep|let|make|notify|ping|poll|remind|repeat|run|schedule|send|set|start|trigger|use)\b/.test(
       text,
     ) ||
     /\bplease\s+(?:add|arrange|book|configure|create|make|remind|run|schedule|send|set)\b/.test(
@@ -858,6 +884,10 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
   );
 
   if (halfHour !== null) return { unit: "minute", interval: 30, valueStart: -1, valueEnd: -1 };
+
+  if (/\b(?:every|each)\s+(?:morning|evening|night)\b/.test(text)) {
+    return { unit: "day", interval: 1, valueStart: -1, valueEnd: -1 };
+  }
 
   if (/\bfortnightly\b/.test(text)) {
     return { unit: "week", interval: 2, valueStart: -1, valueEnd: -1 };
@@ -1576,14 +1606,28 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
     return undefined;
   }
 
-  const match =
-    /\b(?:at|around|everyday|(?:alert|notification|reminder)(?:\s+for)?)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
+  let match =
+    /\b(?:at|around|everyday|make|(?:alert|notification|reminder)(?:\s+for)?)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
       text,
     );
 
-  if (match === null) return undefined;
-  const hour = /^\d+$/.test(match[1]!) ? Number(match[1]) : numberFrom(match[1]!);
+  // A meridiem makes a clock value unambiguous even when it precedes the
+  // noun ("run the 9 am reminder") rather than following `at`.
+  let hour =
+    match === null ? undefined : /^\d+$/.test(match[1]!) ? Number(match[1]) : numberFrom(match[1]!);
 
+  if (match === null || hour === undefined) {
+    match = /\b([a-z]+|\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/.exec(text);
+
+    hour =
+      match === null
+        ? undefined
+        : /^\d+$/.test(match[1]!)
+          ? Number(match[1])
+          : numberFrom(match[1]!);
+  }
+
+  if (match === null) return undefined;
   if (hour === undefined) return undefined;
   let minute = match[2] === undefined ? 0 : Number(match[2]);
 
@@ -1606,7 +1650,7 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
   if (
     meridiem === undefined &&
     resolved.hour < 12 &&
-    /\b(?:in the afternoon|in the evening|at night)\b/.test(text)
+    /\b(?:in the afternoon|in the evening|at night|tonight|every evening|each evening)\b/.test(text)
   ) {
     resolved = { ...resolved, hour: resolved.hour + 12 };
   }
@@ -1647,7 +1691,12 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
 
   let time = { hour: Math.floor(total / 60), minute: total % 60 };
 
-  if (time.hour < 12 && /\b(?:in the afternoon|in the evening|at night)\b/.test(text)) {
+  if (
+    time.hour < 12 &&
+    /\b(?:in the afternoon|in the evening|at night|tonight|every evening|each evening|pm)\b/.test(
+      text,
+    )
+  ) {
     time = { ...time, hour: time.hour + 12 };
   }
 
@@ -1657,6 +1706,16 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
 /** Recover an exact named clock anchor only behind a clock preposition. */
 function explicitNamedTime(entries: readonly Entry[]): TimeOfDay | undefined {
   const text = joinEntries(entries);
+
+  if (
+    !hasDirectScheduleRequest(text) &&
+    !/^(?:at\b|daily\b|each\b|every\b|hourly\b|monthly\b|on\b|weekly\b|weekdays?\b|weekends?\b)/.test(
+      text,
+    )
+  ) {
+    return undefined;
+  }
+
   const match = /\b(?:at|for|around|make|use)\s+(midnight|noon|midday)\b/.exec(text);
 
   if (match === null) return undefined;

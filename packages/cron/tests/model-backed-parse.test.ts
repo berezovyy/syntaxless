@@ -344,6 +344,12 @@ describe("exact lexical schedule and rejection surfaces", () => {
     "Yesterday I called her at 9pm.",
     "Our project cycle is 3 days old",
     "The outage lasted six hours.",
+    "We have lunch at noon on Fridays when everyone is in town.",
+    "Our previous reminder fired on weekdays until May 2029.",
+    "She told me that her report arrives monthly on the 3rd.",
+    "We are documenting why 'at midnight' was parsed incorrectly.",
+    "Every few hours should be enough, give or take.",
+    "Remove Monday and Friday at noon from my reminders.",
   ])("%s is explicitly rejected", async (phrase) => {
     const result = await parse(phrase);
 
@@ -369,6 +375,20 @@ describe("exact lexical schedule and rejection surfaces", () => {
 
     expect(result.intent).toEqual({
       frequency: { unit: "day", interval: 1 },
+    });
+  });
+
+  test("keeps the selected evening clock in an explicit replacement", async () => {
+    const result = await parse(
+      "Make that 8:05 tonight and every evening thereafter, instead of 8:50.",
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+      time: { hour: 20, minute: 5 },
     });
   });
 
@@ -412,6 +432,18 @@ describe("exact lexical schedule and rejection surfaces", () => {
     expect(result.intent).toEqual({
       frequency: { unit: "day", interval: 1 },
       exceptions: { weekdays: ["thursday"] },
+    });
+  });
+
+  test("keeps an explicit stop-before date as an end bound", async () => {
+    const result = await parse("Stop the everyday check before 2029-03-22.");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.intent).toEqual({
+      frequency: { unit: "day", interval: 1 },
+      bounds: { end: "2029-03-22" },
     });
   });
 
