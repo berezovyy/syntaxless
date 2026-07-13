@@ -345,3 +345,37 @@ describe("consumed human-v7 behavioral corpus", () => {
     for (const support of familyCounts.values()) expect(support).toBe(10);
   });
 });
+
+describe("consumed human-v8 behavioral corpus", () => {
+  test("remains isolated, balanced, and permanently unavailable as fresh acceptance", async () => {
+    const path = resolveRepo("packages/cron/evaluation/human-v8.jsonl");
+    const records = parseHumanCorpus(await readFile(path, "utf8"));
+
+    expect(records).toHaveLength(100);
+    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
+    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
+
+    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
+      checked: true,
+      outsideTrainingData: true,
+      incompatibleWithTrainingSchema: true,
+      absentFromGeneratorSources: true,
+    });
+
+    await expect(
+      assertAcceptanceFresh(
+        "acceptance",
+        "a4a7b969d91b36bcf50d57658785454a93c38c8fece8f16a956969293ab16911",
+      ),
+    ).rejects.toThrow(/already been consumed/);
+
+    const familyCounts = new Map<string, number>();
+
+    for (const record of records) {
+      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
+    }
+
+    expect(familyCounts.size).toBe(10);
+    for (const support of familyCounts.values()) expect(support).toBe(10);
+  });
+});

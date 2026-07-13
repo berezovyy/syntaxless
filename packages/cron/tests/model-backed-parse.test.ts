@@ -363,6 +363,15 @@ describe("exact lexical schedule and rejection surfaces", () => {
     "Please do not create a daily 8 a.m. alert.",
     "At ten minutes to",
     "Between 2037-01-01 and",
+    "Every hour contains sixty minutes.",
+    "The words “every five minutes” are printed on the box.",
+    "That report has 31 daily entries and 12 monthly totals.",
+    "I drink coffee at 7am most mornings.",
+    "The old handbook recommended a check every two hours.",
+    "Our former billing run was monthly on the 12th.",
+    "Every several minutes should be adequate.",
+    "Turn off the daily notification at 9 a.m.",
+    "The second Friday of every",
   ])("%s is explicitly rejected", async (phrase) => {
     const result = await parse(phrase);
 
@@ -574,6 +583,70 @@ describe("exact lexical schedule and rejection surfaces", () => {
       frequency: { unit: "day", interval: 1 },
     });
   });
+
+  test.each([
+    [
+      "Run the closing routine every evening at twenty-five past eight.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 20, minute: 25 } },
+    ],
+    [
+      "On the final day of the week, wake me at nine in the morning.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["sunday"],
+        time: { hour: 9, minute: 0 },
+      },
+    ],
+    [
+      "Make Saturday at 23:59 the recurring maintenance time.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["saturday"],
+        time: { hour: 23, minute: 59 },
+      },
+    ],
+    [
+      "Sorry, use Saturday at 10:20 a.m. instead of Sunday at noon.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: ["saturday"],
+        time: { hour: 10, minute: 20 },
+      },
+    ],
+    [
+      "I said the 9th in error. Schedule the 19th of every month.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 19 },
+    ],
+    [
+      "No, I need weekdays at 07:25 rather than weekends.",
+      {
+        frequency: { unit: "week", interval: 1 },
+        weekdays: [...WEEKDAYS],
+        time: { hour: 7, minute: 25 },
+      },
+    ],
+    [
+      "Use every three hours instead—forget the three-minute setting.",
+      { frequency: { unit: "hour", interval: 3 } },
+    ],
+    [
+      "The morning time was a mistake; make it 7:15 every evening.",
+      { frequency: { unit: "day", interval: 1 }, time: { hour: 19, minute: 15 } },
+    ],
+    [
+      "Revise my request to monthly on the 26th, rather than weekly.",
+      { frequency: { unit: "month", interval: 1 }, dayOfMonth: 26 },
+    ],
+  ] as const)(
+    "preserves the selected meaning in demonstrated v8 wording: %s",
+    async (text, intent) => {
+      const result = await parse(text);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.intent as unknown).toEqual(intent);
+    },
+  );
 });
 
 describe("confidence bands", () => {

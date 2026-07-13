@@ -310,6 +310,15 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (metaQuotation) return "quoted-schedule";
 
   if (
+    quotedSchedule &&
+    /\b(?:printed|written|displayed|shown)\b.*\b(?:box|label|page|screen)\b|\b(?:box|label|page|screen)\b.*\b(?:printed|written|displayed|shown)\b/.test(
+      text,
+    )
+  ) {
+    return "quoted-schedule";
+  }
+
+  if (
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
     /\b(?:example|label|tutorial)\b.*\b(?:reads?|says?)\b/.test(text)
@@ -369,6 +378,16 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
   if (
     scheduleCue.test(text) &&
     !hasDirectScheduleRequest(text) &&
+    /^(?:every\s+(?:minute|hour|day|week|month)\b.*\b(?:contains?|equals?|has)\b|(?:that|this|the)\s+report\b.*\b(?:entries|totals|rows|columns)\b|i\s+(?:drink|exercise|read|sleep|walk)\b)/.test(
+      text,
+    )
+  ) {
+    return "descriptive-statement";
+  }
+
+  if (
+    scheduleCue.test(text) &&
+    !hasDirectScheduleRequest(text) &&
     /^(?:he|she|they|[a-z]+)\s+(?:explained|mentioned|reported|said|told)\b/.test(text)
   ) {
     return "descriptive-statement";
@@ -412,7 +431,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
 
   const historical =
     scheduleCue.test(text) &&
-    (/\b(?:arrived|fired|formerly|had|happened|met|occurred|previous|previously|ran|rang|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
+    (/\b(?:arrived|fired|former|formerly|had|happened|met|occurred|old|previous|previously|ran|rang|recommended|used to|was scheduled|were scheduled|worked|yesterday)\b/.test(
       text,
     ) ||
       /\b(?:already|earlier today|last (?:month|week|year)|years? ago)\b/.test(text) ||
@@ -451,7 +470,7 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "uncertain-alternative";
   }
 
-  if (/\b(?:and|or|from|through)\s*[?.,;:]?$/.test(text) && scheduleCue.test(text)) {
+  if (/\b(?:and|or|from|through|each|every|of)\s*[?.,;:]?$/.test(text) && scheduleCue.test(text)) {
     return "non-scheduling-language";
   }
 
@@ -475,13 +494,19 @@ function unsafeScheduleContext(text: string): UnsafeScheduleContextReason | null
     return "non-scheduling-language";
   }
 
-  if (/^(?:cancel|delete|disable|remove)\b/.test(text)) return "non-scheduling-language";
+  if (/^(?:cancel|delete|disable|remove|turn\s+off|switch\s+off)\b/.test(text)) {
+    return "non-scheduling-language";
+  }
 
   if (/^stop\b/.test(text) && !/\bbefore\s+\d{4}-\d{2}-\d{2}\b/.test(text)) {
     return "non-scheduling-language";
   }
 
   if (/\bevery\s+(?:a\s+)?few\s+(?:minutes?|hours?|days?|weeks?|months?)\b/.test(text)) {
+    return "non-scheduling-language";
+  }
+
+  if (/\bevery\s+(?:several|some)\s+(?:minutes?|hours?|days?|weeks?|months?)\b/.test(text)) {
     return "non-scheduling-language";
   }
 
@@ -700,7 +725,7 @@ function explicitDayGroup(entries: readonly Entry[]): Weekday[] | undefined {
   for (const [surface, weekdays] of Object.entries(WEEKDAY_GROUPS).sort(
     ([left], [right]) => right.length - left.length,
   )) {
-    const phrase = regexEscape(surface).replace(/\\ /g, "\\s+");
+    const phrase = regexEscape(surface).replace(/ /g, "\\s+");
 
     const pattern = new RegExp(
       `\\b(?:every|each|on|weekly\\s+on|every\\s+week\\s+on|each\\s+week\\s+on)\\s+(?:1\\s+)?${phrase}\\b`,
@@ -1101,7 +1126,7 @@ function explicitFrequency(entries: readonly Entry[]): ExplicitFrequencyEvidence
   const idiom = Object.entries(FREQUENCY_IDIOMS)
     .sort(([left], [right]) => right.length - left.length)
     .find(([surface]) =>
-      new RegExp(`\\b${regexEscape(surface).replace(/\\ /g, "\\s+")}\\b`).test(text),
+      new RegExp(`\\b${regexEscape(surface).replace(/ /g, "\\s+")}\\b`).test(text),
     );
 
   if (idiom !== undefined) return { ...idiom[1], valueStart: -1, valueEnd: -1 };
@@ -1405,7 +1430,7 @@ function weekdayMentions(text: string, allowFuzzy = false): WeekdayMention[] {
   ].sort(([left], [right]) => right.length - left.length) as Array<[string, Weekday]>;
 
   for (const [surface, weekday] of surfaces) {
-    const pattern = regexEscape(surface).replace(/\\ /g, "\\s+");
+    const pattern = regexEscape(surface).replace(/ /g, "\\s+");
     const matches = text.matchAll(new RegExp(`(?:^|[^a-z])(${pattern})(?=$|[^a-z])`, "g"));
 
     for (const match of matches) {
@@ -1440,7 +1465,7 @@ function weekdaysIn(text: string, allowFuzzy = false): Weekday[] {
   for (const [surface, members] of Object.entries(WEEKDAY_GROUPS).sort(
     ([left], [right]) => right.length - left.length,
   )) {
-    const pattern = regexEscape(surface).replace(/\\ /g, "\\s+");
+    const pattern = regexEscape(surface).replace(/ /g, "\\s+");
 
     if (new RegExp(`(?:^|[^a-z])${pattern}(?:$|[^a-z])`).test(text)) {
       for (const weekday of members) weekdays.add(weekday);
@@ -1475,6 +1500,19 @@ function explicitOrdinalWeekday(
 ): ScheduleIntent["ordinalWeekday"] | undefined {
   const text = joinEntries(entries);
 
+  // These phrases use an ordinal to identify a weekday in the Monday-first
+  // week. Treat the whole phrase as a weekday alias before considering the
+  // monthly "second Friday" grammar.
+  if (
+    Object.keys(WEEKDAY_DESCRIPTIONS).some((surface) =>
+      new RegExp(`(?:^|[^a-z])${regexEscape(surface).replace(/ /g, "\\s+")}(?=$|[^a-z])`).test(
+        text,
+      ),
+    )
+  ) {
+    return undefined;
+  }
+
   const ordinals = Object.entries(ORDINAL_ALIASES).sort(
     ([left], [right]) => right.length - left.length,
   );
@@ -1486,10 +1524,10 @@ function explicitOrdinalWeekday(
   ].sort(([left], [right]) => right.length - left.length) as Array<[string, Weekday]>;
 
   for (const [ordinalSurface, ordinal] of ordinals) {
-    const ordinalPattern = regexEscape(ordinalSurface).replace(/\\ /g, "\\s+");
+    const ordinalPattern = regexEscape(ordinalSurface).replace(/ /g, "\\s+");
 
     for (const [weekdaySurface, weekday] of weekdays) {
-      const weekdayPattern = regexEscape(weekdaySurface).replace(/\\ /g, "\\s+");
+      const weekdayPattern = regexEscape(weekdaySurface).replace(/ /g, "\\s+");
 
       if (
         new RegExp(`(?:^|[^a-z0-9])${ordinalPattern}\\s+${weekdayPattern}(?=$|[^a-z])`).test(text)
@@ -1633,7 +1671,7 @@ function explicitWeekdaySelector(entries: readonly Entry[]): Weekday[] | undefin
       cueText,
     ) ||
     (hasDirectScheduleRequest(cueText) &&
-      /(?:\bon\b|^(?:mon|tue|wed|thu|fri|sat|sun)\b|\b(?:fortnightly|weekly)\b|\b(?:schedule|set)\b|\b(?:let|make)\s+[a-z]+\s+(?:be|the)\b)/.test(
+      /(?:\bon\b|^(?:mon|tue|wed|thu|fri|sat|sun)\b|\b(?:fortnightly|weekly)\b|\b(?:schedule|set)\b|\b(?:make|schedule|set)\s+(?:mon(?:day)?s?|tue(?:sday)?s?|wed(?:nesday)?s?|thu(?:rsday)?s?|fri(?:day)?s?|sat(?:urday)?s?|sun(?:day)?s?)\b|\b(?:let|make)\s+[a-z]+\s+(?:be|the)\b)/.test(
         cueText,
       ));
 
@@ -1658,7 +1696,7 @@ function explicitRequestedTime(entries: readonly Entry[]): TimeOfDay | undefined
   }
 
   let match =
-    /\b(?:at|around|everyday|make|(?:alert|notification|reminder)(?:\s+for)?)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
+    /\b(?:at|around|everyday|make(?:\s+it)?|(?:alert|notification|reminder)(?:\s+for)?)\s+([a-z]+|\d{1,2})(?![-\s]+(?:past|after|to|before|minutes?|hours?|days?|weeks?|months?)\b)(?::(\d{2}))?\s*(am|pm)?\b/.exec(
       text,
     );
 
@@ -1725,7 +1763,7 @@ function explicitRelativeTime(entries: readonly Entry[]): TimeOfDay | undefined 
   const text = joinEntries(entries);
 
   const match =
-    /\b(half|quarter|[a-z]+|\d{1,2})(?:\s+minutes?)?\s+(past|after|to|before)\s+([a-z]+|\d{1,2})\b/.exec(
+    /\b(half|quarter|(?:twenty|thirty|forty|fifty)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?|[a-z]+|\d{1,2})(?:\s+minutes?)?\s+(past|after|to|before)\s+([a-z]+|\d{1,2})\b/.exec(
       text,
     );
 
@@ -1790,7 +1828,7 @@ function explicitExceptions(entries: readonly Entry[]): ExplicitExceptionEvidenc
 
   const alternatives = [...EXCEPTION_PREFIXES]
     .sort((left, right) => right.length - left.length)
-    .map((value) => regexEscape(value).replace(/\\ /g, "\\s+"))
+    .map((value) => regexEscape(value).replace(/ /g, "\\s+"))
     .join("|");
 
   let cue = new RegExp(`\\b(?:${alternatives})\\b`).exec(text);
@@ -2309,6 +2347,9 @@ export function decodeIntent(
   if (weekdaySelectorEvidence !== undefined && scopedOrdinalEvidence === undefined) {
     if (dayOfMonthEvidence === undefined && daySpecEvidence === undefined) dayOfMonth = undefined;
     if (daySpecEvidence === undefined) day = undefined;
+    // Positional weekday descriptions contain ordinal-looking tokens but are
+    // single weekday selectors, not monthly ordinal weekdays.
+    ordinal = undefined;
   }
 
   if (weekdays.length === 0 && weekdaySelectorEvidence !== undefined) {
@@ -2492,6 +2533,26 @@ export function decodeIntent(
 
     intent.frequency = { unit: "week", interval: 2 };
     intent.weekdays = visibleWeekdays;
+    delete intent.dayOfMonth;
+    delete intent.ordinalWeekday;
+    delete intent.day;
+  }
+
+  const descriptiveWeekday = Object.entries(WEEKDAY_DESCRIPTIONS)
+    .sort(([left], [right]) => right.length - left.length)
+    .find(([surface]) =>
+      new RegExp(`(?:^|[^a-z])${regexEscape(surface).replace(/ /g, "\\s+")}(?=$|[^a-z])`).test(
+        text,
+      ),
+    )?.[1];
+
+  if (descriptiveWeekday !== undefined) {
+    intent.frequency = {
+      unit: "week",
+      interval: intent.frequency.unit === "week" ? intent.frequency.interval : 1,
+    };
+
+    intent.weekdays = [descriptiveWeekday];
     delete intent.dayOfMonth;
     delete intent.ordinalWeekday;
     delete intent.day;
