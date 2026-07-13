@@ -1,9 +1,4 @@
 import { compile } from "../../src/compiler/cron.js";
-import {
-  hour12From24,
-  inclusiveShownFromExclusiveEnd,
-  meridiemFrom24,
-} from "../../src/schedule-semantics.js";
 /**
  * Held-out renderer: reordered frames plus the reserved carriers.
  *
@@ -14,7 +9,22 @@ import {
  * anything the train renderer can produce, held-out frames cannot collide with
  * a training frame even after surface paraphrasing.
  */
-import type { ScheduleIntent, Weekday } from "../../src/types/intent";
+import {
+  boundLabel,
+  hourLabel,
+  intervalLabel,
+  meridiemLabel,
+  minuteLabel,
+  ordinalLabel,
+  unitLabel,
+  weekdayLabel,
+} from "../../src/model/labels.js";
+import {
+  hour12From24,
+  inclusiveShownFromExclusiveEnd,
+  meridiemFrom24,
+} from "../../src/schedule-semantics.js";
+import type { FrequencyUnit, ScheduleIntent, Weekday } from "../../src/types/intent";
 import { RESERVED_PHRASES } from "./background";
 import type { RenderedExample } from "./renderer";
 import type { Rng } from "./rng";
@@ -74,7 +84,7 @@ function addWeekdayList(sentence: Sentence, weekdays: readonly Weekday[], connec
       sentence.add(connector, "GLUE", connector === "," ? "" : " ");
     }
 
-    sentence.add(WEEKDAY_NAME[weekday], "WEEKDAY");
+    sentence.add(WEEKDAY_NAME[weekday], weekdayLabel(weekday));
   });
 }
 
@@ -84,8 +94,8 @@ function heldoutInterval(sentence: Sentence, intent: ScheduleIntent): void {
   sentence.add("the", "GLUE");
   sentence.add("cycle", "GLUE");
   sentence.add("is", "GLUE");
-  sentence.add(String(interval), "INTERVAL");
-  sentence.add(pluralUnit(unit, interval), "GLUE");
+  sentence.add(String(interval), intervalLabel(interval));
+  sentence.add(pluralUnit(unit, interval), unitLabel(unit as FrequencyUnit));
 }
 
 function heldoutWeekdayList(sentence: Sentence, intent: ScheduleIntent): void {
@@ -101,63 +111,67 @@ function heldoutWeekdayRange(sentence: Sentence, intent: ScheduleIntent): void {
   sentence.add("the", "GLUE");
   sentence.add("span", "GLUE");
   sentence.add("runs", "GLUE");
-  sentence.add(WEEKDAY_NAME[weekdays[0]!], "WEEKDAY");
-  sentence.add("through", "GLUE");
-  sentence.add(WEEKDAY_NAME[weekdays[weekdays.length - 1]!], "WEEKDAY");
+  sentence.add(WEEKDAY_NAME[weekdays[0]!], weekdayLabel(weekdays[0]!));
+  sentence.add("through", boundLabel("between"));
+
+  sentence.add(
+    WEEKDAY_NAME[weekdays[weekdays.length - 1]!],
+    weekdayLabel(weekdays[weekdays.length - 1]!),
+  );
 }
 
 function heldoutOrdinalWeekday(sentence: Sentence, intent: ScheduleIntent): void {
   const { ordinal, weekday } = intent.ordinalWeekday!;
 
   sentence.add("the", "GLUE");
-  sentence.add(ordinal, "ORDINAL");
-  sentence.add(WEEKDAY_NAME[weekday], "WEEKDAY");
+  sentence.add(ordinal, ordinalLabel(ordinal));
+  sentence.add(WEEKDAY_NAME[weekday], weekdayLabel(weekday));
   sentence.add(",", "GLUE", "");
-  sentence.add("monthly", "RECUR");
+  sentence.add("monthly", unitLabel("month"));
 }
 
 function heldoutDayOfMonth(sentence: Sentence, intent: ScheduleIntent): void {
   const day = intent.dayOfMonth!;
 
   sentence.add("the", "GLUE");
-  sentence.add(String(day), "DOM");
+  sentence.add(String(day), "DOM_LIT");
   sentence.add(ordinalSuffix(day), "GLUE", "");
   sentence.add("day", "GLUE");
   sentence.add(",", "GLUE", "");
-  sentence.add("monthly", "RECUR");
+  sentence.add("monthly", unitLabel("month"));
 }
 
 function heldoutTimeOfDay(sentence: Sentence, intent: ScheduleIntent): void {
   const time = intent.time!;
 
-  sentence.add(String(hour12From24(time.hour)), "HOUR");
+  sentence.add(String(hour12From24(time.hour)), hourLabel(time.hour));
   sentence.add(":", "GLUE", "");
-  sentence.add(String(time.minute).padStart(2, "0"), "MINUTE", "");
-  sentence.add(meridiemFrom24(time.hour), "MERIDIEM");
-  sentence.add("daily", "RECUR");
+  sentence.add(String(time.minute).padStart(2, "0"), minuteLabel(time.minute), "");
+  sentence.add(meridiemFrom24(time.hour), meridiemLabel(meridiemFrom24(time.hour)));
+  sentence.add("daily", unitLabel("day"));
 }
 
 function heldoutBounds(sentence: Sentence, intent: ScheduleIntent): void {
   const { start, end } = intent.bounds!;
 
   if (start !== undefined) {
-    sentence.add(start, "DOM");
+    sentence.add(start, "DOM_LIT");
 
     if (end !== undefined) {
-      sentence.add("through", "BOUND");
+      sentence.add("through", boundLabel("end-incl"));
       const inclusiveEnd = inclusiveShownFromExclusiveEnd(end);
 
       if (inclusiveEnd === undefined) throw new Error(`uninvertible bound end: ${end}`);
-      sentence.add(inclusiveEnd, "DOM");
+      sentence.add(inclusiveEnd, "DOM_LIT");
     }
   } else {
-    sentence.add("ending", "BOUND");
-    sentence.add(end!, "DOM");
+    sentence.add("ending", boundLabel("end-excl"));
+    sentence.add(end!, "DOM_LIT");
   }
 
   sentence.add(",", "GLUE", "");
   sentence.add("every", "RECUR");
-  sentence.add("day", "GLUE");
+  sentence.add("day", unitLabel("day"));
 }
 
 function heldoutException(sentence: Sentence, intent: ScheduleIntent): void {
@@ -170,7 +184,7 @@ function heldoutException(sentence: Sentence, intent: ScheduleIntent): void {
   if (intent.weekdays !== undefined && intent.weekdays.length > 0) {
     addWeekdayList(sentence, intent.weekdays, "and");
   } else {
-    sentence.add("day", "GLUE");
+    sentence.add("day", unitLabel("day"));
   }
 }
 

@@ -23,6 +23,7 @@ These were gpu-time's product goals, not ours. Decide budget from the accuracy t
 - **50 KB Brotli** → new budget **≤ 2 MB** gzipped for the shipped model. Revisit downward only after H ≥ 95 %.
 - **Zero-dependency WGSL runtime** → CPU typed-array inference in `inference.ts` stays; no GPU kernel work until accuracy is solved.
 - **Hidden size ∈ {32, 48, 64}** (`training/cron/config.py`) → any size the budget allows.
+- **Frozen 13.7 M-row corpus regenerated per change** → 1–2 M pool, fresh 300 k draw per epoch, per-kind incremental regen (Track S).
 
 Kept: browser-only, no network at inference, deterministic output, `ScheduleIntent` as the public contract, 5-field cron as the compiler target.
 
@@ -177,9 +178,75 @@ Values are emitted as pointers to input tokens (copy head) or as closed-class sy
 
 ---
 
+## Track S — Experiment velocity (prerequisite, no science change)
+
+**Why.** Measured on 2026-09-16 (`training/cron/runs/*/report.json`, `data/synth` timestamps): regen `kinds.jsonl` ≈ 40 min, featurize ≈ 40 min, E1 train **944 s** for 1.4 M samples of a 35 k-parameter model, plus manual export/eval/ledger steps. One experiment ≈ 2 h wall clock, almost none of it GPU work. On an RTX 2070 this model should train that many sequences in about a minute. Until this track is done, every other track is paying a 10–20× tax per row.
+
+**Target.** Idea → ledger row in **< 10 min** for a data/label change and **< 3 min** for a training-recipe change.
+
+### S.1 Training loader
+
+`dataset.py:batch()` loops in Python over every index, slices a 13 GB `np.memmap` per sequence, allocates padded arrays, then copies to the GPU; at batch 64 that is ~22 000 Python steps per epoch.
+
+- Per epoch, load each length bucket's shards once as contiguous tensors (pinned host memory or directly on the GPU — `kinds-train.rows.bin` in `uint16` is 3.3 GB); gather one batch with a single fancy-index; pre-pad by bucket.
+- Storage dtypes: `rows.bin` `int64` → `uint16` (values < 773), `neighbors.bin` `int64` → `int32`, `labels/kinds/boundaries/actionable` already narrow. `featurize.ts` and `dataset.py` manifest `format` carry the dtype, so old shards stay readable. Cuts `data/synth` (82 GB) ~4×.
+- Default batch 1024 (gpu-time's setting); lr warmup steps scale with steps/epoch.
+- `evaluate()` on validation capped at `max_sequences` = 20 000 per epoch; the 4 M-row validation set is scored in full only at the end of the run.
+
+Exit: E1-class train ≤ 90 s at equal final metrics (re-run E1b's config as the check; H/H-neg/tokenAcc within noise of the slow loader).
+
+### S.2 Stop regenerating 13.7 M rows
+
+`EXPERIMENTS.md` rows 3–5 showed more samples do not help.
+
+- **Pool + fresh draw.** `backward.ts` renders a 1–2 M-row pool once; `train.py --fresh-each-epoch` samples 300 k per epoch with `seed + epoch` from the pool (also required by Track A2). Regen 40 min → ≈ 5 min.
+- **Incremental regen by kind.** Hash each `KindDef` (template text + `SPLIT_VERSION` + `noise.ts` hash) → `data/synth/kinds/<kind>.<hash>.jsonl`; only kinds whose hash changed re-render. Featurize per kind into per-kind shards; a manifest concatenates them (offsets rebased). A Track A/C change typically touches a handful of kinds.
+- **Parallel render/featurize.** `Bun.spawn` one worker per kind group across the 16 cores; renderer and featurizer are CPU-bound and independent per kind.
+
+Exit: changing one kind and re-featurizing ≤ 5 min; full cold regen ≤ 10 min.
+
+### S.3 H as the per-epoch validation
+
+H (1 646 rows) takes seconds to score and is the decision metric; in-distribution `exactSeq` is 0.99 for every run. After each epoch: export int6 → run `human-evaluate --partition regression` (or a numpy mirror of the tagger for eval only) → log H, H-neg, H-silent, attribution per epoch. Early-stop and checkpoint-select on H. Once, across the ~40 runs in `runs/`, check whether epoch-1 H rank-correlates with final H; if it does, a smoke train is ~15 s and bad configs die after one epoch.
+
+### S.4 One command per experiment
+
+`packages/cron/training/src/experiment.ts --name <run> --change "<one-line hypothesis>"`:
+
+1. hash `kinds.ts`, `noise.ts`, `splits.ts`, `background.ts`, `labels.ts` → regen only changed kinds (S.2)
+2. featurize only changed kinds
+3. `oracle --gate` on the fingerprint **diff** (full `--kinds-sample` only in CI)
+4. train (S.1) with the run name, H per epoch (S.3)
+5. export to `training/candidate/`, never to `src/model/`
+6. score H, G2, R, EXEC, FA@cov, attribution
+7. append the `EXPERIMENTS.md` row with every column filled; refuse to finish without one
+
+Every step is keyed by content hash and is a no-op if its inputs are unchanged. This removes the "E1 row missing" / "oracle never ran on the corpus" failure class from the previous cycle.
+
+### S.5 Concurrent runs
+
+~200 MB VRAM per run; eight fit on the 8 GB card and after S.1 they are not loader-bound. Every ledger row is **3 seeds** (variance across `human-*-seed-*` runs was real; a single-seed delta below seed variance is not a result). A/B grids over `config.py` flags via a sweep list in `experiment.ts`; no scheduler dependency.
+
+### S.6 Cheap proxies before expensive steps
+
+- **Track C**: run `label → agree → execute → roundtrip` on 500 records first and record per-stage yield in `data/real/yield.json`; scale to 50 k only once yield and cost per accepted record are known.
+- **Track B**: prototype the seq2seq on 100 k rows with the _current_ 15-label schema before writing `grammar.ts`; if it cannot beat the tagger there it will not at scale.
+- **Track D**: pretrain on 500 k sentences for one epoch and fine-tune before committing to 5 M.
+- **Oracle**: default to the fingerprint diff; full sample only in CI and before a train that changed `decode.ts`.
+
+### S.7 Hardware
+
+Not the bottleneck. After S.1 the RTX 2070 gives sub-2-minute trains. Rent a larger GPU only for Track D pretraining and Track B at scale, for hours, not days.
+
+**Order.** S.1 → S.4 → S.3 → S.2 → S.5. S.1 and S.4 are about a day each and pay back on the first Track A row. S.6 is a rule, not a task.
+
+---
+
 ## Sequencing
 
 ```
+week 1     S.1 loader + dtypes, S.4 experiment command, S.3 H per epoch             [no GPU]
+           S.2 pool + incremental regen, S.5 seeds×3                                  [no GPU]
 week 1-2   A.1-7  typed labels, decoder deletion, oracle 100% incl. kinds-sample   [no GPU]
            C.1-6  real-text pipeline, first 10k verified records                   [LLM only]
            F.1-3  abstention scoring + conformal threshold on A1                   [CPU]
@@ -193,6 +260,7 @@ then       promotion per EXPERIMENT-PLAN.md Phase 5, with EXEC and FA@cov added
 
 Decision gates:
 
+- Before A1: S.1 exit met (E1b config ≤ 90 s at equal metrics) and S.4 produces a complete ledger row unattended. No Track A/C train on the slow loader.
 - After A2: if DECODE+GOLD ≠ 0, stop and fix the renderer; nothing else proceeds.
 - After C2: if H did not move ≥ 5 points with RT = 30 %, the bottleneck is not data; prioritise B and D over C3.
 - After B2: pick one stack. Two inference paths do not ship.
@@ -221,16 +289,24 @@ Decision gates:
 - A ledger row without `EXEC`, `FA@cov`, `RT`, `stack` is invalid.
 - Human-written eval text never enters training; paraphrases must carry `paraphrase-of-human` provenance and are excluded from any set used to compute H.
 - The promotion criterion is H/EXEC/FA@cov on real text. R and in-distribution `exactSeq` are diagnostics and may not be quoted as accuracy.
+- A ledger row is 3 seeds; report mean and range. A delta smaller than the seed range is "no change".
+- Every train goes through `experiment.ts` (S.4). Hand-run `train.py` results are not ledger rows.
+- Scale a pipeline only after its 500-record / 100 k-row proxy (S.6) has a recorded yield.
 
 ## Task checklist
 
-- [ ] A.1 `labels.ts` typed label list + `valueOf`
-- [ ] A.2 renderer/kinds/sentence emit typed labels
-- [ ] A.3 delete lexicon lookups from `parser/decode.ts`; `_LIT` via `parseInt` only
-- [ ] A.4 `schedule-semantics.ts` arithmetic-only
-- [ ] A.5 model/inference `role_classes` from `LABEL_COUNT`
+- [x] S.1 loader: bucket-contiguous tensors, single gather, `uint16` rows / `int32` neighbors, batch 1024, validation cap 20 k; exit check vs E1b
+- [x] S.4 `experiment.ts` one-command run with hash-keyed steps and mandatory ledger row
+- [ ] S.3 H per epoch in `train.py`; early stop on H; epoch-1 vs final correlation check over `runs/`
+- [ ] S.2 pool render + `--fresh-each-epoch`; per-kind hashed regen + per-kind shards; `Bun.spawn` workers
+- [ ] S.5 3-seed runs + sweep list in `experiment.ts`
+- [x] A.1 `labels.ts` typed label list + `valueOf`
+- [x] A.2 renderer/kinds/sentence emit typed labels
+- [x] A.3 delete lexicon lookups from `parser/decode.ts`; `_LIT` via `parseInt` only
+- [x] A.4 `schedule-semantics.ts` arithmetic-only
+- [x] A.5 model/inference `role_classes` from `LABEL_COUNT`
 - [ ] A.6 oracle 100 % on gold + kind-seeds + `--kinds-sample 200000`; CI gate includes kinds-sample
-- [ ] A.7 `noise.ts` allowlist = all non-`_LIT` labels
+- [x] A.7 `noise.ts` allowlist = all non-`_LIT` labels
 - [ ] A1 train (E1 recipe) + ledger row
 - [ ] A2 train (`--fresh-each-epoch`, batch 1024, `--init` A1) + ledger row
 - [ ] C.1 sources + `manifest.json` + `collect.ts`

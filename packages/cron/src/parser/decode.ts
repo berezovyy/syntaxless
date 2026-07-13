@@ -9,22 +9,27 @@ import {
 /**
  * Deterministic decoder: predicted token roles -> validated {@link ScheduleIntent}.
  *
- * This is the exact inverse of the Phase 07 renderer. The model predicts roles
- * and speech-act; every number word, clock conversion, weekday number, and
- * interval multiplier is resolved here in TypeScript from **already labeled**
- * tokens. The decoder never guesses a role: an out-of-range label id is a hard
- * {@link UnknownRoleError}. Classifying raw English is the model's job.
- *
- * Data only: importing this module pulls in the label vocabulary, the
- * tokenizer's `RawToken` type, the parser lexicon, and the Phase 03 bounds
- * checks. It never imports the inference engine or the training renderer.
+ * The label is the value for every closed class. Token text is read only for
+ * `*_LIT` labels, and only via `parseInt` (ISO `YYYY-MM-DD` for `DOM_LIT`).
+ * Out-of-range role ids are a hard {@link UnknownRoleError}.
  */
-import { isStructural, LABEL_COUNT, labelFromId } from "../model/labels.js";
-import type { Label } from "../model/labels.js";
+import {
+  isLiteralLabel,
+  isStructural,
+  LABEL_COUNT,
+  labelFromId,
+  parseLiteralDigits,
+  valueOf,
+} from "../model/labels.js";
+import type { BoundKind, DayGroupKind, Label } from "../model/labels.js";
 import type { ScheduleKind } from "../model/schedule-kinds.js";
 import type { SpeechAct } from "../model/speech-acts.js";
 import type { RawToken } from "../model/tokenizer.js";
-import { exclusiveEndFromInclusiveShown, hour24From12 } from "../schedule-semantics.js";
+import {
+  exclusiveEndFromInclusiveShown,
+  hour24From12,
+  parseDateLiteral,
+} from "../schedule-semantics.js";
 import type {
   DaySpec,
   FrequencyUnit,
@@ -35,25 +40,7 @@ import type {
   TimeOfDay,
   Weekday,
 } from "../types/intent.js";
-import {
-  ADVERB_FREQUENCIES,
-  BOUND_ALIASES,
-  DAY_ORDINALS,
-  DAY_RULES,
-  FREQUENCY_IDIOMS,
-  MINUTE_IDIOMS,
-  MONTH_ALIASES,
-  NAMED_HOURS,
-  NUMBER_WORDS,
-  ORDINAL_ALIASES,
-  UNIT_ALIASES,
-  WEEKDAY_ALIASES,
-  WEEKDAY_DESCRIPTIONS,
-  WEEKDAY_GROUPS,
-  WEEKDAY_PLURAL_ALIASES,
-  WEEKDAY_SEQUENCE,
-  WORDS,
-} from "./lexicon.js";
+import { WEEKDAY_SEQUENCE } from "./lexicon.js";
 
 /** One token with its predicted role, clause boundary, and margin score. */
 export interface LabeledToken {
@@ -170,48 +157,24 @@ interface ClauseFacts {
   hour?: number;
   minute?: number;
   meridiem?: "am" | "pm";
-  minuteRelation?: "past" | "to";
+  hourIs24: boolean;
   day?: DaySpec;
+  dayGroup?: DayGroupKind;
   exceptions: ScheduleExceptions;
 }
 
 function countUnconsumedScheduleLikeValues(text: string, intent: ScheduleIntent): number {
-  const representedWeekdays = new Set<Weekday>([
-    ...(intent.weekdays ?? []),
-    ...(intent.ordinalWeekday === undefined ? [] : [intent.ordinalWeekday.weekday]),
-    ...(intent.exceptions?.weekdays ?? []),
-  ]);
-
-  let unconsumed = 0;
-
-  const weekdaySurfaces = new Map<string, Weekday>([
-    ...Object.entries(WEEKDAY_ALIASES),
-    ...Object.entries(WEEKDAY_PLURAL_ALIASES),
-  ] as Array<[string, Weekday]>);
-
-  for (const match of text.matchAll(/\b[\p{L}_]+\b/gu)) {
-    const weekday = weekdaySurfaces.get(match[0]);
-
-    if (weekday !== undefined && !representedWeekdays.has(weekday)) unconsumed++;
-  }
-
   const representedDates = new Set<string>([
     ...(intent.bounds?.start === undefined ? [] : [intent.bounds.start]),
     ...(intent.bounds?.end === undefined ? [] : [intent.bounds.end]),
     ...(intent.exceptions?.dates ?? []),
   ]);
 
+  let unconsumed = 0;
+
   for (const match of text.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) {
     if (!representedDates.has(match[0])) unconsumed++;
   }
-
-  const clockMentions = [
-    ...text.matchAll(
-      /\b(?:at|around)\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|noon|midnight|half\s+past\s+[a-z]+|quarter\s+(?:past|to)\s+[a-z]+)\b/g,
-    ),
-  ].length;
-
-  if (clockMentions > 1) unconsumed += clockMentions - 1;
 
   return unconsumed;
 }
@@ -258,124 +221,6 @@ function joinEntries(entries: readonly Entry[]): string {
   return text.toLowerCase();
 }
 
-function numberFrom(text: string): number | undefined {
-  if (/^\d+$/.test(text)) return Number(text);
-  const parts = text.replace(/\boh\b/g, "zero").split(/[\s-]+/);
-  let total = 0;
-
-  for (const part of parts) {
-    const value = NUMBER_WORDS[part];
-
-    if (value === undefined) return undefined;
-    total += value;
-  }
-
-  return total;
-}
-
-function weekdayOf(text: string): Weekday | undefined {
-  const lower = text.toLowerCase();
-
-  const exact =
-    WEEKDAY_ALIASES[lower] ?? WEEKDAY_PLURAL_ALIASES[lower] ?? WEEKDAY_DESCRIPTIONS[lower];
-
-  if (exact !== undefined) return exact;
-
-  // Callers have a WEEKDAY model role. Resolve one character edit only when
-  // every matching surface maps to the same weekday. This also covers noisy
-  // plurals (for example `mondayys`) without guessing an arbitrary word in
-  // prose.
-  return uniqueSingleEditAlias(
-    lower,
-    {
-      ...WEEKDAY_ALIASES,
-      ...WEEKDAY_PLURAL_ALIASES,
-    },
-    5,
-  );
-}
-
-/** Resolve a one-character deletion, insertion, substitution, repetition, or
- * adjacent transposition. Multiple surface aliases are fine when they all
- * denote the same value; disagreement is deliberately treated as ambiguous. */
-function uniqueSingleEditAlias<T>(
-  surface: string,
-  aliases: Readonly<Record<string, T>>,
-  minimumLength: number,
-): T | undefined {
-  const lower = surface.toLowerCase();
-
-  if (!/^[a-z]+$/.test(lower) || lower.length < minimumLength) return undefined;
-  const candidates = new Set<T>();
-
-  for (const [alias, value] of Object.entries(aliases)) {
-    if (
-      alias.length >= minimumLength &&
-      /^[a-z]+$/.test(alias) &&
-      isSingleEditVariant(lower, alias)
-    ) {
-      candidates.add(value);
-    }
-  }
-
-  return candidates.size === 1 ? candidates.values().next().value : undefined;
-}
-
-function isSingleEditVariant(left: string, right: string): boolean {
-  if (left === right || Math.abs(left.length - right.length) > 1) return false;
-
-  if (left.length === right.length) {
-    const differences: number[] = [];
-
-    for (let index = 0; index < left.length; index++) {
-      if (left[index] !== right[index]) differences.push(index);
-    }
-
-    if (differences.length === 1) return true;
-
-    return (
-      differences.length === 2 &&
-      differences[1] === differences[0]! + 1 &&
-      left[differences[0]!] === right[differences[1]!] &&
-      left[differences[1]!] === right[differences[0]!]
-    );
-  }
-
-  const shorter = left.length < right.length ? left : right;
-  const longer = left.length < right.length ? right : left;
-  let shortIndex = 0;
-  let longIndex = 0;
-  let skipped = false;
-
-  while (shortIndex < shorter.length && longIndex < longer.length) {
-    if (shorter[shortIndex] === longer[longIndex]) {
-      shortIndex += 1;
-      longIndex += 1;
-    } else {
-      if (skipped) return false;
-      skipped = true;
-      longIndex += 1;
-    }
-  }
-
-  return true;
-}
-
-function isRangeConnector(text: string): boolean {
-  const lower = text.toLowerCase();
-
-  return (
-    lower === WORDS.range.through ||
-    lower === "thru" ||
-    lower === "up to and including" ||
-    lower === "and continuing through" ||
-    lower === "continuing through" ||
-    lower === WORDS.range.to ||
-    lower === WORDS.glue.dash ||
-    uniqueSingleEditAlias(lower, { through: true }, 4) === true
-  );
-}
-
 function weekdayRange(start: Weekday, end: Weekday): Weekday[] {
   const result: Weekday[] = [];
   const endIndex = WEEKDAY_SEQUENCE.indexOf(end);
@@ -396,67 +241,12 @@ function normalizeWeekdays(days: readonly Weekday[]): Weekday[] {
   return WEEKDAY_SEQUENCE.filter((day) => selected.has(day));
 }
 
-function meridiemOf(text: string): "am" | "pm" | undefined {
-  const lower = text.toLowerCase().replace(/[.\s]/g, "");
-
-  if (lower === WORDS.meridiem.am || lower === "a.m") return "am";
-  if (lower === WORDS.meridiem.pm || lower === "p.m") return "pm";
-  if (lower === WORDS.qualifier.morning.replace(/\s/g, "")) return "am";
-
-  if (
-    lower === WORDS.qualifier.afternoon.replace(/\s/g, "") ||
-    lower === WORDS.qualifier.evening.replace(/\s/g, "") ||
-    lower === WORDS.qualifier.night.replace(/\s/g, "")
-  ) {
-    return "pm";
-  }
-
-  return undefined;
+function isWeekdayLabel(label: Label): boolean {
+  return label.startsWith("WEEKDAY_");
 }
 
-/** Normalize only unambiguous calendar-date surfaces. The intent contract uses
- * ISO dates even when the user says a month name. */
-function calendarDateFrom(text: string): string | undefined {
-  const normalized = text.toLowerCase().replace(/[,.]/g, " ").replace(/\s+/g, " ").trim();
-  const compact = normalized.replace(/\s+/g, "");
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(compact);
-  let year: number;
-  let month: number;
-  let day: number;
-
-  if (iso !== null) {
-    year = Number(iso[1]);
-    month = Number(iso[2]);
-    day = Number(iso[3]);
-  } else {
-    const monthFirst = /^([a-z]+)(\d{1,2})(?:st|nd|rd|th)?(\d{4})$/.exec(compact);
-    const dayFirst = /^(\d{1,2})(?:st|nd|rd|th)?([a-z]+)(\d{4})$/.exec(compact);
-
-    if (monthFirst !== null && MONTH_ALIASES[monthFirst[1]!] !== undefined) {
-      month = MONTH_ALIASES[monthFirst[1]!]!;
-      day = Number(monthFirst[2]);
-      year = Number(monthFirst[3]);
-    } else if (dayFirst !== null && MONTH_ALIASES[dayFirst[2]!] !== undefined) {
-      day = Number(dayFirst[1]);
-      month = MONTH_ALIASES[dayFirst[2]!]!;
-      year = Number(dayFirst[3]);
-    } else {
-      return undefined;
-    }
-  }
-
-  const candidate = new Date(Date.UTC(year, month - 1, day));
-
-  if (
-    year < 1 ||
-    candidate.getUTCFullYear() !== year ||
-    candidate.getUTCMonth() !== month - 1 ||
-    candidate.getUTCDate() !== day
-  ) {
-    return undefined;
-  }
-
-  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+function isBoundLabel(label: Label): boolean {
+  return label.startsWith("BOUND_");
 }
 
 function splitClauses(entries: readonly Entry[]): Entry[][] {
@@ -499,9 +289,63 @@ function groupClause(entries: readonly Entry[]): Group[] {
   return groups;
 }
 
+const DAYGROUP_WEEKDAYS: Record<DayGroupKind, Weekday[]> = {
+  weekday: ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  weekend: ["saturday", "sunday"],
+  day: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+};
+
+function applyDomLiteral(
+  facts: ClauseFacts,
+  text: string,
+  pending: BoundKind | null,
+  excluding: boolean,
+): BoundKind | null {
+  const calendarDate = parseDateLiteral(text);
+  const day = parseLiteralDigits(text);
+
+  if (pending === "start" || pending === "between") {
+    if (calendarDate !== undefined) facts.bounds.start = calendarDate;
+
+    return pending === "between" ? "end-excl" : null;
+  }
+
+  if (pending === "end-excl") {
+    if (calendarDate !== undefined) facts.bounds.end = calendarDate;
+
+    return null;
+  }
+
+  if (pending === "end-incl") {
+    const exclusiveEnd =
+      calendarDate === undefined ? undefined : exclusiveEndFromInclusiveShown(calendarDate);
+
+    if (exclusiveEnd !== undefined) facts.bounds.end = exclusiveEnd;
+
+    return null;
+  }
+
+  if (excluding && calendarDate !== undefined) {
+    (facts.exceptions.dates ??= []).push(calendarDate);
+
+    return null;
+  }
+
+  if (calendarDate !== undefined) {
+    if (facts.bounds.start === undefined) facts.bounds.start = calendarDate;
+    else facts.bounds.end = calendarDate;
+
+    return null;
+  }
+
+  if (day !== undefined) facts.dayOfMonth = day;
+
+  return pending;
+}
+
 /**
- * Read one clause's groups into partial facts. Range roles expand here; bounds
- * and day-of-month DOMs are told apart by an adjacent `BOUND` keyword.
+ * Read one clause's groups into partial facts. Closed labels are the values;
+ * `*_LIT` reads digits (and ISO dates for `DOM_LIT`).
  */
 function decodeClause(groups: readonly Group[]): ClauseFacts {
   const facts: ClauseFacts = {
@@ -509,11 +353,12 @@ function decodeClause(groups: readonly Group[]): ClauseFacts {
     weekdays: [],
     bounds: {},
     exceptions: {},
+    hourIs24: false,
   };
 
-  const doms: number[] = [];
-  let pending: "start" | "end" | "end-inclusive" | "between" | null = null;
+  let pending: BoundKind | null = null;
   let excluding = false;
+  let rangeNext = false;
 
   const addWeekdays = (days: readonly Weekday[]): void => {
     if (excluding) (facts.exceptions.weekdays ??= []).push(...days);
@@ -522,234 +367,133 @@ function decodeClause(groups: readonly Group[]): ClauseFacts {
 
   for (let index = 0; index < groups.length; index++) {
     const group = groups[index]!;
+    const label = group.label;
     const text = joinTokens(group.tokens);
+    const closed = valueOf(label);
 
-    switch (group.label) {
-      case "WEEKDAY": {
-        const start = weekdayOf(text);
+    if (isWeekdayLabel(label)) {
+      const start = closed as Weekday | undefined;
 
-        if (start === undefined) break;
-        const connector = groups[index + 1];
-        const endGroup = groups[index + 2];
+      if (start === undefined) continue;
+      const connector = groups[index + 1];
+      const endGroup = groups[index + 2];
 
-        const end =
-          endGroup?.label === "WEEKDAY" ? weekdayOf(joinTokens(endGroup.tokens)) : undefined;
+      const end =
+        endGroup !== undefined && isWeekdayLabel(endGroup.label)
+          ? (valueOf(endGroup.label) as Weekday | undefined)
+          : undefined;
 
-        if (
-          connector?.label === "GLUE" &&
-          end !== undefined &&
-          isRangeConnector(joinTokens(connector.tokens))
-        ) {
-          addWeekdays(weekdayRange(start, end));
-          index += 2;
+      const ranged =
+        rangeNext ||
+        (connector !== undefined &&
+          isBoundLabel(connector.label) &&
+          connector.label !== "BOUND_START");
+
+      if (ranged && end !== undefined) {
+        addWeekdays(weekdayRange(start, end));
+        index += 2;
+        rangeNext = false;
+      } else {
+        addWeekdays([start]);
+        rangeNext = false;
+      }
+
+      continue;
+    }
+
+    if (label.startsWith("DAYGROUP_")) {
+      const kind = closed as DayGroupKind | undefined;
+
+      if (kind !== undefined) {
+        facts.dayGroup = kind;
+        addWeekdays(DAYGROUP_WEEKDAYS[kind]);
+      }
+
+      continue;
+    }
+
+    if (label.startsWith("ORDINAL_")) {
+      if (closed === "last" || typeof closed === "string") facts.ordinal = closed as Ordinal;
+      continue;
+    }
+
+    if (label === "DOM_LIT") {
+      pending = applyDomLiteral(facts, text, pending, excluding);
+      continue;
+    }
+
+    if (isBoundLabel(label)) {
+      pending = closed as BoundKind;
+
+      rangeNext =
+        label === "BOUND_BETWEEN" || label === "BOUND_END_INCL" || label === "BOUND_END_EXCL";
+
+      excluding = false;
+      continue;
+    }
+
+    if (label === "EXCEPT") {
+      excluding = true;
+      continue;
+    }
+
+    if (label.startsWith("INTERVAL_")) {
+      const value = isLiteralLabel(label) ? parseLiteralDigits(text) : (closed as number);
+
+      if (value !== undefined) facts.interval = value;
+      continue;
+    }
+
+    if (label.startsWith("HOUR_")) {
+      if (isLiteralLabel(label)) {
+        const digits = parseLiteralDigits(text);
+
+        if (digits === undefined) continue;
+
+        if (text.length >= 3) {
+          facts.hour = Number(text.slice(0, text.length - 2));
+          facts.minute = Number(text.slice(-2));
+          facts.hourIs24 = true;
         } else {
-          addWeekdays([start]);
+          facts.hour = digits;
+          facts.hourIs24 = digits > 12;
         }
-
-        break;
+      } else if (typeof closed === "number") {
+        facts.hour = closed;
+        facts.hourIs24 = true;
       }
 
-      case "DAYGROUP": {
-        const members = WEEKDAY_GROUPS[text];
+      continue;
+    }
 
-        if (members !== undefined) addWeekdays(members);
-        break;
-      }
+    if (label.startsWith("MINUTE_")) {
+      const value = isLiteralLabel(label) ? parseLiteralDigits(text) : (closed as number);
 
-      case "ORDINAL": {
-        const ordinal = ORDINAL_ALIASES[text.replace(/\s+(st|nd|rd|th)$/, "$1")];
+      if (value !== undefined) facts.minute = value;
+      continue;
+    }
 
-        if (ordinal !== undefined) facts.ordinal = ordinal;
-        break;
-      }
+    if (label.startsWith("MERIDIEM_")) {
+      if (closed === "am" || closed === "pm") facts.meridiem = closed;
+      continue;
+    }
 
-      case "DOM": {
-        const calendarDate = calendarDateFrom(text);
-
-        if (pending === "start" || pending === "between") {
-          if (calendarDate !== undefined) facts.bounds.start = calendarDate;
-          pending = pending === "between" ? "end" : null;
-        } else if (pending === "end") {
-          if (calendarDate !== undefined) facts.bounds.end = calendarDate;
-          pending = null;
-        } else if (pending === "end-inclusive") {
-          const exclusiveEnd =
-            calendarDate === undefined ? undefined : exclusiveEndFromInclusiveShown(calendarDate);
-
-          if (exclusiveEnd !== undefined) facts.bounds.end = exclusiveEnd;
-          pending = null;
-        } else if (excluding && calendarDate !== undefined) {
-          (facts.exceptions.dates ??= []).push(calendarDate);
-        } else if (calendarDate !== undefined) {
-          if (facts.bounds.start === undefined) facts.bounds.start = calendarDate;
-          else facts.bounds.end = calendarDate;
-        } else if (text in DAY_RULES) {
-          facts.day = { type: DAY_RULES[text as keyof typeof DAY_RULES] };
-        } else if (DAY_ORDINALS.includes(text)) {
-          doms.push(DAY_ORDINALS.indexOf(text) + 1);
-        } else if (/^\d+$/.test(text)) {
-          doms.push(Number(text));
-        }
-
-        break;
-      }
-
-      case "BOUND": {
-        pending =
-          BOUND_ALIASES[text] ??
-          (text === WORDS.range.through || text === "thru" ? "end-inclusive" : null);
-
-        excluding = false;
-        break;
-      }
-
-      case "EXCEPT": {
-        excluding = true;
-        break;
-      }
-
-      case "INTERVAL": {
-        const idiom = FREQUENCY_IDIOMS[text];
-        const adverb = ADVERB_FREQUENCIES[text];
-
-        if (idiom !== undefined) {
-          facts.unit = idiom.unit;
-          facts.interval = idiom.interval;
-        } else if (adverb !== undefined) {
-          facts.unit = adverb;
-        } else {
-          const value = numberFrom(text);
-
-          if (value !== undefined) facts.interval = value;
-        }
-
-        break;
-      }
-
-      case "COUNT": {
-        const value = numberFrom(text);
-
-        if (value !== undefined && facts.interval === undefined) facts.interval = value;
-        break;
-      }
-
-      case "HOUR": {
-        if (/^\d{4}$/.test(text)) {
-          facts.hour = Number(text.slice(0, 2));
-          facts.minute = Number(text.slice(2));
-        } else {
-          const value = NAMED_HOURS[text] ?? numberFrom(text);
-
-          if (value !== undefined) facts.hour = value;
-        }
-
-        break;
-      }
-
-      case "MINUTE": {
-        const value = MINUTE_IDIOMS[text] ?? numberFrom(text);
-        const previous = groups[index - 1];
-        const previousText = previous?.label === "GLUE" ? joinTokens(previous.tokens) : "";
-        const connector = groups[index + 1];
-        const followingHour = groups[index + 2];
-        const relation = connector?.label === "GLUE" ? joinTokens(connector.tokens) : "";
-
-        const relativeClock =
-          followingHour?.label === "HOUR" &&
-          (relation === "past" ||
-            relation === "after" ||
-            relation === "to" ||
-            relation === "before" ||
-            relation.endsWith(" past") ||
-            relation.endsWith(" after") ||
-            relation.endsWith(" to") ||
-            relation.endsWith(" before"));
-
-        // A bare number after "at" is an hour only when this is not
-        // "at <minute> past/to <hour>". Relative clocks keep the minute.
-        if (
-          !relativeClock &&
-          value !== undefined &&
-          value <= 23 &&
-          facts.hour === undefined &&
-          /(?:^|\s)at(?:\s|$)/.test(previousText)
-        ) {
-          facts.hour = value;
-        } else if (value !== undefined) {
-          facts.minute = value;
-        }
-
-        if (relativeClock) {
-          if (
-            relation === "past" ||
-            relation === "after" ||
-            relation.endsWith(" past") ||
-            relation.endsWith(" after")
-          ) {
-            facts.minuteRelation = "past";
-          } else {
-            facts.minuteRelation = "to";
-          }
-        }
-
-        break;
-      }
-
-      case "MERIDIEM": {
-        const meridiem = meridiemOf(text);
-
-        if (meridiem !== undefined) facts.meridiem = meridiem;
-        break;
-      }
-
-      case "RECUR": {
-        let recurrenceUnit: FrequencyUnit | undefined =
-          text === WORDS.recur.monthly ? "month" : undefined;
-
-        for (const word of text.split(/\s+/)) {
-          const normalized = word
-            .toLowerCase()
-            .replace(/['’]s$/, "")
-            .replace(/[^a-z]/g, "");
-
-          const unit = UNIT_ALIASES[normalized];
-
-          if (unit !== undefined && recurrenceUnit === undefined) recurrenceUnit = unit;
-        }
-
-        if (recurrenceUnit !== undefined) facts.unit = recurrenceUnit;
-        break;
-      }
-
-      case "GLUE": {
-        const relativeClock =
-          groups[index - 1]?.label === "MINUTE" && groups[index + 1]?.label === "HOUR";
-
-        if (!relativeClock) {
-          for (const word of text.split(/[^a-z]+/)) {
-            const unit = UNIT_ALIASES[word];
-
-            if (unit !== undefined) facts.unit = unit;
-          }
-        }
-
-        if (
-          text === WORDS.glue.other ||
-          text === WORDS.glue.alternate ||
-          text === WORDS.glue.alternating
-        ) {
-          facts.other = true;
-        }
-
-        break;
-      }
-
-      default:
-        break;
+    if (label.startsWith("UNIT_")) {
+      if (typeof closed === "string") facts.unit = closed as FrequencyUnit;
+      continue;
     }
   }
 
-  if (doms.length > 0) facts.dayOfMonth = doms[doms.length - 1]!;
+  if (facts.ordinal === "last" && facts.day === undefined) {
+    if (facts.dayGroup === "weekday") {
+      facts.day = { type: "last_business_day" };
+      delete facts.ordinal;
+      facts.weekdays = [];
+    } else if (facts.weekdays.length === 0) {
+      facts.day = { type: "last_day_of_month" };
+      delete facts.ordinal;
+    }
+  }
 
   return facts;
 }
@@ -758,10 +502,11 @@ function resolveTime(
   hour: number | undefined,
   minute: number | undefined,
   meridiem: "am" | "pm" | undefined,
+  hourIs24: boolean,
 ): TimeOfDay {
-  const resolved = meridiem === undefined ? (hour ?? 0) : hour24From12(hour ?? 0, meridiem);
+  if (hourIs24 || meridiem === undefined) return { hour: hour ?? 0, minute: minute ?? 0 };
 
-  return { hour: resolved, minute: minute ?? 0 };
+  return { hour: hour24From12(hour ?? 0, meridiem), minute: minute ?? 0 };
 }
 
 function entriesFromLabeled(labeled: readonly LabeledToken[]): Entry[] {
@@ -780,7 +525,7 @@ function entriesFromLabeled(labeled: readonly LabeledToken[]): Entry[] {
       boundary: item.boundary,
       score: item.score,
       boundaryScore: item.boundaryScore ?? 1,
-      actionable: item.actionable,
+      ...(item.actionable === undefined ? {} : { actionable: item.actionable }),
     });
   }
 
@@ -855,7 +600,7 @@ export function decodeIntent(
   let hour: number | undefined;
   let minute: number | undefined;
   let meridiem: "am" | "pm" | undefined;
-  let minuteRelation: "past" | "to" | undefined;
+  let hourIs24 = false;
   let day: DaySpec | undefined;
   const weekdays: Weekday[] = [];
   const bounds: RecurrenceBounds = {};
@@ -879,7 +624,7 @@ export function decodeIntent(
     hour ??= facts.hour;
     minute ??= facts.minute;
     meridiem ??= facts.meridiem;
-    minuteRelation ??= facts.minuteRelation;
+    hourIs24 = hourIs24 || facts.hourIs24;
     day ??= facts.day;
 
     if (facts.exceptions.weekdays !== undefined) {
@@ -939,13 +684,7 @@ export function decodeIntent(
   }
 
   if (hour !== undefined || minute !== undefined || meridiem !== undefined) {
-    intent.time = resolveTime(hour, minute, meridiem);
-
-    if (minuteRelation === "to") {
-      const total = (intent.time.hour * 60 - intent.time.minute + 1440) % 1440;
-
-      intent.time = { hour: Math.floor(total / 60), minute: total % 60 };
-    }
+    intent.time = resolveTime(hour, minute, meridiem, hourIs24);
   }
 
   const monthlySelectors =

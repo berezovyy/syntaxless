@@ -19,7 +19,7 @@ class Config:
     epochs: int = 2
     samples: int = 2000
     eval_samples: int = 500
-    batch: int = 64
+    batch: int = 1024
     learning_rate: float = 3.0e-3
     warmup_steps: int = 50
     qat_start: int = 1
@@ -35,6 +35,11 @@ class Config:
     frame_balance_power: float = 0.5
     early_stopping_patience: int = 0
     min_epochs: int = 1
+    fresh_each_epoch: bool = False
+    fresh_epoch_size: int = 300_000
+    val_max_sequences: int = 20_000
+    init: str | None = None
+    h_per_epoch: bool = False
 
     def to_dict(self) -> dict[str, object]:
         """Serialize for the report without aliasing the dataclass."""
@@ -60,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--samples", type=int, default=2000)
     parser.add_argument("--eval-samples", type=int, default=500)
-    parser.add_argument("--batch", type=int, default=64)
+    parser.add_argument("--batch", type=int, default=1024)
     parser.add_argument("--learning-rate", type=float, default=3.0e-3)
     parser.add_argument("--warmup-steps", type=int, default=50)
     parser.add_argument("--qat-start", type=int, default=1)
@@ -69,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--hidden",
         type=int,
         default=32,
-        help="shared model width (controlled experiments use 32, 48, or 64)",
+        help="shared model width",
     )
     parser.add_argument("--storage", default="training/cron/runs")
     parser.add_argument(
@@ -118,6 +123,33 @@ def build_parser() -> argparse.ArgumentParser:
             "<prefix>-validation, and <prefix>-heldout instead of generate.ts"
         ),
     )
+    parser.add_argument(
+        "--fresh-each-epoch",
+        action="store_true",
+        help="resample --fresh-epoch-size rows from the train pool with seed+epoch",
+    )
+    parser.add_argument(
+        "--fresh-epoch-size",
+        type=int,
+        default=300_000,
+        help="draw size for --fresh-each-epoch (default 300000)",
+    )
+    parser.add_argument(
+        "--val-max-sequences",
+        type=int,
+        default=20_000,
+        help="per-epoch validation cap (default 20000); full val is scored at run end",
+    )
+    parser.add_argument(
+        "--init",
+        default=None,
+        help="checkpoint to initialize from (A2 warm start)",
+    )
+    parser.add_argument(
+        "--h-per-epoch",
+        action="store_true",
+        help="score human-regression H after each epoch and log it on the history row",
+    )
     return parser
 
 
@@ -133,8 +165,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
         raise ValueError("--batch must be at least 1")
     if not 2 <= args.quantization_bits <= 8:
         raise ValueError("--quantization-bits must be in [2, 8]")
-    if args.hidden not in (32, 48, 64):
-        raise ValueError("--hidden must be one of 32, 48, or 64")
+    if args.hidden < 1:
+        raise ValueError("--hidden must be at least 1")
+    if args.fresh_epoch_size < 1:
+        raise ValueError("--fresh-epoch-size must be at least 1")
+    if args.val_max_sequences < 1:
+        raise ValueError("--val-max-sequences must be at least 1")
     if args.early_stopping_patience < 0:
         raise ValueError("--early-stopping-patience must be non-negative")
     if not 1 <= args.min_epochs <= args.epochs:
@@ -165,4 +201,9 @@ def parse_args(argv: list[str] | None = None) -> Config:
         frame_balance_power=args.frame_balance_power,
         early_stopping_patience=args.early_stopping_patience,
         min_epochs=args.min_epochs,
+        fresh_each_epoch=args.fresh_each_epoch,
+        fresh_epoch_size=args.fresh_epoch_size,
+        val_max_sequences=args.val_max_sequences,
+        init=args.init,
+        h_per_epoch=args.h_per_epoch,
     )

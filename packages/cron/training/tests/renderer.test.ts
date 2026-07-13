@@ -87,11 +87,11 @@ function checkExample(example: RenderedExample, family: Family): void {
 
     const spanText = text.slice(span.start, span.end);
 
-    if (span.label === "WEEKDAY") {
+    if (span.label.startsWith("WEEKDAY_")) {
       expect(WEEKDAY_WORDS.has(spanText.toLowerCase())).toBe(true);
     }
 
-    if (span.label === "HOUR") {
+    if (span.label.startsWith("HOUR_")) {
       const isDigit = /^\d+$/.test(spanText);
       const isWord = NUMBER_WORDS.has(spanText.toLowerCase());
 

@@ -12,9 +12,9 @@ const clean = {
     { start: 0, end: 6, label: "O" as const, clauseStart: false, actionable: false },
     { start: 7, end: 10, label: "O" as const, clauseStart: false, actionable: false },
     { start: 11, end: 16, label: "RECUR" as const, clauseStart: false, actionable: true },
-    { start: 17, end: 23, label: "WEEKDAY" as const, clauseStart: true, actionable: true },
+    { start: 17, end: 23, label: "WEEKDAY_MON" as const, clauseStart: true, actionable: true },
     { start: 24, end: 26, label: "GLUE" as const, clauseStart: false, actionable: true },
-    { start: 27, end: 31, label: "HOUR" as const, clauseStart: false, actionable: true },
+    { start: 27, end: 31, label: "HOUR_9" as const, clauseStart: false, actionable: true },
   ],
 };
 
@@ -39,7 +39,7 @@ test("spelling variants are deterministic and keep spans token aligned", () => {
 
 test("a forced role-targeted variant mutates only the requested evidence", () => {
   const variant = spellingVariant(clean, "targeted", {
-    labels: ["WEEKDAY"],
+    labels: ["WEEKDAY_MON"],
     force: true,
   });
 
@@ -50,8 +50,14 @@ test("a forced role-targeted variant mutates only the requested evidence", () =>
   expect(variant.example.text).toEndWith(" at nine");
 });
 
-test("default noise only mutates decoder-safe labels", () => {
-  expect(NOISE_SAFE_LABELS).toEqual(["O", "EDGE"]);
+test("default noise allowlist is every non-literal label", () => {
+  expect(NOISE_SAFE_LABELS).toContain("O");
+  expect(NOISE_SAFE_LABELS).toContain("WEEKDAY_MON");
+  expect(NOISE_SAFE_LABELS).toContain("HOUR_9");
+  expect(NOISE_SAFE_LABELS).not.toContain("HOUR_LIT");
+  expect(NOISE_SAFE_LABELS).not.toContain("DOM_LIT");
+  expect(NOISE_SAFE_LABELS).not.toContain("INTERVAL_LIT");
+  expect(NOISE_SAFE_LABELS).not.toContain("MINUTE_LIT");
   let variant: ReturnType<typeof spellingVariant>;
 
   for (let index = 0; index < 32 && variant === undefined; index += 1) {
@@ -60,6 +66,5 @@ test("default noise only mutates decoder-safe labels", () => {
 
   expect(variant).toBeDefined();
   if (variant === undefined) return;
-  expect(variant.example.text).toContain("every monday at nine");
   expect(variant.example.text).not.toBe(clean.text);
 });

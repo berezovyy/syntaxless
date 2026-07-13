@@ -7,6 +7,7 @@ import {
   hourWithoutMeridiemIsInvertible,
   inclusiveShownFromExclusiveEnd,
   meridiemFrom24,
+  parseDateLiteral,
 } from "./schedule-semantics.js";
 
 describe("through inclusivity", () => {
@@ -29,5 +30,13 @@ describe("12h clock invertibility", () => {
     expect(hour24From12(12, "am")).toBe(0);
     expect(hour12From24(0)).toBe(12);
     expect(meridiemFrom24(0)).toBe("am");
+  });
+});
+
+describe("DOM_LIT dates", () => {
+  test("ISO digits invert; month names do not", () => {
+    expect(parseDateLiteral("2026-01-31")).toBe("2026-01-31");
+    expect(parseDateLiteral("January 31, 2026")).toBeUndefined();
+    expect(parseDateLiteral("31")).toBeUndefined();
   });
 });

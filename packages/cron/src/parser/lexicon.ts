@@ -1,3 +1,14 @@
+import {
+  boundLabel,
+  dayGroupLabel,
+  hourLabel,
+  intervalLabel,
+  meridiemLabel,
+  minuteLabel,
+  ordinalLabel,
+  unitLabel,
+  weekdayLabel,
+} from "../model/labels.js";
 import type { Label } from "../model/labels.js";
 import type { FrequencyUnit, Ordinal, Weekday } from "../types/intent.js";
 
@@ -835,34 +846,37 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
   const entries: Record<string, SurfaceEntry> = {};
 
   for (const [word, weekday] of Object.entries(WEEKDAY_ALIASES)) {
-    entries[word] = surface("WEEKDAY", weekday);
+    entries[word] = surface(weekdayLabel(weekday), weekday);
   }
 
   for (const [word, weekday] of Object.entries(WEEKDAY_PLURAL_ALIASES)) {
-    entries[word] = surface("WEEKDAY", weekday);
+    entries[word] = surface(weekdayLabel(weekday), weekday);
   }
 
   for (const [word, weekday] of Object.entries(WEEKDAY_DESCRIPTIONS)) {
-    entries[word] = surface("WEEKDAY", weekday);
+    entries[word] = surface(weekdayLabel(weekday), weekday);
   }
 
   for (const word of Object.keys(WEEKDAY_GROUPS)) {
-    entries[word] = surface("DAYGROUP", word);
+    entries[word] = surface(
+      word.includes("weekend") ? dayGroupLabel("weekend") : dayGroupLabel("weekday"),
+      word,
+    );
   }
 
   for (const [word, unit] of Object.entries(UNIT_ALIASES)) {
-    entries[word] = surface("INTERVAL", unit);
+    entries[word] = surface(unitLabel(unit), unit);
   }
 
   for (const [word, unit] of Object.entries(ADVERB_FREQUENCIES)) {
-    entries[word] = surface("INTERVAL", unit);
+    entries[word] = surface(unitLabel(unit), unit);
   }
 
   for (const [word, ordinal] of Object.entries(ORDINAL_ALIASES)) {
-    entries[word] = surface("ORDINAL", ORDINAL_RANK[ordinal]);
+    entries[word] = surface(ordinalLabel(ordinal), ORDINAL_RANK[ordinal]);
   }
 
-  for (const word of Object.keys(MONTH_ALIASES)) entries[word] = surface("DOM");
+  for (const word of Object.keys(MONTH_ALIASES)) entries[word] = surface("DOM_LIT");
 
   for (const [word, value] of Object.entries(NUMBER_WORDS)) {
     entries[word] = surface("COUNT", value);
@@ -881,7 +895,13 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
   }
 
   for (const word of Object.values(WORDS.bounds)) {
-    entries[word] = surface("BOUND");
+    entries[word] = surface(
+      word === WORDS.bounds.between
+        ? boundLabel("between")
+        : word === WORDS.bounds.until
+          ? boundLabel("end-excl")
+          : boundLabel("start"),
+    );
   }
 
   for (const word of Object.values(WORDS.exception)) {
@@ -889,35 +909,59 @@ export const LEXICON: Record<string, SurfaceEntry> = (() => {
   }
 
   for (const word of Object.values(WORDS.meridiem)) {
-    entries[word] = surface("MERIDIEM", word);
+    entries[word] = surface(meridiemLabel(word === "pm" ? "pm" : "am"), word);
   }
 
   for (const word of Object.values(WORDS.qualifier)) {
-    entries[word] = surface("MERIDIEM");
+    entries[word] = surface(
+      word === WORDS.qualifier.morning ? meridiemLabel("am") : meridiemLabel("pm"),
+    );
   }
 
-  entries["a.m."] = surface("MERIDIEM", "am");
-  entries["p.m."] = surface("MERIDIEM", "pm");
-  entries["a.m"] = surface("MERIDIEM", "am");
-  entries["p.m"] = surface("MERIDIEM", "pm");
-  entries["a. m."] = surface("MERIDIEM", "am");
-  entries["p. m."] = surface("MERIDIEM", "pm");
+  entries["a.m."] = surface(meridiemLabel("am"), "am");
+  entries["p.m."] = surface(meridiemLabel("pm"), "pm");
+  entries["a.m"] = surface(meridiemLabel("am"), "am");
+  entries["p.m"] = surface(meridiemLabel("pm"), "pm");
+  entries["a. m."] = surface(meridiemLabel("am"), "am");
+  entries["p. m."] = surface(meridiemLabel("pm"), "pm");
 
-  for (const word of Object.keys(FREQUENCY_IDIOMS)) entries[word] = surface("INTERVAL");
-  for (const [word, hour] of Object.entries(NAMED_HOURS)) entries[word] = surface("HOUR", hour);
+  for (const [word, frequency] of Object.entries(FREQUENCY_IDIOMS)) {
+    entries[word] = surface(
+      frequency.interval === 1 ? unitLabel(frequency.unit) : intervalLabel(frequency.interval),
+    );
+  }
+
+  for (const [word, hour] of Object.entries(NAMED_HOURS)) {
+    entries[word] = surface(hourLabel(hour), hour);
+  }
 
   for (const [word, minute] of Object.entries(MINUTE_IDIOMS)) {
-    entries[word] = surface("MINUTE", minute);
+    entries[word] = surface(minuteLabel(minute), minute);
   }
 
   for (const word of Object.keys(DAY_RULES)) {
-    entries[word] = surface("DOM", DAY_RULES[word as keyof typeof DAY_RULES]);
+    entries[word] = surface(
+      DAY_RULES[word as keyof typeof DAY_RULES] === "last_business_day"
+        ? dayGroupLabel("weekday")
+        : ordinalLabel("last"),
+      DAY_RULES[word as keyof typeof DAY_RULES],
+    );
   }
 
-  for (const word of Object.keys(BOUND_ALIASES)) entries[word] = surface("BOUND");
+  for (const [word, kind] of Object.entries(BOUND_ALIASES)) {
+    entries[word] = surface(
+      kind === "start"
+        ? boundLabel("start")
+        : kind === "between"
+          ? boundLabel("between")
+          : kind === "end-inclusive"
+            ? boundLabel("end-incl")
+            : boundLabel("end-excl"),
+    );
+  }
 
   DAY_ORDINALS.forEach((word, index) => {
-    entries[word] ??= surface("DOM", index + 1);
+    entries[word] ??= surface("DOM_LIT", index + 1);
   });
 
   for (const phrase of RECURRENCE_PREFIXES) entries[phrase] ??= surface("RECUR");

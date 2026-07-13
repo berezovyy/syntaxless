@@ -837,7 +837,7 @@ async function scoreHumanOverlay(
           accepted: parsed.ok,
           actualIntent: parsed.ok ? parsed.intent : null,
           predictedLabels,
-          predictedSpeechAct,
+          ...(predictedSpeechAct === undefined ? {} : { predictedSpeechAct }),
           predictedOracle:
             raw === null
               ? { ok: false, error: "raw-decode-null" }

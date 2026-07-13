@@ -184,6 +184,28 @@ export async function parseWithModel(
     options?.weights === undefined ? undefined : { weights: options.weights };
 
   const engine = await getEngine(config);
+
+  if (options?.weights === undefined) {
+    const { WEIGHTS_MATCH_LABELS } = await import("../model/inference.js");
+
+    if (!WEIGHTS_MATCH_LABELS) {
+      return {
+        ok: false,
+        reason: "bundled weights do not match the typed label vocabulary",
+        code: "model-error",
+        confidence: 0,
+        diagnostics: [
+          {
+            code: "stale-weights",
+            severity: "error",
+            message: "typed labels require an A1 re-export; bundled 15-role weights are not used",
+          },
+        ],
+        source: "model",
+      };
+    }
+  }
+
   const tokens = tokenize(normalized);
   const predictions = engine.inferTokens(tokens);
 

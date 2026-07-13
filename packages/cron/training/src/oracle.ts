@@ -225,7 +225,7 @@ export function recordOracleOutcome(report: OracleReport, record: OracleRecord):
       id: record.id,
       kind,
       template,
-      family: record.family,
+      ...(record.family === undefined ? {} : { family: record.family }),
       source: record.source,
       text: record.text,
       expected: record.intent,
@@ -254,10 +254,10 @@ function asOracleRecord(
     text: value.text,
     spans: value.spans,
     intent: value.intent,
-    speechAct: value.speechAct,
-    kind: value.kind,
-    template: value.template,
-    family: value.family,
+    ...(value.speechAct === undefined ? {} : { speechAct: value.speechAct }),
+    ...(value.kind === undefined ? {} : { kind: value.kind }),
+    ...(value.template === undefined ? {} : { template: value.template }),
+    ...(value.family === undefined ? {} : { family: value.family }),
     source,
   };
 }

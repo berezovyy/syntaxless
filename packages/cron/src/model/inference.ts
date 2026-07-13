@@ -27,16 +27,11 @@ const SPEECH_ACT_CLASSES = ARTIFACT.speechActClasses ?? 0;
 const BOUNDARY_THRESHOLD = ARTIFACT.boundaryThreshold;
 const LAYER_NORM_EPSILON = 1e-5;
 
-if (ROLE_CLASSES !== LABEL_COUNT) {
-  throw new RangeError(`weights declare ${ROLE_CLASSES} roles but labels.ts has ${LABEL_COUNT}`);
-}
-
-if (
-  ARTIFACT.labels.length !== LABELS.length ||
-  ARTIFACT.labels.some((label, id) => label !== LABELS[id])
-) {
-  throw new Error("weights label vocabulary does not match labels.ts");
-}
+/** False until an A1 export ships weights for the typed label set. */
+export const WEIGHTS_MATCH_LABELS =
+  ROLE_CLASSES === LABEL_COUNT &&
+  ARTIFACT.labels.length === LABELS.length &&
+  ARTIFACT.labels.every((label, id) => label === LABELS[id]);
 
 if (
   SCHEDULE_KIND_CLASSES > 0 &&

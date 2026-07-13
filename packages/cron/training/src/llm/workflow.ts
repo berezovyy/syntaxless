@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { LABELS } from "../../../src/model/labels.js";
 import type { Label } from "../../../src/model/labels.js";
 import { LEXICON } from "../../../src/parser/lexicon.js";
 import type { ScheduleIntent } from "../../../src/types/intent.js";
@@ -47,27 +48,77 @@ export const CANDIDATE_SCHEMA = JSON.stringify({
  * knows which words to avoid.
  */
 const FAMILY_LABELS: Record<Family, readonly Label[]> = {
-  interval: ["RECUR", "INTERVAL", "COUNT", "GLUE"],
-  "weekday-list": ["WEEKDAY", "DAYGROUP", "RECUR", "GLUE"],
-  "weekday-range": ["WEEKDAY", "RECUR", "GLUE"],
-  "ordinal-weekday": ["ORDINAL", "WEEKDAY", "COUNT", "RECUR", "GLUE"],
-  "day-of-month": ["COUNT", "ORDINAL", "RECUR", "GLUE"],
-  "time-of-day": ["COUNT", "MERIDIEM", "GLUE", "RECUR"],
-  bounds: ["BOUND", "COUNT", "RECUR", "GLUE"],
-  exception: ["EXCEPT", "WEEKDAY", "DAYGROUP", "RECUR", "GLUE"],
-  terse: ["WEEKDAY", "DAYGROUP", "RECUR", "GLUE"],
-  negative: [
-    "WEEKDAY",
-    "DAYGROUP",
-    "INTERVAL",
-    "ORDINAL",
-    "COUNT",
-    "RECUR",
-    "GLUE",
-    "BOUND",
-    "EXCEPT",
-    "MERIDIEM",
-  ],
+  interval: LABELS.filter(
+    (label) =>
+      label === "RECUR" ||
+      label === "COUNT" ||
+      label === "GLUE" ||
+      label.startsWith("INTERVAL_") ||
+      label.startsWith("UNIT_"),
+  ),
+  "weekday-list": LABELS.filter(
+    (label) =>
+      label === "RECUR" ||
+      label === "GLUE" ||
+      label.startsWith("WEEKDAY_") ||
+      label.startsWith("DAYGROUP_"),
+  ),
+  "weekday-range": LABELS.filter(
+    (label) =>
+      label === "RECUR" ||
+      label === "GLUE" ||
+      label.startsWith("WEEKDAY_") ||
+      label.startsWith("BOUND_"),
+  ),
+  "ordinal-weekday": LABELS.filter(
+    (label) =>
+      label === "RECUR" ||
+      label === "GLUE" ||
+      label === "COUNT" ||
+      label.startsWith("ORDINAL_") ||
+      label.startsWith("WEEKDAY_"),
+  ),
+  "day-of-month": LABELS.filter(
+    (label) =>
+      label === "RECUR" ||
+      label === "GLUE" ||
+      label === "COUNT" ||
+      label === "DOM_LIT" ||
+      label.startsWith("ORDINAL_"),
+  ),
+  "time-of-day": LABELS.filter(
+    (label) =>
+      label === "RECUR" ||
+      label === "GLUE" ||
+      label === "COUNT" ||
+      label.startsWith("HOUR_") ||
+      label.startsWith("MINUTE_") ||
+      label.startsWith("MERIDIEM_"),
+  ),
+  bounds: LABELS.filter(
+    (label) =>
+      label === "RECUR" ||
+      label === "GLUE" ||
+      label === "COUNT" ||
+      label === "DOM_LIT" ||
+      label.startsWith("BOUND_"),
+  ),
+  exception: LABELS.filter(
+    (label) =>
+      label === "RECUR" ||
+      label === "GLUE" ||
+      label === "EXCEPT" ||
+      label.startsWith("WEEKDAY_") ||
+      label.startsWith("DAYGROUP_"),
+  ),
+  terse: LABELS.filter(
+    (label) =>
+      label === "RECUR" ||
+      label === "GLUE" ||
+      label.startsWith("WEEKDAY_") ||
+      label.startsWith("DAYGROUP_"),
+  ),
+  negative: LABELS.filter((label) => label !== "O" && label !== "EDGE"),
 };
 
 export interface PromptFile {

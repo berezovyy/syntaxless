@@ -18,7 +18,8 @@
     "evaluate:human": "bun run src/human-evaluate.ts",
     "oracle": "bun run src/oracle.ts",
     "oracle:gate": "bun run src/oracle.ts --gate --seeds 50 --kinds-sample 200000",
-    "gate": "bun run src/gate.ts"
+    "gate": "bun run src/gate.ts",
+    "experiment": "bun run src/experiment.ts"
   },
   "devDependencies": {
     "@opencode-ai/sdk": "1.3.15",

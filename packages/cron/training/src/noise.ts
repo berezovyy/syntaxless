@@ -1,6 +1,7 @@
 /** Deterministic, meaning-preserving spelling noise for paired corpus rows. */
 import { createHash } from "node:crypto";
 
+import { isLiteralLabel, LABELS } from "../../src/model/labels.js";
 import type { Label } from "../../src/model/labels.js";
 import { tokenize } from "../../src/model/tokenizer.js";
 import type { RenderedExample } from "./renderer.js";
@@ -21,11 +22,10 @@ export interface SpellingVariantOptions {
 }
 
 /**
- * Labels whose surface string the decoder never looks up. Mutating anything
- * else (WEEKDAY, HOUR, BOUND, GLUE units, …) makes gold unreachable: the
- * oracle cannot invert `wrd` back to wednesday.
+ * Every non-`_LIT` label: the decoder reads `valueOf(label)`, not the noised
+ * string. Literal digits stay clean so `parseInt` still inverts.
  */
-export const NOISE_SAFE_LABELS: readonly Label[] = ["O", "EDGE"];
+export const NOISE_SAFE_LABELS: readonly Label[] = LABELS.filter((label) => !isLiteralLabel(label));
 
 const NOISES: readonly SpellingNoise[] = [
   "deletion",

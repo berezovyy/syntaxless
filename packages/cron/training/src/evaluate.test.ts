@@ -36,9 +36,9 @@ describe("parseCorpus does not patch gold semantics", () => {
       text: "remind me 1:30 daily",
       spans: [
         { start: 0, end: 9, label: "O", clauseStart: false },
-        { start: 10, end: 11, label: "HOUR", clauseStart: true },
+        { start: 10, end: 11, label: "HOUR_9", clauseStart: true },
         { start: 11, end: 12, label: "GLUE", clauseStart: false },
-        { start: 12, end: 14, label: "MINUTE", clauseStart: false },
+        { start: 12, end: 14, label: "MINUTE_30", clauseStart: false },
         { start: 15, end: 20, label: "RECUR", clauseStart: false },
       ],
       intent: {
@@ -51,7 +51,7 @@ describe("parseCorpus does not patch gold semantics", () => {
     const [parsed] = parseCorpus(`${JSON.stringify(item)}\n`);
 
     expect(parsed?.text).toBe("remind me 1:30 daily");
-    expect(parsed?.spans.some((span) => span.label === "MERIDIEM")).toBe(false);
+    expect(parsed?.spans.some((span) => span.label.startsWith("MERIDIEM_"))).toBe(false);
     expect(parsed?.intent?.time).toEqual({ hour: 13, minute: 30 });
 
     for (const token of tokenize(item.text).filter((value) => value.kind !== 3)) {

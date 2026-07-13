@@ -35,13 +35,14 @@ test("a correct schedule is accepted with exact spans", async () => {
   expect(record.runId).toBe(CONTEXT.runId);
 
   expect(record.spans).toEqual([
-    { start: 0, end: 5, label: "RECUR", clauseStart: false },
+    { start: 0, end: 5, label: "RECUR", clauseStart: false, actionable: true },
     {
       start: 6,
       end: 12,
-      label: "WEEKDAY",
+      label: "WEEKDAY_MON",
       clauseStart: true,
       value: "monday",
+      actionable: true,
     },
   ]);
 
@@ -148,7 +149,7 @@ test("model-proposed slots are schema-invalid and never reach alignment", async 
         weekdays: ["monday"],
       },
       output: "schedule",
-      slots: [{ start: 0, end: 12, label: "WEEKDAY" }],
+      slots: [{ start: 0, end: 12, label: "WEEKDAY_MON" }],
     },
     CONTEXT,
   );

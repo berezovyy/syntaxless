@@ -18,11 +18,16 @@ from pathlib import Path
 import numpy as np
 
 #: dtype spellings used by the manifest's `format` block.
+#: Old shards stay readable: the manifest `format` names the dtype per field.
 NUMPY_DTYPES: dict[str, type[np.generic]] = {
     "uint8": np.uint8,
+    "int8": np.int8,
     "uint16": np.uint16,
     "int16": np.int16,
     "uint32": np.uint32,
+    "int32": np.int32,
+    "int64": np.int64,
+    "uint64": np.uint64,
     "float32": np.float32,
 }
 
@@ -53,38 +58,107 @@ SPEECH_ACT_NAMES = (
 )
 SPEECH_ACT_INDEX = {name: index for index, name in enumerate(SPEECH_ACT_NAMES)}
 
-# Must match packages/cron/src/model/labels.ts.
+# Must match packages/cron/src/model/labels.ts. Never reorder.
 ROLE_LABELS = (
     "O",
     "RECUR",
-    "INTERVAL",
-    "WEEKDAY",
-    "DAYGROUP",
-    "DOM",
-    "ORDINAL",
-    "HOUR",
-    "MINUTE",
-    "MERIDIEM",
-    "BOUND",
-    "EXCEPT",
-    "COUNT",
     "GLUE",
     "EDGE",
-)
-CONTENT_LABELS = {
-    "INTERVAL",
-    "WEEKDAY",
-    "DAYGROUP",
-    "DOM",
-    "ORDINAL",
-    "HOUR",
-    "MINUTE",
-    "MERIDIEM",
     "COUNT",
+    "WEEKDAY_MON",
+    "WEEKDAY_TUE",
+    "WEEKDAY_WED",
+    "WEEKDAY_THU",
+    "WEEKDAY_FRI",
+    "WEEKDAY_SAT",
+    "WEEKDAY_SUN",
+    "DAYGROUP_WEEKDAY",
+    "DAYGROUP_WEEKEND",
+    "DAYGROUP_DAY",
+    "HOUR_0",
+    "HOUR_1",
+    "HOUR_2",
+    "HOUR_3",
+    "HOUR_4",
+    "HOUR_5",
+    "HOUR_6",
+    "HOUR_7",
+    "HOUR_8",
+    "HOUR_9",
+    "HOUR_10",
+    "HOUR_11",
+    "HOUR_12",
+    "HOUR_13",
+    "HOUR_14",
+    "HOUR_15",
+    "HOUR_16",
+    "HOUR_17",
+    "HOUR_18",
+    "HOUR_19",
+    "HOUR_20",
+    "HOUR_21",
+    "HOUR_22",
+    "HOUR_23",
+    "HOUR_LIT",
+    "MINUTE_0",
+    "MINUTE_15",
+    "MINUTE_30",
+    "MINUTE_45",
+    "MINUTE_LIT",
+    "MERIDIEM_AM",
+    "MERIDIEM_PM",
+    "MERIDIEM_NONE",
+    "ORDINAL_1",
+    "ORDINAL_2",
+    "ORDINAL_3",
+    "ORDINAL_4",
+    "ORDINAL_5",
+    "ORDINAL_LAST",
+    "BOUND_START",
+    "BOUND_END_EXCL",
+    "BOUND_END_INCL",
+    "BOUND_BETWEEN",
+    "EXCEPT",
+    "UNIT_MIN",
+    "UNIT_HOUR",
+    "UNIT_DAY",
+    "UNIT_WEEK",
+    "UNIT_MONTH",
+    "INTERVAL_2",
+    "INTERVAL_3",
+    "INTERVAL_4",
+    "INTERVAL_5",
+    "INTERVAL_6",
+    "INTERVAL_7",
+    "INTERVAL_8",
+    "INTERVAL_9",
+    "INTERVAL_10",
+    "INTERVAL_11",
+    "INTERVAL_12",
+    "INTERVAL_LIT",
+    "DOM_LIT",
+)
+STRUCTURAL_LABELS = {
+    "RECUR",
+    "GLUE",
+    "EDGE",
+    "BOUND_START",
+    "BOUND_END_EXCL",
+    "BOUND_END_INCL",
+    "BOUND_BETWEEN",
+    "EXCEPT",
+}
+CONTENT_LABELS = {
+    name for name in ROLE_LABELS if name != "O" and name not in STRUCTURAL_LABELS
 }
 CONTENT_LABEL_IDS = {
     index for index, name in enumerate(ROLE_LABELS) if name in CONTENT_LABELS
 }
+
+#: Per-epoch validation cap (Track S.1). Full validation is scored at run end.
+VAL_MAX_SEQUENCES = 20_000
+#: `--fresh-each-epoch` draw from the pool.
+FRESH_EPOCH_SIZE = 300_000
 
 
 def schedule_kind_for_frame(frame_name: str) -> int:
@@ -376,6 +450,10 @@ class Dataset:
     def batch(self, indices, device: str | None = None) -> dict:
         """Pad `indices` to the next length bucket and return model tensors.
 
+        Length-bucket shards are contiguous arrays built once. A batch is a
+        gather (or a handful of gathers when a chunk straddles two buckets),
+        never a Python loop that slices the memmap per sequence.
+
         Unused rows hold the manifest's `featureRows` sentinel. Whitespace and
         any label at or above `roleClasses` (the Phase 13 padding sentinel) are
         set to `-100`, the cross-entropy ignore index, so they contribute no
@@ -383,37 +461,54 @@ class Dataset:
         """
         import torch
 
-        count = len(indices)
-        longest = int(max(int(self.lengths[index]) for index in indices))
-        width = length_bucket(longest)
+        index_array = np.asarray(indices, dtype=np.int64)
+        count = int(index_array.size)
+        if count == 0:
+            raise ValueError("batch requires at least one index")
+        starts = self.offsets[index_array].astype(np.int64)
+        lengths = self.lengths[index_array]
+        width = int(length_bucket(int(lengths.max())))
+        token_ix = np.arange(width, dtype=np.int64)
+        valid = token_ix < lengths[:, None]
+        gather = np.where(valid, starts[:, None] + token_ix, 0)
 
-        rows = np.full((count, width, self.rows_per_token), self.feature_rows, dtype=np.int64)
+        rows = np.full(
+            (count, width, self.rows_per_token), self.feature_rows, dtype=np.int64
+        )
+        rows[valid] = np.asarray(self.rows)[gather[valid]]
+
+        raw_labels = np.asarray(self.labels)[gather].astype(np.int64, copy=False)
+        raw_kinds = np.asarray(self.kinds)[gather].astype(np.int64, copy=False)
+        unsupervised = (raw_labels >= self.role_classes) | (raw_kinds == 3)
         labels = np.full((count, width), -100, dtype=np.int64)
+        labels[valid] = np.where(unsupervised[valid], -100, raw_labels[valid])
+
         boundaries = np.zeros((count, width), dtype=np.float32)
+        boundaries[valid] = np.asarray(self.boundaries)[gather[valid]].astype(np.float32)
+
         kinds = np.full((count, width), 3, dtype=np.int64)
+        kinds[valid] = raw_kinds[valid]
+
         neighbors = np.full((count, width, 2), -1, dtype=np.int64)
-        valid = np.zeros((count, width), dtype=bool)
+        neighbors[valid] = np.asarray(self.neighbors)[gather[valid]]
+
         actionable = np.zeros((count, width), dtype=np.float32)
-        speech_acts = np.zeros(count, dtype=np.int64)
+        if self.actionable is not None:
+            actionable[valid] = np.asarray(self.actionable)[gather[valid]].astype(
+                np.float32
+            )
 
-        for row, index in enumerate(indices):
-            start = int(self.offsets[index])
-            end = int(self.offsets[index + 1])
-            length = end - start
-
-            rows[row, :length] = self.rows[start:end]
-            sequence_labels = self.labels[start:end].astype(np.int64)
-            sequence_kinds = self.kinds[start:end].astype(np.int64)
-            unsupervised = (sequence_labels >= self.role_classes) | (sequence_kinds == 3)
-            labels[row, :length] = np.where(unsupervised, -100, sequence_labels)
-            boundaries[row, :length] = self.boundaries[start:end]
-            kinds[row, :length] = sequence_kinds
-            neighbors[row, :length] = self.neighbors[start:end]
-            valid[row, :length] = True
-            if self.actionable is not None:
-                actionable[row, :length] = self.actionable[start:end]
-            if self.speech is not None:
-                speech_acts[row] = int(self.speech[index])
+        speech_acts = (
+            np.asarray(self.speech)[index_array].astype(np.int64, copy=False)
+            if self.speech is not None
+            else np.zeros(count, dtype=np.int64)
+        )
+        if self.frames is not None:
+            schedule_kinds = self.frame_schedule_kinds[
+                np.asarray(self.frames[index_array])
+            ].astype(np.int64, copy=False)
+        else:
+            schedule_kinds = np.zeros(count, dtype=np.int64)
 
         tensors = {
             "rows": torch.as_tensor(rows),
@@ -422,11 +517,7 @@ class Dataset:
             "labels": torch.as_tensor(labels),
             "boundaries": torch.as_tensor(boundaries),
             "kinds": torch.as_tensor(kinds),
-            "schedule_kinds": torch.as_tensor(
-                self.frame_schedule_kinds[np.asarray(self.frames[indices])]
-                if self.frames is not None
-                else np.zeros(count, dtype=np.int64)
-            ),
+            "schedule_kinds": torch.as_tensor(schedule_kinds),
             "speech_acts": torch.as_tensor(speech_acts),
             "actionable": torch.as_tensor(actionable),
         }

@@ -22,6 +22,8 @@ import config as config_module
 from config import Config
 from dataset import (
     Dataset,
+    FRESH_EPOCH_SIZE,
+    VAL_MAX_SEQUENCES,
     fingerprints_path,
     merge_fingerprint_excludes,
     prepare,
@@ -369,6 +371,85 @@ def evaluate(
     }
 
 
+def score_h_if_requested(
+    config: Config, run_dir: Path, model: Tagger, epoch: int
+) -> dict[str, object] | None:
+    """Log H after an epoch when `--h-per-epoch` is set.
+
+    Export + human-evaluate is the real scorer. A missing corpus or a failed
+    subprocess is recorded, not raised — training must still finish a ledger.
+    """
+    if not config.h_per_epoch:
+        return None
+    checkpoint = run_dir / f"epoch-{epoch}.pt"
+    save_checkpoint(checkpoint, model, config, epoch, 0.0, {})
+    repo = repo_root()
+    candidate = run_dir / f"epoch-{epoch}.weights.gen.ts"
+    export_cmd = [
+        "uv",
+        "run",
+        "python",
+        "export.py",
+        "--checkpoint",
+        str(checkpoint),
+        "--candidate",
+        str(candidate),
+        "--candidate-only",
+    ]
+    exported = subprocess.run(
+        export_cmd,
+        cwd=Path(__file__).resolve().parent,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if exported.returncode != 0:
+        return {
+            "ok": False,
+            "error": exported.stderr.strip() or exported.stdout.strip() or "export failed",
+        }
+    command = [
+        "bun",
+        "run",
+        "packages/cron/training/src/human-evaluate.ts",
+        "--partition",
+        "regression",
+        "--weights",
+        str(candidate),
+        "--out",
+        str(run_dir / f"h-epoch-{epoch}.json"),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        return {"ok": False, "error": str(error)}
+    payload_path = run_dir / f"h-epoch-{epoch}.json"
+    if payload_path.exists():
+        import json
+
+        try:
+            parsed = json.loads(payload_path.read_text())
+            return {
+                "ok": True,
+                "correct": parsed.get("correct"),
+                "total": parsed.get("total"),
+                "negatives": parsed.get("negatives"),
+                "silent": parsed.get("silentMeaningChanges"),
+            }
+        except (OSError, ValueError) as error:
+            return {"ok": False, "error": str(error)}
+    return {
+        "ok": False,
+        "error": result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}",
+    }
+
+
 def save_checkpoint(
     path: Path,
     model: Tagger,
@@ -459,6 +540,13 @@ def main(argv: list[str] | None = None) -> int:
         hidden=config.hidden,
         quantization_bits=config.quantization_bits,
     ).to(config.device)
+    if config.init is not None:
+        init_path = Path(config.init)
+        if not init_path.is_absolute():
+            init_path = repo / init_path
+        loaded = torch.load(init_path, map_location=config.device)
+        model.load_state_dict(loaded["model"])
+        print(f"init from {init_path}")
     counts = parameter_counts(model)
     print(f"parameters: {counts['total']} total, {counts['trainable']} trainable")
     print(f"device: {config.device}")
@@ -509,6 +597,13 @@ def main(argv: list[str] | None = None) -> int:
         latest_train = train
 
         qat = epoch >= config.qat_start
+        epoch_seed = config.seed + epoch * EPOCH_SEED_STRIDE
+        if config.fresh_each_epoch:
+            train_cap = min(config.fresh_epoch_size, len(train), FRESH_EPOCH_SIZE)
+        elif external_train is not None:
+            train_cap = training_sequences
+        else:
+            train_cap = None
         train_metrics = train_epoch(
             model,
             optimizer,
@@ -517,21 +612,22 @@ def main(argv: list[str] | None = None) -> int:
             config.batch,
             config.device,
             qat,
-            config.seed + epoch * EPOCH_SEED_STRIDE,
+            epoch_seed,
             config.balance_frames,
             config.balance_kinds,
             config.balance_schedule_kinds,
             config.frame_balance_power,
-            training_sequences if external_train is not None else None,
+            train_cap,
         )
         tokens_seen += int(train_metrics["trainTokens"])
 
+        val_cap = min(len(validation), config.val_max_sequences, VAL_MAX_SEQUENCES)
         metrics = evaluate(
             model,
             validation,
             config.batch,
             config.device,
-            config.eval_samples if external_train is not None else None,
+            val_cap,
         )
         # Equalize checkpoint selection across sentence kinds. The global
         # sequence metric is dominated by large Cartesian schedule lattices;
@@ -552,6 +648,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             non_improving_epochs += 1
 
+        h_metrics = score_h_if_requested(config, run_dir, model, epoch)
         entry = {
             "epoch": epoch,
             "qat": qat,
@@ -559,14 +656,20 @@ def main(argv: list[str] | None = None) -> int:
             "selectionCriterion": criterion,
             "validation": metrics,
             "train": train_metrics,
+            "h": h_metrics,
         }
         history.append(entry)
+        h_note = ""
+        if h_metrics is not None:
+            h_note = (
+                f" H={h_metrics.get('correct', '?')}/{h_metrics.get('total', '?')}"
+            )
         print(
             f"epoch {epoch}: qat={qat} loss={train_metrics['trainLoss']:.4f} "
             f"tokenAcc={metrics['tokenAccuracy']:.4f} "
             f"exactSeq={metrics['exactLabelAndBoundarySequence']:.4f} "
             f"macroKind={metrics['macroKindExactSequence']:.4f} "
-            f"criterion={criterion:.4f}"
+            f"criterion={criterion:.4f}{h_note}"
         )
         if (
             config.early_stopping_patience > 0
@@ -580,6 +683,13 @@ def main(argv: list[str] | None = None) -> int:
             )
             break
 
+    full_validation = evaluate(
+        model,
+        validation,
+        config.batch,
+        config.device,
+        None if len(validation) <= config.val_max_sequences else config.val_max_sequences,
+    )
     label_histogram = {
         "train": latest_train.label_counts if latest_train is not None else {},
         "validation": validation.label_counts,
@@ -613,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
         "bestEpoch": best_epoch,
         "epochsCompleted": len(history),
         "stoppedEarly": stopped_early,
+        "fullValidation": full_validation,
     }
     write_report(run_dir / "report.json", report)
     print(f"best epoch {best_epoch} criterion {best_criterion}")

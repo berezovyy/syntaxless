@@ -19,7 +19,7 @@ describe("heads-only correction span", () => {
 
     const labeled: LabeledToken[] = tokens.map((token) => ({
       token,
-      role: labelId.WEEKDAY,
+      role: token.text === "thursday" ? labelId.WEEKDAY_THU : labelId.WEEKDAY_FRI,
       boundary: token.text === "thursday",
       score: 1,
       actionable: token.text === "friday",
@@ -48,7 +48,7 @@ describe("heads-only correction span", () => {
 
     const labeled: LabeledToken[] = tokens.map((token) => ({
       token,
-      role: labelId.WEEKDAY,
+      role: token.text === "thursday" ? labelId.WEEKDAY_THU : labelId.WEEKDAY_FRI,
       boundary: token.text === "thursday",
       score: 1,
       actionable: false,

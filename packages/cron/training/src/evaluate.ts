@@ -884,7 +884,7 @@ export async function evaluateCorpus(
         text: item.text,
         spans: item.spans,
         intent: item.intent,
-        speechAct: item.speechAct,
+        ...(item.speechAct === undefined ? {} : { speechAct: item.speechAct }),
         family: item.family,
         source: "gold",
       };
@@ -910,13 +910,13 @@ export async function evaluateCorpus(
           accepted: parsedOff.ok,
           actualIntent: parsedOff.ok ? parsedOff.intent : null,
           goldSpans: item.spans,
-          goldSpeechAct: item.speechAct,
+          ...(item.speechAct === undefined ? {} : { goldSpeechAct: item.speechAct }),
           goldLabels,
           predictedLabels,
-          goldActionable: goldActionable.length === 0 ? undefined : goldActionable,
-          predictedActionable: predictedActionable.length === 0 ? undefined : predictedActionable,
+          ...(goldActionable.length === 0 ? {} : { goldActionable }),
+          ...(predictedActionable.length === 0 ? {} : { predictedActionable }),
           goldOracle: oracleDecode(oracleRecord),
-          predictedOracle,
+          ...(predictedOracle === undefined ? {} : { predictedOracle }),
         }),
       });
     }

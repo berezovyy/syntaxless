@@ -34,7 +34,7 @@ describe("exported heads artifact", () => {
       const diagnosticCodes = off.ok ? [] : (off.diagnostics ?? []).map((note) => note.code);
 
       expect(diagnosticCodes).not.toContain("missing-speech-act-head");
-      expect(off.reason ?? "").not.toMatch(/missing-speech-act-head/);
+      expect(off.ok ? "" : off.reason).not.toMatch(/missing-speech-act-head/);
       expect(off.ok).toBe(true);
 
       if (off.ok) {

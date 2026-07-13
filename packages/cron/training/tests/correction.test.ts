@@ -10,7 +10,11 @@ function weekday(name: "thursday" | "friday"): Sentence {
   const sentence = new Sentence();
 
   sentence.clause();
-  sentence.add(name === "thursday" ? "Thursday" : "Friday", "WEEKDAY");
+
+  sentence.add(
+    name === "thursday" ? "Thursday" : "Friday",
+    name === "thursday" ? "WEEKDAY_THU" : "WEEKDAY_FRI",
+  );
 
   return sentence;
 }
@@ -45,7 +49,7 @@ test("Thursday vs Friday wrap golds Friday and only Friday is actionable", () =>
 
   expect(text).toContain("friday");
   expect(text).toContain("thursday");
-  const weekdays = row!.example.spans.filter((span) => span.label === "WEEKDAY");
+  const weekdays = row!.example.spans.filter((span) => span.label.startsWith("WEEKDAY_"));
 
   expect(weekdays).toHaveLength(2);
 
@@ -88,7 +92,8 @@ test("reverse-order wrap still golds B", () => {
 
   const friday = row!.example.spans.find(
     (span) =>
-      span.label === "WEEKDAY" && text.slice(span.start, span.end).toLowerCase() === "friday",
+      span.label.startsWith("WEEKDAY_") &&
+      text.slice(span.start, span.end).toLowerCase() === "friday",
   );
 
   expect(friday?.actionable).toBe(true);

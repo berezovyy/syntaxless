@@ -1,3 +1,13 @@
+import {
+  boundLabel,
+  hourLabel,
+  intervalLabel,
+  meridiemLabel,
+  minuteLabel,
+  ordinalLabel,
+  unitLabel,
+  weekdayLabel,
+} from "../../src/model/labels.js";
 import type { SpeechAct } from "../../src/model/speech-acts";
 /**
  * Deterministic renderer: sampled {@link ScheduleIntent} -> surface text + spans.
@@ -82,7 +92,7 @@ function addWeekdayList(
       sentence.add(connector, "GLUE", connector === WORDS.glue.comma ? "" : " ");
     }
 
-    sentence.add(weekdayText(weekday, mode), "WEEKDAY");
+    sentence.add(weekdayText(weekday, mode), weekdayLabel(weekday));
   });
 }
 
@@ -102,7 +112,7 @@ function ordinalSuffix(day: number): string {
 }
 
 function addDayOfMonth(sentence: Sentence, day: number): void {
-  sentence.add(String(day), "DOM");
+  sentence.add(String(day), "DOM_LIT");
   sentence.add(ordinalSuffix(day), "GLUE", "");
 }
 
@@ -121,29 +131,36 @@ function renderInterval(sentence: Sentence, intent: ScheduleIntent, style: strin
   switch (style) {
     case "every":
       sentence.add(WORDS.recur.every, "RECUR");
-      sentence.add(String(interval), "INTERVAL");
-      sentence.add(unitText, "GLUE");
+      if (interval !== 1) sentence.add(String(interval), intervalLabel(interval));
+      sentence.add(unitText, unitLabel(unit));
       break;
     case "spoken":
       sentence.add(WORDS.recur.every, "RECUR");
-      sentence.add(numberWord(interval), "INTERVAL");
-      sentence.add(unitText, "GLUE");
+
+      if (interval !== 1) {
+        sentence.add(
+          interval >= 2 && interval <= 12 ? numberWord(interval) : String(interval),
+          intervalLabel(interval),
+        );
+      }
+
+      sentence.add(unitText, unitLabel(unit));
       break;
     case "each":
       sentence.add(WORDS.recur.each, "RECUR");
-      sentence.add(String(interval), "INTERVAL");
-      sentence.add(unitText, "GLUE");
+      if (interval !== 1) sentence.add(String(interval), intervalLabel(interval));
+      sentence.add(unitText, unitLabel(unit));
       break;
     case "apart":
-      sentence.add(String(interval), "INTERVAL");
-      sentence.add(unitText, "GLUE");
+      if (interval !== 1) sentence.add(String(interval), intervalLabel(interval));
+      sentence.add(unitText, unitLabel(unit));
       sentence.add(WORDS.glue.apart, "GLUE");
       break;
     case "recurring":
       sentence.add(WORDS.recur.recurring, "RECUR");
       sentence.add(WORDS.recur.every, "RECUR");
-      sentence.add(String(interval), "INTERVAL");
-      sentence.add(unitText, "GLUE");
+      if (interval !== 1) sentence.add(String(interval), intervalLabel(interval));
+      sentence.add(unitText, unitLabel(unit));
       break;
     default:
       throw new RangeError(`interval style: ${style}`);
@@ -182,26 +199,26 @@ function renderWeekdayRange(sentence: Sentence, intent: ScheduleIntent, style: s
 
   switch (style) {
     case "through":
-      sentence.add(WEEKDAY_NAME[first], "WEEKDAY");
-      sentence.add(WORDS.range.through, "GLUE");
-      sentence.add(WEEKDAY_NAME[last], "WEEKDAY");
+      sentence.add(WEEKDAY_NAME[first], weekdayLabel(first));
+      sentence.add(WORDS.range.through, boundLabel("between"));
+      sentence.add(WEEKDAY_NAME[last], weekdayLabel(last));
       break;
     case "from-to":
-      sentence.add(WORDS.range.from, "GLUE");
-      sentence.add(WEEKDAY_NAME[first], "WEEKDAY");
-      sentence.add(WORDS.range.to, "GLUE");
-      sentence.add(WEEKDAY_NAME[last], "WEEKDAY");
+      sentence.add(WORDS.range.from, boundLabel("start"));
+      sentence.add(WEEKDAY_NAME[first], weekdayLabel(first));
+      sentence.add(WORDS.range.to, boundLabel("end-excl"));
+      sentence.add(WEEKDAY_NAME[last], weekdayLabel(last));
       break;
     case "dash":
-      sentence.add(WEEKDAY_ABBR[first], "WEEKDAY");
-      sentence.add(WORDS.glue.dash, "GLUE", "");
-      sentence.add(WEEKDAY_ABBR[last], "WEEKDAY");
+      sentence.add(WEEKDAY_ABBR[first], weekdayLabel(first));
+      sentence.add(WORDS.glue.dash, boundLabel("between"), "");
+      sentence.add(WEEKDAY_ABBR[last], weekdayLabel(last));
       break;
     case "every-through":
       sentence.add(WORDS.recur.every, "RECUR");
-      sentence.add(WEEKDAY_PLURAL[first], "WEEKDAY");
-      sentence.add(WORDS.range.through, "GLUE");
-      sentence.add(WEEKDAY_PLURAL[last], "WEEKDAY");
+      sentence.add(WEEKDAY_PLURAL[first], weekdayLabel(first));
+      sentence.add(WORDS.range.through, boundLabel("between"));
+      sentence.add(WEEKDAY_PLURAL[last], weekdayLabel(last));
       break;
     default:
       throw new RangeError(`weekday-range style: ${style}`);
@@ -214,34 +231,34 @@ function renderOrdinalWeekday(sentence: Sentence, intent: ScheduleIntent, style:
   switch (style) {
     case "the-ordinal-of":
       sentence.add(WORDS.glue.the, "GLUE");
-      sentence.add(ordinal, "ORDINAL");
-      sentence.add(WEEKDAY_NAME[weekday], "WEEKDAY");
+      sentence.add(ordinal, ordinalLabel(ordinal));
+      sentence.add(WEEKDAY_NAME[weekday], weekdayLabel(weekday));
       sentence.add(WORDS.glue.of, "GLUE");
       sentence.add(WORDS.recur.every, "RECUR");
-      sentence.add(WORDS.unit.month, "GLUE");
+      sentence.add(WORDS.unit.month, unitLabel("month"));
       break;
     case "every-ordinal":
       sentence.add(WORDS.recur.every, "RECUR");
-      sentence.add(ordinal, "ORDINAL");
-      sentence.add(WEEKDAY_NAME[weekday], "WEEKDAY");
+      sentence.add(ordinal, ordinalLabel(ordinal));
+      sentence.add(WEEKDAY_NAME[weekday], weekdayLabel(weekday));
       sentence.add(WORDS.glue.of, "GLUE");
       sentence.add(WORDS.glue.the, "GLUE");
-      sentence.add(WORDS.unit.month, "GLUE");
+      sentence.add(WORDS.unit.month, unitLabel("month"));
       break;
     case "last-of":
       sentence.add(WORDS.glue.the, "GLUE");
-      sentence.add(ordinal, "ORDINAL");
-      sentence.add(WEEKDAY_NAME[weekday], "WEEKDAY");
+      sentence.add(ordinal, ordinalLabel(ordinal));
+      sentence.add(WEEKDAY_NAME[weekday], weekdayLabel(weekday));
       sentence.add(WORDS.glue.of, "GLUE");
       sentence.add(WORDS.glue.the, "GLUE");
-      sentence.add(WORDS.unit.month, "GLUE");
+      sentence.add(WORDS.unit.month, unitLabel("month"));
       break;
     case "ordinal-of-each":
-      sentence.add(ordinal, "ORDINAL");
-      sentence.add(WEEKDAY_NAME[weekday], "WEEKDAY");
+      sentence.add(ordinal, ordinalLabel(ordinal));
+      sentence.add(WEEKDAY_NAME[weekday], weekdayLabel(weekday));
       sentence.add(WORDS.glue.of, "GLUE");
       sentence.add(WORDS.recur.each, "RECUR");
-      sentence.add(WORDS.unit.month, "GLUE");
+      sentence.add(WORDS.unit.month, unitLabel("month"));
       break;
     default:
       throw new RangeError(`ordinal-weekday style: ${style}`);
@@ -258,17 +275,17 @@ function renderDayOfMonth(sentence: Sentence, intent: ScheduleIntent, style: str
       addDayOfMonth(sentence, day);
       sentence.add(WORDS.glue.of, "GLUE");
       sentence.add(WORDS.recur.every, "RECUR");
-      sentence.add(WORDS.unit.month, "GLUE");
+      sentence.add(WORDS.unit.month, unitLabel("month"));
       break;
     case "every-month-on":
       sentence.add(WORDS.recur.every, "RECUR");
-      sentence.add(WORDS.unit.month, "GLUE");
+      sentence.add(WORDS.unit.month, unitLabel("month"));
       sentence.add(WORDS.glue.on, "GLUE");
       sentence.add(WORDS.glue.the, "GLUE");
       addDayOfMonth(sentence, day);
       break;
     case "monthly-on":
-      sentence.add(WORDS.recur.monthly, "RECUR");
+      sentence.add(WORDS.recur.monthly, unitLabel("month"));
       sentence.add(WORDS.glue.on, "GLUE");
       sentence.add(WORDS.glue.the, "GLUE");
       addDayOfMonth(sentence, day);
@@ -278,7 +295,7 @@ function renderDayOfMonth(sentence: Sentence, intent: ScheduleIntent, style: str
       addDayOfMonth(sentence, day);
       sentence.add(WORDS.glue.of, "GLUE");
       sentence.add(WORDS.recur.every, "RECUR");
-      sentence.add(WORDS.unit.month, "GLUE");
+      sentence.add(WORDS.unit.month, unitLabel("month"));
       break;
     default:
       throw new RangeError(`day-of-month style: ${style}`);
@@ -296,40 +313,52 @@ function renderTimeOfDay(sentence: Sentence, intent: ScheduleIntent, style: stri
   switch (style) {
     case "digits":
       sentence.add(WORDS.glue.at, "GLUE");
-      sentence.add(String(hour12), "HOUR");
+      sentence.add(String(hour12), hourLabel(hour24));
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(padded, "MINUTE", "");
-      sentence.add(meridiem, "MERIDIEM");
+      sentence.add(padded, minuteLabel(minute), "");
+      sentence.add(meridiem, meridiemLabel(hour24 >= 12 ? "pm" : "am"));
       break;
-    case "spoken":
+
+    case "spoken": {
       sentence.add(WORDS.glue.at, "GLUE");
-      sentence.add(numberWord(hour12), "HOUR");
-      if (minute !== 0) sentence.add(numberWord(minute), "MINUTE");
-      sentence.add(meridiem, "MERIDIEM");
+      sentence.add(numberWord(hour12), hourLabel(hour24));
+
+      if (minute !== 0) {
+        const minuteText =
+          minute === 0 || minute === 15 || minute === 30 || minute === 45
+            ? numberWord(minute)
+            : padded;
+
+        sentence.add(minuteText, minuteLabel(minute));
+      }
+
+      sentence.add(meridiem, meridiemLabel(hour24 >= 12 ? "pm" : "am"));
       break;
+    }
+
     case "qualifier":
       sentence.add(WORDS.glue.at, "GLUE");
-      sentence.add(String(hour12), "HOUR");
+      sentence.add(String(hour12), hourLabel(hour24));
 
       if (minute !== 0) {
         sentence.add(WORDS.glue.colon, "GLUE", "");
-        sentence.add(padded, "MINUTE", "");
+        sentence.add(padded, minuteLabel(minute), "");
       }
 
-      sentence.add(qualifierFor(hour24), "MERIDIEM");
+      sentence.add(qualifierFor(hour24), meridiemLabel(hour24 >= 12 ? "pm" : "am"));
       break;
     case "24h":
       sentence.add(WORDS.glue.at, "GLUE");
-      sentence.add(String(hour24), "HOUR");
+      sentence.add(String(hour24), hourLabel(hour24));
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(padded, "MINUTE", "");
+      sentence.add(padded, minuteLabel(minute), "");
       break;
     case "compact":
       sentence.add(WORDS.glue.at, "GLUE");
-      sentence.add(String(hour12), "HOUR");
+      sentence.add(String(hour12), hourLabel(hour24));
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(padded, "MINUTE", "");
-      sentence.add(meridiem, "MERIDIEM", "");
+      sentence.add(padded, minuteLabel(minute), "");
+      sentence.add(meridiem, meridiemLabel(hour24 >= 12 ? "pm" : "am"), "");
       break;
     default:
       throw new RangeError(`time-of-day style: ${style}`);
@@ -340,7 +369,7 @@ function renderBounds(sentence: Sentence, intent: ScheduleIntent, style: string)
   const { start, end } = intent.bounds!;
 
   sentence.add(WORDS.recur.every, "RECUR");
-  sentence.add(WORDS.unit.day, "GLUE");
+  sentence.add(WORDS.unit.day, unitLabel("day"));
 
   switch (style) {
     case "from-to":
@@ -349,48 +378,48 @@ function renderBounds(sentence: Sentence, intent: ScheduleIntent, style: string)
       }
 
       if (start !== undefined) {
-        sentence.add(WORDS.bounds.from, "BOUND");
-        sentence.add(start, "DOM");
+        sentence.add(WORDS.bounds.from, boundLabel("start"));
+        sentence.add(start, "DOM_LIT");
       }
 
       if (end !== undefined) {
-        sentence.add(WORDS.bounds.to, "BOUND");
-        sentence.add(end, "DOM");
+        sentence.add(WORDS.bounds.to, boundLabel("end-excl"));
+        sentence.add(end, "DOM_LIT");
       }
 
       break;
     case "starting":
       if (start !== undefined) {
-        sentence.add(WORDS.bounds.starting, "BOUND");
-        sentence.add(start, "DOM");
+        sentence.add(WORDS.bounds.starting, boundLabel("start"));
+        sentence.add(start, "DOM_LIT");
       } else {
-        sentence.add(WORDS.bounds.until, "BOUND");
-        sentence.add(end!, "DOM");
+        sentence.add(WORDS.bounds.until, boundLabel("end-excl"));
+        sentence.add(end!, "DOM_LIT");
       }
 
       break;
     case "until":
       if (end !== undefined) {
-        sentence.add(WORDS.bounds.until, "BOUND");
-        sentence.add(end, "DOM");
+        sentence.add(WORDS.bounds.until, boundLabel("end-excl"));
+        sentence.add(end, "DOM_LIT");
       } else {
-        sentence.add(WORDS.bounds.starting, "BOUND");
-        sentence.add(start!, "DOM");
+        sentence.add(WORDS.bounds.starting, boundLabel("start"));
+        sentence.add(start!, "DOM_LIT");
       }
 
       break;
     case "between":
       if (start !== undefined && end !== undefined) {
-        sentence.add(WORDS.bounds.between, "BOUND");
-        sentence.add(start, "DOM");
+        sentence.add(WORDS.bounds.between, boundLabel("between"));
+        sentence.add(start, "DOM_LIT");
         sentence.add(WORDS.glue.and, "GLUE");
-        sentence.add(end, "DOM");
+        sentence.add(end, "DOM_LIT");
       } else if (start !== undefined) {
-        sentence.add(WORDS.bounds.from, "BOUND");
-        sentence.add(start, "DOM");
+        sentence.add(WORDS.bounds.from, boundLabel("start"));
+        sentence.add(start, "DOM_LIT");
       } else {
-        sentence.add(WORDS.bounds.until, "BOUND");
-        sentence.add(end!, "DOM");
+        sentence.add(WORDS.bounds.until, boundLabel("end-excl"));
+        sentence.add(end!, "DOM_LIT");
       }
 
       break;
@@ -405,7 +434,7 @@ function renderBaseFrequency(sentence: Sentence, intent: ScheduleIntent): void {
   if (intent.weekdays !== undefined && intent.weekdays.length > 0) {
     addWeekdayList(sentence, intent.weekdays, "full", WORDS.glue.and);
   } else {
-    sentence.add(WORDS.unit.day, "GLUE");
+    sentence.add(WORDS.unit.day, unitLabel("day"));
   }
 }
 

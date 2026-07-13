@@ -48,3 +48,25 @@ export function hour24From12(hour12: number, meridiem: "am" | "pm"): number {
 export function hourWithoutMeridiemIsInvertible(shown: number, intentHour: number): boolean {
   return Number.isFinite(shown) && shown === intentHour;
 }
+
+/** DOM_LIT calendar payload: ISO `YYYY-MM-DD` digits only. */
+export function parseDateLiteral(text: string): string | undefined {
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
+
+  if (iso === null) return undefined;
+  const year = Number(iso[1]);
+  const month = Number(iso[2]);
+  const day = Number(iso[3]);
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    year < 1 ||
+    candidate.getUTCFullYear() !== year ||
+    candidate.getUTCMonth() !== month - 1 ||
+    candidate.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+
+  return `${iso[1]}-${iso[2]}-${iso[3]}`;
+}

@@ -558,6 +558,27 @@ def run_gate(
     return completed.returncode, report, output
 
 
+def write_candidate_module(checkpoint_path: Path, candidate_path: Path) -> Path:
+    """Pack the checkpoint into a weights.gen.ts module without promoting it."""
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    bits = int(checkpoint.get("quantizationBits", QUANTIZATION_BITS))
+    if bits != QUANTIZATION_BITS:
+        raise ValueError(f"checkpoint uses int{bits}; the exporter ships int6")
+    state = checkpoint["model"]
+    labels = load_labels()
+    role_classes = int(checkpoint["roleClasses"])
+    if len(labels) != role_classes:
+        raise ValueError(
+            f"labels.ts has {len(labels)} labels but the checkpoint has {role_classes}"
+        )
+    hidden = int(state["embedding.weight"].shape[1])
+    segments, q = pack_state(state)
+    artifact_sha = sha256_text(q)
+    artifact = build_artifact(segments, q, labels, checkpoint, hidden, -0.3)
+    write_text_atomic(candidate_path, render_module(artifact, artifact_sha))
+    return candidate_path
+
+
 def export(
     checkpoint_path: Path,
     candidate_path: Path,
@@ -737,12 +758,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch", type=int, default=64)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--max-parity", type=int, default=MAX_PARITY_SEQUENCES)
+    parser.add_argument(
+        "--candidate-only",
+        action="store_true",
+        help="write the candidate weights module and stop; no gate, promotion, or calibration",
+    )
     args = parser.parse_args(argv)
 
     checkpoint_path = resolve_path(args.checkpoint)
     if not checkpoint_path.exists():
         raise SystemExit(f"checkpoint not found: {checkpoint_path}")
     data_dir = resolve_path(args.data_dir) if args.data_dir else None
+
+    if args.candidate_only:
+        path = write_candidate_module(
+            checkpoint_path, resolve_path(args.candidate)
+        )
+        print(f"candidate-only -> {path}")
+        return 0
 
     report = export(
         checkpoint_path=checkpoint_path,

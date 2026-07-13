@@ -15,9 +15,9 @@ function weekdayNine(): Sentence {
 
   inner.clause();
   inner.add("every", "RECUR");
-  inner.add("weekday", "DAYGROUP");
+  inner.add("weekday", "DAYGROUP_WEEKDAY");
   inner.add("at", "GLUE");
-  inner.add("9", "HOUR");
+  inner.add("9", "HOUR_9");
 
   return inner;
 }
@@ -49,9 +49,9 @@ test("descriptive wrap keeps inner roles and empties the actionable set", () => 
   );
 
   expect(labels.every).toBe("RECUR");
-  expect(labels.weekday).toBe("DAYGROUP");
+  expect(labels.weekday).toBe("DAYGROUP_WEEKDAY");
   expect(labels.at).toBe("GLUE");
-  expect(labels["9"]).toBe("HOUR");
+  expect(labels["9"]).toBe("HOUR_9");
   expect(labels["the shop is open"]).toBe("O");
   expect(wrapped.spans.every((span) => span.actionable === false)).toBe(true);
   aligned(wrapped);
@@ -67,9 +67,9 @@ test("request wrap keeps inner non-O tokens actionable", () => {
 
   expect(byLabel.get("O")).toBe(false);
   expect(byLabel.get("RECUR")).toBe(true);
-  expect(byLabel.get("DAYGROUP")).toBe(true);
+  expect(byLabel.get("DAYGROUP_WEEKDAY")).toBe(true);
   expect(byLabel.get("GLUE")).toBe(true);
-  expect(byLabel.get("HOUR")).toBe(true);
+  expect(byLabel.get("HOUR_9")).toBe(true);
 });
 
 test("quoted wrap keeps inner labels and marks quotes as O", () => {
@@ -86,9 +86,9 @@ test("quoted wrap keeps inner labels and marks quotes as O", () => {
   expect(quotes.length).toBe(2);
   expect(quotes.every((span) => span.label === "O" && span.actionable === false)).toBe(true);
 
-  expect(wrapped.spans.some((span) => span.label === "DAYGROUP" && span.actionable === false)).toBe(
-    true,
-  );
+  expect(
+    wrapped.spans.some((span) => span.label.startsWith("DAYGROUP_") && span.actionable === false),
+  ).toBe(true);
 
   aligned(wrapped);
 });
@@ -156,8 +156,14 @@ test("descriptive wrap of a daily inner keeps INTERVAL and HOUR", () => {
 
   expect(row).toBeDefined();
   expect(row!.example.text).toContain("daily");
-  expect(row!.example.spans.some((span) => span.label === "INTERVAL")).toBe(true);
-  expect(row!.example.spans.some((span) => span.label === "HOUR")).toBe(true);
+
+  expect(
+    row!.example.spans.some(
+      (span) => span.label.startsWith("INTERVAL") || span.label.startsWith("UNIT_"),
+    ),
+  ).toBe(true);
+
+  expect(row!.example.spans.some((span) => span.label.startsWith("HOUR_"))).toBe(true);
   expect(row!.example.spans.filter((span) => span.label === "O").length).toBeGreaterThan(0);
 });
 
@@ -167,10 +173,12 @@ test("question wrap of a weekly clock keeps WEEKDAY and HOUR", () => {
   expect(row.example.speechAct).toBe("question");
 
   expect(
-    row.example.spans.some((span) => span.label === "WEEKDAY" || span.label === "DAYGROUP"),
+    row.example.spans.some(
+      (span) => span.label.startsWith("WEEKDAY_") || span.label.startsWith("DAYGROUP_"),
+    ),
   ).toBe(true);
 
-  expect(row.example.spans.some((span) => span.label === "HOUR")).toBe(true);
+  expect(row.example.spans.some((span) => span.label.startsWith("HOUR_"))).toBe(true);
 });
 
 test("quoted wrap of an interval keeps INTERVAL and quote tokens", () => {
@@ -179,7 +187,12 @@ test("quoted wrap of an interval keeps INTERVAL and quote tokens", () => {
   );
 
   expect(row).toBeDefined();
-  expect(row!.example.spans.some((span) => span.label === "INTERVAL")).toBe(true);
+
+  expect(
+    row!.example.spans.some(
+      (span) => span.label.startsWith("INTERVAL") || span.label.startsWith("UNIT_"),
+    ),
+  ).toBe(true);
 
   expect(
     row!.example.spans.some(

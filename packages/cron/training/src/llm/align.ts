@@ -16,7 +16,17 @@
  * `unaligned`. Value agreement with the intent is checked by `verify.ts`; this
  * module only labels and reports what it saw.
  */
-import { isStructural } from "../../../src/model/labels.js";
+import {
+  dayGroupLabel,
+  hourLabel,
+  intervalLabel,
+  isStructural,
+  meridiemLabel,
+  minuteLabel,
+  ordinalLabel,
+  unitLabel,
+  weekdayLabel,
+} from "../../../src/model/labels.js";
 import type { ContentLabel, Label } from "../../../src/model/labels.js";
 import { tokenize } from "../../../src/model/tokenizer.js";
 import type { RawToken } from "../../../src/model/tokenizer.js";
@@ -153,13 +163,13 @@ export function expectedValues(intent: ScheduleIntent): ExpectedValue[] {
   }
 
   for (const weekday of weekdays) {
-    expected.push({ label: "WEEKDAY", value: weekday, required: true });
+    expected.push({ label: weekdayLabel(weekday), value: weekday, required: true });
   }
 
   for (const [word, group] of Object.entries(WEEKDAY_GROUPS)) {
     if (group.length > 1 && group.every((day) => weekdays.has(day))) {
       expected.push({
-        label: "DAYGROUP",
+        label: word.includes("weekend") ? dayGroupLabel("weekend") : dayGroupLabel("weekday"),
         value: word,
         required: false,
         covers: group,
@@ -168,42 +178,42 @@ export function expectedValues(intent: ScheduleIntent): ExpectedValue[] {
   }
 
   expected.push({
-    label: "INTERVAL",
+    label: intervalLabel(intent.frequency.interval),
     value: intent.frequency.interval,
     required: intent.frequency.interval > 1,
   });
 
   if (intent.ordinalWeekday !== undefined) {
     expected.push({
-      label: "ORDINAL",
+      label: ordinalLabel(intent.ordinalWeekday.ordinal),
       value: intent.ordinalWeekday.ordinal,
       required: true,
     });
   }
 
   if (intent.dayOfMonth !== undefined) {
-    expected.push({ label: "DOM", value: intent.dayOfMonth, required: true });
+    expected.push({ label: "DOM_LIT", value: intent.dayOfMonth, required: true });
   }
 
   if (intent.time !== undefined) {
     const { hour, minute } = intent.time;
 
-    expected.push({ label: "HOUR", value: hour, required: true });
-    expected.push({ label: "MINUTE", value: minute, required: minute !== 0 });
+    expected.push({ label: hourLabel(hour), value: hour, required: true });
+    expected.push({ label: minuteLabel(minute), value: minute, required: minute !== 0 });
 
     expected.push({
-      label: "MERIDIEM",
+      label: meridiemLabel(hour >= 12 ? "pm" : "am"),
       value: hour >= 12 ? "pm" : "am",
       required: false,
     });
   }
 
   if (intent.bounds?.start !== undefined) {
-    expected.push({ label: "DOM", value: intent.bounds.start, required: true });
+    expected.push({ label: "DOM_LIT", value: intent.bounds.start, required: true });
   }
 
   if (intent.bounds?.end !== undefined) {
-    expected.push({ label: "DOM", value: intent.bounds.end, required: true });
+    expected.push({ label: "DOM_LIT", value: intent.bounds.end, required: true });
   }
 
   return expected;
@@ -222,7 +232,7 @@ function numericObligations(intent: ScheduleIntent): NumericObligation[] {
   const interval = intent.frequency.interval;
 
   obligations.push({
-    label: "INTERVAL",
+    label: intervalLabel(interval),
     value: interval,
     digits: new Set([String(interval)]),
     words: new Set(wordsForNumber(interval)),
@@ -234,7 +244,7 @@ function numericObligations(intent: ScheduleIntent): NumericObligation[] {
     const twelve = hour12(hour);
 
     obligations.push({
-      label: "HOUR",
+      label: hourLabel(hour),
       value: hour,
       digits: new Set([String(hour), String(twelve)]),
       words: new Set([...wordsForNumber(hour), ...wordsForNumber(twelve)]),
@@ -242,7 +252,7 @@ function numericObligations(intent: ScheduleIntent): NumericObligation[] {
     });
 
     obligations.push({
-      label: "MINUTE",
+      label: minuteLabel(minute),
       value: minute,
       digits: new Set([String(minute), String(minute).padStart(2, "0")]),
       words: new Set(wordsForNumber(minute)),
@@ -252,7 +262,7 @@ function numericObligations(intent: ScheduleIntent): NumericObligation[] {
 
   if (intent.dayOfMonth !== undefined) {
     obligations.push({
-      label: "DOM",
+      label: "DOM_LIT",
       value: intent.dayOfMonth,
       digits: new Set([String(intent.dayOfMonth)]),
       words: new Set(wordsForNumber(intent.dayOfMonth)),
@@ -343,7 +353,7 @@ export function alignText(text: string, intent: ScheduleIntent): AlignResult {
 
         for (let offset = 0; offset < phrase.words.length; offset++) {
           assigned.set(wordIndices[cursor + offset]!, {
-            label: "MERIDIEM",
+            label: meridiemLabel(phrase.meridiem),
             value: phrase.meridiem,
           });
         }
@@ -364,7 +374,7 @@ export function alignText(text: string, intent: ScheduleIntent): AlignResult {
       );
 
       if (bound !== undefined) {
-        assigned.set(index, { label: "DOM", value: bound.value });
+        assigned.set(index, { label: "DOM_LIT", value: bound.value });
         continue;
       }
 
@@ -398,33 +408,41 @@ export function alignText(text: string, intent: ScheduleIntent): AlignResult {
       const weekday = WEEKDAY_SURFACES.get(surface);
 
       if (weekday !== undefined) {
-        assigned.set(index, { label: "WEEKDAY", value: weekday });
+        assigned.set(index, { label: weekdayLabel(weekday), value: weekday });
         continue;
       }
 
       const group = WEEKDAY_GROUPS[surface];
 
       if (group !== undefined) {
-        assigned.set(index, { label: "DAYGROUP", value: surface });
+        assigned.set(index, {
+          label: surface.includes("weekend") ? dayGroupLabel("weekend") : dayGroupLabel("weekday"),
+          value: surface,
+        });
+
         continue;
       }
 
       const ordinal = ORDINAL_ALIASES[surface];
 
       if (ordinal !== undefined) {
-        assigned.set(index, { label: "ORDINAL", value: ordinal });
+        assigned.set(index, { label: ordinalLabel(ordinal), value: ordinal });
         continue;
       }
 
       if (MERIDIEM_WORDS.has(surface)) {
-        assigned.set(index, { label: "MERIDIEM", value: surface });
+        assigned.set(index, {
+          label: meridiemLabel(surface === "pm" ? "pm" : "am"),
+          value: surface,
+        });
+
         continue;
       }
 
       const unit = UNIT_SURFACES.get(surface);
 
       if (unit !== undefined) {
-        assigned.set(index, { label: "GLUE", value: unit });
+        assigned.set(index, { label: unitLabel(unit), value: unit });
         continue;
       }
 

@@ -41,7 +41,7 @@ function makeRecord(options: RecordOptions): CorpusRecord {
     fingerprint: options.fingerprint ?? `fp-${options.id}`,
     text: options.text,
     intent: options.intent === undefined ? MONDAY : options.intent,
-    speechAct: options.speechAct,
+    ...(options.speechAct === undefined ? {} : { speechAct: options.speechAct }),
     spans: options.spans,
     source: "rule",
   };
@@ -57,7 +57,7 @@ test("a well-formed example yields the expected labelCounts", () => {
     text: "every Monday",
     spans: [
       { start: 0, end: 5, label: "RECUR", clauseStart: false },
-      { start: 6, end: 12, label: "WEEKDAY", clauseStart: true },
+      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
     ],
   });
 
@@ -66,11 +66,11 @@ test("a well-formed example yields the expected labelCounts", () => {
   const expected = zeroCounts();
 
   expected.RECUR = 1;
-  expected.WEEKDAY = 1;
+  expected.WEEKDAY_MON = 1;
   expect(shard.labelCounts).toEqual(expected);
   expect(shard.sequences).toBe(1);
   expect(shard.tokens).toBe(3);
-  expect([...shard.labels]).toEqual([labelId.RECUR, PADDING_LABEL, labelId.WEEKDAY]);
+  expect([...shard.labels]).toEqual([labelId.RECUR, PADDING_LABEL, labelId.WEEKDAY_MON]);
   expect([...shard.boundaries]).toEqual([0, 0, 1]);
   expect([...shard.kinds]).toEqual([0, 3, 0]);
 });
@@ -81,7 +81,7 @@ test("whitespace tokens carry no label and no boundary", () => {
     text: "every Monday",
     spans: [
       { start: 0, end: 5, label: "RECUR", clauseStart: false },
-      { start: 6, end: 12, label: "WEEKDAY", clauseStart: true },
+      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
     ],
   });
 
@@ -99,7 +99,7 @@ test("a fragment starting mid-token throws Unaligned supervision", () => {
     text: "every Monday",
     spans: [
       { start: 1, end: 5, label: "RECUR", clauseStart: false },
-      { start: 6, end: 12, label: "WEEKDAY", clauseStart: true },
+      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
     ],
   });
 
@@ -113,7 +113,7 @@ test("labels.bin length equals rows.bin bytes / 2 / rowsPerToken", () => {
       text: "every Monday",
       spans: [
         { start: 0, end: 5, label: "RECUR", clauseStart: false },
-        { start: 6, end: 12, label: "WEEKDAY", clauseStart: true },
+        { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
       ],
     }),
     makeRecord({
@@ -121,8 +121,8 @@ test("labels.bin length equals rows.bin bytes / 2 / rowsPerToken", () => {
       text: "every 2 hours",
       spans: [
         { start: 0, end: 5, label: "RECUR", clauseStart: false },
-        { start: 6, end: 7, label: "INTERVAL", clauseStart: true },
-        { start: 8, end: 13, label: "GLUE", clauseStart: false },
+        { start: 6, end: 7, label: "INTERVAL_2", clauseStart: true },
+        { start: 8, end: 13, label: "UNIT_HOUR", clauseStart: false },
       ],
     }),
   ];
@@ -185,7 +185,7 @@ test("a request defaults structural tokens to actionable when the span omits the
     speechAct: "request",
     spans: [
       { start: 0, end: 5, label: "RECUR", clauseStart: false },
-      { start: 6, end: 12, label: "WEEKDAY", clauseStart: true },
+      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
     ],
   });
 
@@ -201,7 +201,7 @@ test("a request writes speech-act id and content-token actionable bits", () => {
     speechAct: "request",
     spans: [
       { start: 0, end: 5, label: "RECUR", clauseStart: false, actionable: false },
-      { start: 6, end: 12, label: "WEEKDAY", clauseStart: true, actionable: true },
+      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true, actionable: true },
     ],
   });
 
@@ -219,9 +219,9 @@ test("a descriptive sequence has descriptive speech-act and no actionable tokens
   sentence.add("the shop is open", "O", " ", false);
   sentence.clause();
   sentence.add("every", "RECUR", " ", false);
-  sentence.add("weekday", "DAYGROUP", " ", false);
+  sentence.add("weekday", "DAYGROUP_WEEKDAY", " ", false);
   sentence.add("at", "GLUE", " ", false);
-  sentence.add("9", "HOUR", " ", false);
+  sentence.add("9", "HOUR_9", " ", false);
 
   const record = makeRecord({
     id: "feat-descriptive",
@@ -237,7 +237,10 @@ test("a descriptive sequence has descriptive speech-act and no actionable tokens
   expect([...shard.speech]).toEqual([speechActId.descriptive]);
   expect(shard.actionable.length).toBe(shard.tokens);
   expect([...shard.actionable].every((bit) => bit === 0)).toBe(true);
-  expect(shard.labels.includes(labelId.DAYGROUP) && shard.labels.includes(labelId.HOUR)).toBe(true);
+
+  expect(
+    shard.labels.includes(labelId.DAYGROUP_WEEKDAY) && shard.labels.includes(labelId.HOUR_9),
+  ).toBe(true);
 });
 
 test("a correction sequence marks only B tokens actionable", () => {
@@ -249,9 +252,9 @@ test("a correction sequence marks only B tokens actionable", () => {
     family: "terse",
     spans: [
       { start: 0, end: 7, label: "O", clauseStart: false, actionable: false },
-      { start: 8, end: 14, label: "WEEKDAY", clauseStart: true, actionable: true },
+      { start: 8, end: 14, label: "WEEKDAY_FRI", clauseStart: true, actionable: true },
       { start: 15, end: 26, label: "O", clauseStart: false, actionable: false },
-      { start: 27, end: 35, label: "WEEKDAY", clauseStart: false, actionable: false },
+      { start: 27, end: 35, label: "WEEKDAY_THU", clauseStart: false, actionable: false },
     ],
   });
 
@@ -261,8 +264,8 @@ test("a correction sequence marks only B tokens actionable", () => {
   const tokens = ["i", " ", "meant", " ", "friday", " ", "rather", " ", "than", " ", "thursday"];
 
   expect(shard.tokens).toBe(tokens.length);
-  const friday = [...shard.labels].findIndex((id) => id === labelId.WEEKDAY);
-  const thursday = [...shard.labels].lastIndexOf(labelId.WEEKDAY);
+  const friday = [...shard.labels].findIndex((id) => id === labelId.WEEKDAY_FRI);
+  const thursday = [...shard.labels].lastIndexOf(labelId.WEEKDAY_THU);
 
   expect(friday).toBeGreaterThanOrEqual(0);
   expect(thursday).toBeGreaterThan(friday);
@@ -278,7 +281,7 @@ test("an unknown speechAct is a hard error, never request", () => {
     speechAct: "please" as CorpusRecord["speechAct"],
     spans: [
       { start: 0, end: 5, label: "RECUR", clauseStart: false },
-      { start: 6, end: 12, label: "WEEKDAY", clauseStart: true },
+      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
     ],
   });
 

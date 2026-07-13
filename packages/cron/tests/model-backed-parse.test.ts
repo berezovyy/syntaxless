@@ -125,7 +125,7 @@ describe("heads-only lexical facts from labels", () => {
 
     const labeled: LabeledToken[] = tokens.map((token) => ({
       token,
-      role: labelId.WEEKDAY,
+      role: labelId.WEEKDAY_MON,
       boundary: true,
       score: 1,
       actionable: true,
@@ -152,9 +152,9 @@ describe("heads-only lexical facts from labels", () => {
         token.text === "at"
           ? labelId.O
           : token.text === "9pm" || token.text === "9"
-            ? labelId.HOUR
+            ? labelId.HOUR_21
             : token.text === "pm"
-              ? labelId.MERIDIEM
+              ? labelId.MERIDIEM_PM
               : labelId.O,
       boundary: token.text !== "at",
       score: 1,
@@ -189,9 +189,11 @@ describe("heads-only lexical facts from labels", () => {
       if (!result.ok) {
         expect(result.code).toBe("model-error");
 
-        expect(result.diagnostics.some((note) => note.code === "missing-speech-act-head")).toBe(
-          true,
-        );
+        expect(
+          result.diagnostics.some(
+            (note) => note.code === "missing-speech-act-head" || note.code === "stale-weights",
+          ),
+        ).toBe(true);
       }
     }
   });
@@ -236,7 +238,7 @@ describe("confidence bands", () => {
   test("a low band clears the intent and carries a warning", () => {
     // Use a token-only schedule without deterministic numeric extraction so
     // this isolates the fallback model-margin policy.
-    const labeled = labeledWith("daily", [labelId.INTERVAL], 0.01);
+    const labeled = labeledWith("daily", [labelId.UNIT_DAY], 0.01);
     const result: ParseResult = headsResult(labeled);
 
     expect(result.ok).toBe(false);
@@ -248,7 +250,7 @@ describe("confidence bands", () => {
   });
 
   test("a medium band keeps the intent and attaches a suggestion", () => {
-    const labeled = labeledWith("daily", [labelId.INTERVAL], 0.7);
+    const labeled = labeledWith("daily", [labelId.UNIT_DAY], 0.7);
     const result = headsResult(labeled);
 
     expect(result.ok).toBe(true);
@@ -260,7 +262,7 @@ describe("confidence bands", () => {
   });
 
   test("a high band is clean", () => {
-    const labeled = labeledWith("daily", [labelId.INTERVAL], 0.99);
+    const labeled = labeledWith("daily", [labelId.UNIT_DAY], 0.99);
     const result = headsResult(labeled);
 
     expect(result.ok).toBe(true);
@@ -313,7 +315,12 @@ describe("heads-only public parse", () => {
 
     if (!result.ok) {
       expect(result.code).toBe("model-error");
-      expect(result.diagnostics.some((note) => note.code === "missing-speech-act-head")).toBe(true);
+
+      expect(
+        result.diagnostics.some(
+          (note) => note.code === "missing-speech-act-head" || note.code === "stale-weights",
+        ),
+      ).toBe(true);
     }
   });
 
@@ -324,7 +331,12 @@ describe("heads-only public parse", () => {
 
     if (!result.ok) {
       expect(result.code).toBe("model-error");
-      expect(result.diagnostics.some((note) => note.code === "missing-speech-act-head")).toBe(true);
+
+      expect(
+        result.diagnostics.some(
+          (note) => note.code === "missing-speech-act-head" || note.code === "stale-weights",
+        ),
+      ).toBe(true);
     }
   });
 
@@ -333,7 +345,7 @@ describe("heads-only public parse", () => {
 
     const labeled: LabeledToken[] = tokens.map((token) => ({
       token,
-      role: labelId.INTERVAL,
+      role: labelId.UNIT_DAY,
       boundary: true,
       score: 0.01,
       actionable: true,
@@ -355,9 +367,11 @@ describe("heads-only public parse", () => {
       if (!result.ok) {
         expect(result.code).toBe("model-error");
 
-        expect(result.diagnostics.some((note) => note.code === "missing-speech-act-head")).toBe(
-          true,
-        );
+        expect(
+          result.diagnostics.some(
+            (note) => note.code === "missing-speech-act-head" || note.code === "stale-weights",
+          ),
+        ).toBe(true);
       }
     },
   );
@@ -371,11 +385,11 @@ describe("heads-only public parse", () => {
         token.text === "every"
           ? labelId.RECUR
           : token.text === "weekday"
-            ? labelId.DAYGROUP
+            ? labelId.DAYGROUP_WEEKDAY
             : token.text === "at"
               ? labelId.O
               : token.text === "9"
-                ? labelId.HOUR
+                ? labelId.HOUR_9
                 : labelId.O,
       boundary: token.text === "every",
       score: 1,
@@ -401,11 +415,11 @@ describe("heads-only public parse", () => {
         token.text === "every"
           ? labelId.RECUR
           : token.text === "weekday"
-            ? labelId.DAYGROUP
+            ? labelId.DAYGROUP_WEEKDAY
             : token.text === "at"
               ? labelId.O
               : token.text === "9"
-                ? labelId.HOUR
+                ? labelId.HOUR_9
                 : labelId.O,
       boundary: token.text === "every",
       score: 1,

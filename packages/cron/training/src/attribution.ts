@@ -135,8 +135,8 @@ export function goldViolatesSemantics(input: AttributionInput): boolean {
   const spans = input.goldSpans;
 
   if (intent?.time !== undefined && spans !== undefined) {
-    const hourSpan = spans.find((span) => span.label === "HOUR");
-    const hasMeridiem = spans.some((span) => span.label === "MERIDIEM");
+    const hourSpan = spans.find((span) => span.label.startsWith("HOUR_"));
+    const hasMeridiem = spans.some((span) => span.label.startsWith("MERIDIEM_"));
 
     if (hourSpan !== undefined && !hasMeridiem) {
       const shown = Number(input.text.slice(hourSpan.start, hourSpan.end));
@@ -146,13 +146,13 @@ export function goldViolatesSemantics(input: AttributionInput): boolean {
   }
 
   if (intent?.bounds?.end !== undefined && spans !== undefined) {
-    const bound = spans.find((span) => span.label === "BOUND");
+    const bound = spans.find((span) => span.label.startsWith("BOUND_"));
 
     if (bound !== undefined) {
       const connector = input.text.slice(bound.start, bound.end).toLowerCase();
 
-      if (connector === "through" || connector === "thru") {
-        const dateSpan = spans.find((span) => span.label === "DOM" && span.start >= bound.end);
+      if (connector === "through" || connector === "thru" || bound.label === "BOUND_END_INCL") {
+        const dateSpan = spans.find((span) => span.label === "DOM_LIT" && span.start >= bound.end);
 
         if (
           dateSpan !== undefined &&

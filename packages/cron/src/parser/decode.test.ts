@@ -8,6 +8,7 @@
  * decoder mishandles fails the row.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import { renderIntent } from "../../training/src/renderer.js";
 import type { RenderedExample } from "../../training/src/renderer.js";
@@ -267,10 +268,12 @@ describe("range and interval rules", () => {
       token,
       role:
         token.text === "through"
-          ? labelId.GLUE
-          : token.text === "wednesday" || token.text === "sunday"
-            ? labelId.WEEKDAY
-            : labelId.O,
+          ? labelId.BOUND_BETWEEN
+          : token.text === "wednesday"
+            ? labelId.WEEKDAY_WED
+            : token.text === "sunday"
+              ? labelId.WEEKDAY_SUN
+              : labelId.O,
       boundary: token.text === "wednesday",
       score: 1,
     }));
@@ -288,11 +291,11 @@ describe("range and interval rules", () => {
       token,
       role:
         token.text === "third"
-          ? labelId.ORDINAL
+          ? labelId.ORDINAL_3
           : token.text === "friday"
-            ? labelId.WEEKDAY
+            ? labelId.WEEKDAY_FRI
             : token.text === "monthly"
-              ? labelId.RECUR
+              ? labelId.UNIT_MONTH
               : labelId.O,
       boundary: token.text === "third",
       score: 1,
@@ -321,7 +324,7 @@ describe("range and interval rules", () => {
 
   test("every other friday multiplies the interval by two", () => {
     const tokens = tokenize("every other friday").filter((token) => token.kind !== 3);
-    const roles = [labelId.RECUR, labelId.GLUE, labelId.WEEKDAY];
+    const roles = [labelId.RECUR, labelId.INTERVAL_2, labelId.WEEKDAY_FRI];
 
     const labeled: LabeledToken[] = tokens.map((token, index) => ({
       token,
@@ -345,9 +348,9 @@ describe("range and interval rules", () => {
         token.text === "every"
           ? labelId.RECUR
           : token.text === "43"
-            ? labelId.INTERVAL
+            ? labelId.INTERVAL_LIT
             : token.text === "minutes"
-              ? labelId.GLUE
+              ? labelId.UNIT_MIN
               : labelId.O,
       boundary: token.text === "every",
       score: 1,
@@ -365,11 +368,11 @@ describe("range and interval rules", () => {
       token,
       role:
         token.text === "daily"
-          ? labelId.INTERVAL
+          ? labelId.UNIT_DAY
           : token.text === "except"
             ? labelId.EXCEPT
             : token.text === "friday"
-              ? labelId.WEEKDAY
+              ? labelId.WEEKDAY_FRI
               : labelId.O,
       boundary: token.text === "daily",
       score: 1,
@@ -389,12 +392,12 @@ describe("range and interval rules", () => {
         noCarrier,
         "on-days",
       ),
-    ).map((item) => (item.role === labelId.GLUE ? item : { ...item, role: labelId.WEEKDAY }));
+    ).map((item) => (item.role === labelId.GLUE ? item : { ...item, role: labelId.WEEKDAY_MON }));
 
     const daily = tokenize("daily").filter((token) => token.kind !== 3)[0]!;
 
     expect(
-      heads([{ token: daily, role: labelId.INTERVAL, boundary: true, score: 1 }, ...weekday]).intent
+      heads([{ token: daily, role: labelId.UNIT_DAY, boundary: true, score: 1 }, ...weekday]).intent
         .frequency.unit,
     ).toBe("week");
 
@@ -417,7 +420,7 @@ describe("confidence", () => {
     const token = tokenize("daily")[0]!;
 
     const labeled: LabeledToken[] = [
-      { token, role: labelId.INTERVAL, boundary: true, score: 0.05 },
+      { token, role: labelId.UNIT_DAY, boundary: true, score: 0.05 },
     ];
 
     const decoded = heads(labeled);
@@ -462,7 +465,7 @@ describe("global schedule-kind safety", () => {
       .filter((token) => token.kind !== 3)
       .map((token) => ({
         token,
-        role: token.text === "daily" ? labelId.INTERVAL : labelId.O,
+        role: token.text === "daily" ? labelId.UNIT_DAY : labelId.O,
         boundary: token.text === "daily",
         score: 1,
       }));
@@ -477,7 +480,7 @@ describe("global schedule-kind safety", () => {
       .filter((token) => token.kind !== 3)
       .map((token) => ({
         token,
-        role: token.text === "daily" ? labelId.INTERVAL : labelId.O,
+        role: token.text === "daily" ? labelId.UNIT_DAY : labelId.O,
         boundary: token.text === "daily",
         score: 1,
       }));
@@ -515,12 +518,23 @@ describe("decodeIntent rejects corrupt input", () => {
   });
 
   test("an out-of-bounds day of month is rejected before compile", () => {
-    const example = renderPhrase({
-      frequency: { unit: "month", interval: 1 },
-      dayOfMonth: 32,
-    });
+    const sentence = new Sentence();
 
-    expect(() => heads(labelTokens(example))).toThrow(RangeError);
+    sentence.clause();
+    sentence.add("32", "DOM_LIT");
+    sentence.add("monthly", "UNIT_MONTH");
+
+    expect(() =>
+      heads(
+        labelTokens({
+          text: sentence.text,
+          spans: sentence.spans,
+          template: "dom-32",
+          style: "dom-32",
+          speechAct: "request",
+        }),
+      ),
+    ).toThrow(RangeError);
   });
 
   test("heads-only still throws UnknownRoleError on an out-of-range role", () => {
@@ -571,9 +585,9 @@ describe("heads-only decode", () => {
         token.text === "at"
           ? labelId.O
           : token.text === "9"
-            ? labelId.HOUR
+            ? labelId.HOUR_21
             : token.text === "pm"
-              ? labelId.MERIDIEM
+              ? labelId.MERIDIEM_PM
               : labelId.O,
       boundary: token.text === "9",
       score: 1,
@@ -710,15 +724,17 @@ test("a labeled ISO date without a bound keyword is a start bound", () => {
   const sentence = new Sentence();
 
   sentence.clause();
-  sentence.add("2026-05-26", "DOM");
+  sentence.add("2026-05-26", "DOM_LIT");
   sentence.add(",", "GLUE", "");
   sentence.add("every", "RECUR");
-  sentence.add("day", "GLUE");
+  sentence.add("day", "UNIT_DAY");
 
   const decoded = heads(
     labelTokens({
       text: sentence.text,
       spans: sentence.spans,
+      template: "fixture",
+      style: "fixture",
       speechAct: "request",
     }),
   );
@@ -734,7 +750,7 @@ test("a labeled weekday description with a digit round-trips", () => {
 
   sentence.clause();
   sentence.add("every", "RECUR");
-  sentence.add("day 6 of the week", "WEEKDAY");
+  sentence.add("day 6 of the week", "WEEKDAY_SAT");
 
   const decoded = heads(
     labelTokens({
@@ -757,10 +773,10 @@ test("at <minute> past <hour> is a relative clock, not an hour after at", () => 
 
   sentence.clause();
   sentence.add("at", "GLUE");
-  sentence.add("one", "MINUTE");
+  sentence.add("1", "MINUTE_LIT");
   sentence.add("minute past", "GLUE");
-  sentence.add("twelve", "HOUR");
-  sentence.add("am", "MERIDIEM");
+  sentence.add("twelve", "HOUR_0");
+  sentence.add("am", "MERIDIEM_AM");
 
   const decoded = heads(
     labelTokens({
@@ -783,8 +799,8 @@ test("structural GLUE and RECUR follow an actionable clause even when their bits
 
   sentence.clause();
   sentence.add("every", "RECUR", " ", false);
-  sentence.add("5", "INTERVAL", " ", true);
-  sentence.add("minutes", "GLUE", " ", false);
+  sentence.add("5", "INTERVAL_5", " ", true);
+  sentence.add("minutes", "UNIT_MIN", " ", true);
 
   const labeled = labelTokens({
     text: sentence.text,
@@ -797,7 +813,7 @@ test("structural GLUE and RECUR follow an actionable clause even when their bits
       (value) => item.token.start >= value.start && item.token.end <= value.end,
     );
 
-    return { ...item, actionable: span?.actionable };
+    return span?.actionable === undefined ? item : { ...item, actionable: span.actionable };
   });
 
   expect(decodeIntent(labeled, undefined, sentence.text, "off", "request").intent).toEqual({
@@ -809,17 +825,19 @@ test("a labeled through between ISO dates is an inclusive end bound", () => {
   const sentence = new Sentence();
 
   sentence.clause();
-  sentence.add("2026-02-14", "DOM");
-  sentence.add("through", "BOUND");
-  sentence.add("2027-12-28", "DOM");
+  sentence.add("2026-02-14", "DOM_LIT");
+  sentence.add("through", "BOUND_END_INCL");
+  sentence.add("2027-12-28", "DOM_LIT");
   sentence.add(",", "GLUE", "");
   sentence.add("every", "RECUR");
-  sentence.add("day", "GLUE");
+  sentence.add("day", "UNIT_DAY");
 
   const decoded = heads(
     labelTokens({
       text: sentence.text,
       spans: sentence.spans,
+      template: "fixture",
+      style: "fixture",
       speechAct: "request",
     }),
   );
@@ -828,4 +846,86 @@ test("a labeled through between ISO dates is an inclusive end bound", () => {
     frequency: { unit: "day", interval: 1 },
     bounds: { start: "2026-02-14", end: "2027-12-29" },
   });
+});
+
+test("WEEKDAY_MON on any surface is monday; HOUR_LIT reads digits", () => {
+  const monday = new Sentence();
+
+  monday.clause();
+  monday.add("wrd", "WEEKDAY_MON");
+
+  expect(
+    heads(
+      labelTokens({
+        text: monday.text,
+        spans: monday.spans,
+        template: "typed",
+        style: "typed",
+        speechAct: "request",
+      }),
+    ).intent,
+  ).toEqual({
+    frequency: { unit: "week", interval: 1 },
+    weekdays: ["monday"],
+  });
+
+  const clock = new Sentence();
+
+  clock.clause();
+  clock.add("14", "HOUR_LIT");
+  clock.add("daily", "UNIT_DAY");
+
+  expect(
+    heads(
+      labelTokens({
+        text: clock.text,
+        spans: clock.spans,
+        template: "typed",
+        style: "typed",
+        speechAct: "request",
+      }),
+    ).intent,
+  ).toEqual({
+    frequency: { unit: "day", interval: 1 },
+    time: { hour: 14, minute: 0 },
+  });
+});
+
+test("COUNT does not read token digits; interval is INTERVAL_* / INTERVAL_LIT", () => {
+  const sentence = new Sentence();
+
+  sentence.clause();
+  sentence.add("every", "RECUR");
+  sentence.add("5", "COUNT");
+  sentence.add("minutes", "UNIT_MIN");
+
+  expect(
+    heads(
+      labelTokens({
+        text: sentence.text,
+        spans: sentence.spans,
+        template: "count",
+        style: "count",
+        speechAct: "request",
+      }),
+    ).intent,
+  ).toEqual({ frequency: { unit: "minute", interval: 1 } });
+});
+
+test("decode.ts has no token-string alias tables", () => {
+  const source = readFileSync(new URL("./decode.ts", import.meta.url), "utf8");
+
+  for (const name of [
+    "weekdayOf",
+    "ORDINAL_ALIASES",
+    "BOUND_ALIASES",
+    "NAMED_HOURS",
+    "MINUTE_IDIOMS",
+    "FREQUENCY_IDIOMS",
+    "ADVERB_FREQUENCIES",
+    "UNIT_ALIASES",
+    "uniqueSingleEditAlias",
+  ]) {
+    expect(source.includes(name)).toBe(false);
+  }
 });

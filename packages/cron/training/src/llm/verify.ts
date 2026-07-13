@@ -85,7 +85,7 @@ function checkValues(intent: ScheduleIntent, slots: readonly AlignedValue[]): bo
     const found = slots.some((slot) => {
       if (slot.label === value.label && slot.value === value.value) return true;
 
-      if (value.label === "WEEKDAY" && slot.label === "DAYGROUP") {
+      if (value.label.startsWith("WEEKDAY_") && slot.label.startsWith("DAYGROUP_")) {
         const group = WEEKDAY_GROUPS[String(slot.value)];
 
         return group?.includes(value.value as Weekday) ?? false;
@@ -211,7 +211,9 @@ export async function verifyCandidate(
       );
     }
 
-    const spans: Span[] = [{ start: 0, end: text.length, label: "O", clauseStart: false }];
+    const spans: Span[] = [
+      { start: 0, end: text.length, label: "O", clauseStart: false, actionable: false },
+    ];
 
     return accepted(text, null, "negative", spans, context);
   }
@@ -243,7 +245,16 @@ export async function verifyCandidate(
     );
   }
 
-  return accepted(text, intent, "schedule", aligned.spans, context);
+  return accepted(
+    text,
+    intent,
+    "schedule",
+    aligned.spans.map((span) => ({
+      ...span,
+      actionable: span.label !== "O",
+    })),
+    context,
+  );
 }
 
 export function acceptedPath(out: string): string {

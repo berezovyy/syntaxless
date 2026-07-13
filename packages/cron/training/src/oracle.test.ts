@@ -31,8 +31,8 @@ const intervalGlue: OracleRecord = {
   text: "every 5 minutes",
   spans: [
     { start: 0, end: 5, label: "RECUR", clauseStart: false, actionable: false },
-    { start: 6, end: 7, label: "INTERVAL", clauseStart: true, actionable: true },
-    { start: 8, end: 15, label: "GLUE", clauseStart: false, actionable: false },
+    { start: 6, end: 7, label: "INTERVAL_5", clauseStart: true, actionable: true },
+    { start: 8, end: 15, label: "UNIT_MIN", clauseStart: false, actionable: true },
   ],
   intent: { frequency: { unit: "minute", interval: 5 } },
   speechAct: "request",
@@ -45,7 +45,7 @@ const hourly: OracleRecord = {
   kind: "unit-interval",
   template: "adverb",
   text: "hourly",
-  spans: [{ start: 0, end: 6, label: "INTERVAL", clauseStart: true, actionable: true }],
+  spans: [{ start: 0, end: 6, label: "UNIT_HOUR", clauseStart: true, actionable: true }],
   intent: { frequency: { unit: "hour", interval: 1 } },
   speechAct: "request",
 };
@@ -58,10 +58,10 @@ const twelveHour: OracleRecord = {
   template: "digits",
   text: "1:30 daily",
   spans: [
-    { start: 0, end: 1, label: "HOUR", clauseStart: true, actionable: true },
+    { start: 0, end: 1, label: "HOUR_LIT", clauseStart: true, actionable: true },
     { start: 1, end: 2, label: "GLUE", clauseStart: false, actionable: false },
-    { start: 2, end: 4, label: "MINUTE", clauseStart: false, actionable: true },
-    { start: 5, end: 10, label: "INTERVAL", clauseStart: false, actionable: true },
+    { start: 2, end: 4, label: "MINUTE_30", clauseStart: false, actionable: true },
+    { start: 5, end: 10, label: "UNIT_DAY", clauseStart: false, actionable: true },
   ],
   intent: {
     frequency: { unit: "day", interval: 1 },

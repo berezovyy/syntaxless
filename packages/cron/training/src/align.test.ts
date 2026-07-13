@@ -41,11 +41,15 @@ test("labels an interval number and its unit, opening the clause on the value", 
 
   expect(result.spans).toEqual([
     { start: 0, end: 5, label: "RECUR", clauseStart: false },
-    { start: 6, end: 7, label: "INTERVAL", clauseStart: true, value: 2 },
-    { start: 8, end: 13, label: "GLUE", clauseStart: false, value: "hour" },
+    { start: 6, end: 7, label: "INTERVAL_2", clauseStart: true, value: 2 },
+    { start: 8, end: 13, label: "UNIT_HOUR", clauseStart: false, value: "hour" },
   ]);
 
-  expect(result.slots).toEqual([{ label: "INTERVAL", value: 2, start: 6, end: 7 }]);
+  expect(result.slots).toEqual([
+    { label: "INTERVAL_2", value: 2, start: 6, end: 7 },
+    { label: "UNIT_HOUR", value: "hour", start: 8, end: 13 },
+  ]);
+
   checkCoverage(text, result.spans);
 });
 
@@ -62,11 +66,11 @@ test("multiple slots of the same role are each labeled", () => {
   expect(result.ok).toBe(true);
   if (!result.ok) return;
 
-  const weekdays = result.spans.filter((span) => span.label === "WEEKDAY");
+  const weekdays = result.spans.filter((span) => span.label.startsWith("WEEKDAY_"));
 
   expect(weekdays.map((span) => span.value)).toEqual(["monday", "wednesday"]);
   expect(weekdays.map((span) => text.slice(span.start, span.end))).toEqual(["Monday", "Wednesday"]);
-  expect(result.slots.filter((slot) => slot.label === "WEEKDAY").length).toBe(2);
+  expect(result.slots.filter((slot) => slot.label.startsWith("WEEKDAY_")).length).toBe(2);
   checkCoverage(text, result.spans);
 });
 
@@ -92,7 +96,7 @@ test("carrier prose is O and never picks up a schedule label", () => {
 
   expect(
     result.spans.some(
-      (span) => span.label === "WEEKDAY" && text.slice(span.start, span.end) === "Monday",
+      (span) => span.label.startsWith("WEEKDAY_") && text.slice(span.start, span.end) === "Monday",
     ),
   ).toBe(true);
 
@@ -115,7 +119,7 @@ test("a day group is one label that stands for the whole set", () => {
   expect(result.spans[1]).toEqual({
     start: 6,
     end: 13,
-    label: "DAYGROUP",
+    label: "DAYGROUP_WEEKEND",
     clauseStart: true,
     value: "weekend",
   });
@@ -135,8 +139,8 @@ test("multiple weekday slots in a time sentence order and do not overlap", () =>
   expect(result.ok).toBe(true);
   if (!result.ok) return;
   checkCoverage(text, result.spans);
-  expect(result.spans.filter((span) => span.label === "WEEKDAY")).toHaveLength(2);
-  expect(result.spans.at(-1)?.label).toBe("MERIDIEM");
+  expect(result.spans.filter((span) => span.label.startsWith("WEEKDAY_"))).toHaveLength(2);
+  expect(result.spans.at(-1)?.label).toBe("MERIDIEM_AM");
 });
 
 test("spans cover whole tokens, are ordered, and do not overlap", () => {
@@ -217,22 +221,22 @@ test("expectedValues derives required slots from the intent alone", () => {
   const values = expectedValues(intent);
 
   expect(values).toContainEqual({
-    label: "WEEKDAY",
+    label: "WEEKDAY_MON",
     value: "monday",
     required: true,
   });
 
   expect(values).toContainEqual({
-    label: "INTERVAL",
+    label: "INTERVAL_LIT",
     value: 1,
     required: false,
   });
 
-  expect(values).toContainEqual({ label: "HOUR", value: 21, required: true });
-  expect(values).toContainEqual({ label: "MINUTE", value: 30, required: true });
+  expect(values).toContainEqual({ label: "HOUR_21", value: 21, required: true });
+  expect(values).toContainEqual({ label: "MINUTE_30", value: 30, required: true });
 
   expect(values).toContainEqual({
-    label: "MERIDIEM",
+    label: "MERIDIEM_PM",
     value: "pm",
     required: false,
   });

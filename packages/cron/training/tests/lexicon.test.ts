@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { labelFromId, LABELS } from "../../src/model/labels";
+import { labelFromId, LABELS, unitLabel, weekdayLabel } from "../../src/model/labels";
 import type { Label } from "../../src/model/labels";
 import {
   ADVERB_FREQUENCIES,
@@ -35,15 +35,15 @@ test("lookup is complete and consistent with the source aliases", () => {
   expect(LOOKUP.size).toBe(keys.length);
 
   for (const [word, weekday] of Object.entries(WEEKDAY_ALIASES)) {
-    expect(LOOKUP.get(word)).toEqual({ label: "WEEKDAY", value: weekday });
+    expect(LOOKUP.get(word)).toEqual({ label: weekdayLabel(weekday), value: weekday });
   }
 
   for (const [word, unit] of Object.entries(UNIT_ALIASES)) {
-    expect(LOOKUP.get(word)).toEqual({ label: "INTERVAL", value: unit });
+    expect(LOOKUP.get(word)).toEqual({ label: unitLabel(unit), value: unit });
   }
 
   for (const [word, unit] of Object.entries(ADVERB_FREQUENCIES)) {
-    expect(LOOKUP.get(word)).toEqual({ label: "INTERVAL", value: unit });
+    expect(LOOKUP.get(word)).toEqual({ label: unitLabel(unit), value: unit });
   }
 
   for (const [word, value] of Object.entries(NUMBER_WORDS)) {
@@ -52,21 +52,21 @@ test("lookup is complete and consistent with the source aliases", () => {
 });
 
 test("lexicon entries pin the canonical plan examples", () => {
-  expect(LOOKUP.get("mon")).toEqual({ label: "WEEKDAY", value: "monday" });
+  expect(LOOKUP.get("mon")).toEqual({ label: "WEEKDAY_MON", value: "monday" });
 
   expect(LOOKUP.get("mondays")).toEqual({
-    label: "WEEKDAY",
+    label: "WEEKDAY_MON",
     value: "monday",
   });
 
   expect(LOOKUP.get("every")).toEqual({ label: "RECUR" });
-  expect(LOOKUP.get("hourly")).toEqual({ label: "INTERVAL", value: "hour" });
-  expect(LOOKUP.get("first")).toEqual({ label: "ORDINAL", value: 1 });
+  expect(LOOKUP.get("hourly")).toEqual({ label: "UNIT_HOUR", value: "hour" });
+  expect(LOOKUP.get("first")).toEqual({ label: "ORDINAL_1", value: 1 });
   expect(LOOKUP.get("the stride is")).toEqual({ label: "GLUE" });
   expect(LOOKUP.get("the weekdays are")).toEqual({ label: "GLUE" });
   expect(LOOKUP.get("the range runs")).toEqual({ label: "GLUE" });
   expect(LOOKUP.get("the omitted days are")).toEqual({ label: "EXCEPT" });
-  expect(LOOKUP.get("ending")).toEqual({ label: "BOUND" });
+  expect(LOOKUP.get("ending")).toEqual({ label: "BOUND_END_EXCL" });
 });
 
 test("every surface maps to a valid label and never conflicts", () => {
@@ -92,12 +92,12 @@ test("the renderer consumes the runtime lexicon", () => {
 
     for (const span of example.spans) {
       if (
-        span.label !== "WEEKDAY" &&
-        span.label !== "ORDINAL" &&
-        span.label !== "INTERVAL" &&
-        span.label !== "HOUR" &&
-        span.label !== "MINUTE" &&
-        span.label !== "MERIDIEM"
+        !span.label.startsWith("WEEKDAY_") &&
+        !span.label.startsWith("ORDINAL_") &&
+        !span.label.startsWith("INTERVAL_") &&
+        !span.label.startsWith("HOUR_") &&
+        !span.label.startsWith("MINUTE_") &&
+        !span.label.startsWith("MERIDIEM_")
       ) {
         continue;
       }
