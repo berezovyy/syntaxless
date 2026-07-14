@@ -10,8 +10,11 @@
     "typecheck": "bun run --filter '@syntaxless/*' --if-present typecheck",
     "test": "bun run --filter '@syntaxless/*' --if-present test",
     "build": "bun run --filter '@syntaxless/*' --if-present build",
-    "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "check": "bun run format:check && bun run typecheck && bun run test && bun run build",
+    "test:python": "uv run --project training/cron --locked python training/cron/run_tests.py",
+    "train:production": "bun run --cwd packages/cron/training train:production",
+    "format": "prettier --write . --ignore-path .gitignore --ignore-path .prettierignore",
+    "format:check": "prettier --check . --ignore-path .gitignore --ignore-path .prettierignore"
   },
   "devDependencies": {
     "@types/bun": "latest",

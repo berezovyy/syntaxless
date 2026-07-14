@@ -12,6 +12,8 @@ import math
 import random
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +25,7 @@ from config import Config
 from dataset import (
     Dataset,
     FRESH_EPOCH_SIZE,
+    POPULATION_NAMES,
     VAL_MAX_SEQUENCES,
     fingerprints_path,
     merge_fingerprint_excludes,
@@ -114,6 +117,40 @@ def make_scheduler(optimizer: torch.optim.Optimizer, total_steps: int, warmup_st
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
+def _prepared_batches(
+    dataset: Dataset,
+    indices: Iterable[np.ndarray],
+    device: str,
+    *,
+    prefetch: bool,
+) -> Iterator[tuple[np.ndarray, dict[str, torch.Tensor]]]:
+    """Overlap vectorized memmap gathering/pinning with the previous GPU step."""
+    if not prefetch or not device.startswith("cuda"):
+        for batch_indices in indices:
+            yield batch_indices, dataset.batch(batch_indices, device)
+        return
+    iterator = iter(indices)
+    first = next(iterator, None)
+    if first is None:
+        return
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="batch-prefetch") as pool:
+        future = pool.submit(dataset.batch, first, None, pin_memory=True)
+        current = first
+        while True:
+            cpu_batch = future.result()
+            following = next(iterator, None)
+            if following is not None:
+                future = pool.submit(dataset.batch, following, None, pin_memory=True)
+            gpu_batch = {
+                key: value.to(device, non_blocking=True)
+                for key, value in cpu_batch.items()
+            }
+            yield current, gpu_batch
+            if following is None:
+                break
+            current = following
+
+
 def train_epoch(
     model: Tagger,
     optimizer,
@@ -127,77 +164,124 @@ def train_epoch(
     balance_kinds: bool,
     balance_schedule_kinds: bool,
     frame_balance_power: float,
+    population_mix: tuple[float, float, float] | None,
+    population_cover_all: bool,
+    amp: bool,
+    scaler: torch.amp.GradScaler,
+    prefetch: bool,
+    expected_sequences: int,
     max_sequences: int | None = None,
-) -> dict[str, float]:
+) -> dict[str, object]:
     model.train()
-    model.qat = qat
-    total_loss = 0.0
-    total_tokens = 0
+    base_model = getattr(model, "_orig_mod", model)
+    base_model.qat = qat
+    total_loss = torch.zeros((), device=device, dtype=torch.float64)
+    total_tokens = torch.zeros((), device=device, dtype=torch.int64)
     batches = 0
-    for indices in dataset.batches(
+    sequences = 0
+    started = time.perf_counter()
+    population_counts = np.zeros(len(POPULATION_NAMES), dtype=np.int64)
+    index_batches = dataset.batches(
         batch_size,
         shuffle_seed=shuffle_seed,
         balance_frames=balance_frames,
         balance_kinds=balance_kinds,
         balance_schedule_kinds=balance_schedule_kinds,
         frame_balance_power=frame_balance_power,
+        population_mix=population_mix,
+        population_cover_all=population_cover_all,
         max_sequences=max_sequences,
+    )
+    for indices, batch in _prepared_batches(
+        dataset, index_batches, device, prefetch=prefetch
     ):
-        batch = dataset.batch(indices, device)
+        if dataset.populations is not None:
+            population_counts += np.bincount(
+                np.asarray(dataset.populations)[indices],
+                minlength=len(POPULATION_NAMES),
+            )
         labels = batch["labels"]
         mask = labels != -100
 
         optimizer.zero_grad(set_to_none=True)
-        roles, boundary, schedule_kind, speech_act, actionable = model(
-            batch["rows"], batch["valid"], batch["neighbors"]
-        )
-        role_loss = F.cross_entropy(
-            roles.reshape(-1, roles.shape[-1]), labels.reshape(-1), ignore_index=-100
-        )
-        boundary_loss = F.binary_cross_entropy_with_logits(
-            boundary, batch["boundaries"], reduction="none"
-        )
-        boundary_loss = (boundary_loss * mask).sum() / mask.sum().clamp(min=1)
-        schedule_kind_loss = (
-            F.cross_entropy(schedule_kind, batch["schedule_kinds"])
-            if schedule_kind.shape[-1] > 0
-            else roles.new_zeros(())
-        )
-        speech_act_loss = (
-            F.cross_entropy(speech_act, batch["speech_acts"])
-            if speech_act.shape[-1] > 0
-            else roles.new_zeros(())
-        )
-        if actionable.shape[-1] > 0:
-            actionable_loss = F.binary_cross_entropy_with_logits(
-                actionable, batch["actionable"], reduction="none"
+        with torch.autocast(
+            device_type="cuda", dtype=torch.float16, enabled=amp
+        ):
+            roles, boundary, schedule_kind, speech_act, actionable = model(
+                batch["rows"], batch["valid"], batch["neighbors"]
             )
-            actionable_loss = (actionable_loss * mask).sum() / mask.sum().clamp(min=1)
-        else:
-            actionable_loss = roles.new_zeros(())
-        # role + 1.0 * boundary + 0.35 * schedule_kind + 0.35 * speech_act + 1.0 * actionable
-        loss = (
-            role_loss
-            + BOUNDARY_LOSS_WEIGHT * boundary_loss
-            + SCHEDULE_KIND_LOSS_WEIGHT * schedule_kind_loss
-            + SPEECH_ACT_LOSS_WEIGHT * speech_act_loss
-            + ACTIONABLE_LOSS_WEIGHT * actionable_loss
-        )
-        loss.backward()
+            role_loss = F.cross_entropy(
+                roles.reshape(-1, roles.shape[-1]),
+                labels.reshape(-1),
+                ignore_index=-100,
+            )
+            boundary_loss = F.binary_cross_entropy_with_logits(
+                boundary, batch["boundaries"], reduction="none"
+            )
+            boundary_loss = (boundary_loss * mask).sum() / mask.sum().clamp(min=1)
+            schedule_kind_loss = (
+                F.cross_entropy(schedule_kind, batch["schedule_kinds"])
+                if schedule_kind.shape[-1] > 0
+                else roles.new_zeros(())
+            )
+            speech_act_loss = (
+                F.cross_entropy(speech_act, batch["speech_acts"])
+                if speech_act.shape[-1] > 0
+                else roles.new_zeros(())
+            )
+            if actionable.shape[-1] > 0:
+                actionable_loss = F.binary_cross_entropy_with_logits(
+                    actionable, batch["actionable"], reduction="none"
+                )
+                actionable_loss = (
+                    actionable_loss * mask
+                ).sum() / mask.sum().clamp(min=1)
+            else:
+                actionable_loss = roles.new_zeros(())
+            loss = (
+                role_loss
+                + BOUNDARY_LOSS_WEIGHT * boundary_loss
+                + SCHEDULE_KIND_LOSS_WEIGHT * schedule_kind_loss
+                + SPEECH_ACT_LOSS_WEIGHT * speech_act_loss
+                + ACTIONABLE_LOSS_WEIGHT * actionable_loss
+            )
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), CLIP_NORM)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         scheduler.step()
 
-        token_count = int(mask.sum())
-        total_loss += float(loss.detach()) * max(token_count, 1)
+        token_count = mask.sum()
+        total_loss += loss.detach().double() * token_count
         total_tokens += token_count
         batches += 1
+        sequences += len(indices)
+        if batches % 100 == 0 or sequences >= expected_sequences:
+            elapsed = time.perf_counter() - started
+            rate = sequences / max(elapsed, 1e-9)
+            remaining = max(expected_sequences - sequences, 0)
+            peak = (
+                torch.cuda.max_memory_allocated(device) / 1024**3
+                if device.startswith("cuda")
+                else 0.0
+            )
+            print(
+                f"train {sequences:,}/{expected_sequences:,} sequences "
+                f"({rate:,.0f}/s, ETA {remaining / max(rate, 1e-9) / 60:.1f}m, "
+                f"CUDA peak {peak:.2f} GiB)",
+                flush=True,
+            )
 
     return {
-        "trainLoss": total_loss / max(total_tokens, 1),
-        "trainTokens": total_tokens,
+        "trainLoss": float(total_loss / total_tokens.clamp(min=1)),
+        "trainTokens": int(total_tokens),
         "learningRate": float(scheduler.get_last_lr()[0]),
         "batches": batches,
+        "trainPopulations": {
+            name: int(population_counts[index])
+            for index, name in enumerate(POPULATION_NAMES)
+        },
     }
 
 
@@ -208,9 +292,13 @@ def evaluate(
     batch_size: int,
     device: str,
     max_sequences: int | None = None,
+    *,
+    amp: bool = False,
+    prefetch: bool = False,
 ) -> dict[str, object]:
     model.eval()
-    model.qat = True
+    base_model = getattr(model, "_orig_mod", model)
+    base_model.qat = True
 
     correct = 0
     total_tokens = 0
@@ -228,6 +316,11 @@ def evaluate(
     actionable_true_positive = 0
     actionable_false_positive = 0
     actionable_false_negative = 0
+    evaluation_batches = 0
+    evaluation_started = time.perf_counter()
+    expected_sequences = (
+        len(dataset) if max_sequences is None else min(len(dataset), max_sequences)
+    )
     frame_kind_names = [name.split("/", 1)[0] for name in dataset.manifest.frame_names]
     kind_names = list(dict.fromkeys(frame_kind_names))
     kind_index = {name: index for index, name in enumerate(kind_names)}
@@ -237,15 +330,20 @@ def evaluate(
     kind_totals = np.zeros(len(kind_names), dtype=np.int64)
     kind_correct = np.zeros(len(kind_names), dtype=np.int64)
 
-    for indices in dataset.batches(
+    index_batches = dataset.batches(
         batch_size, shuffle_seed=0, max_sequences=max_sequences
+    )
+    for indices, batch in _prepared_batches(
+        dataset, index_batches, device, prefetch=prefetch
     ):
-        batch = dataset.batch(indices, device)
         labels = batch["labels"]
         mask = labels != -100
-        roles, boundary, schedule_kind, speech_act, actionable = model(
-            batch["rows"], batch["valid"], batch["neighbors"]
-        )
+        with torch.autocast(
+            device_type="cuda", dtype=torch.float16, enabled=amp
+        ):
+            roles, boundary, schedule_kind, speech_act, actionable = model(
+                batch["rows"], batch["valid"], batch["neighbors"]
+            )
         if schedule_kind.shape[-1] > 0:
             schedule_kind_correct += int(
                 (schedule_kind.argmax(dim=-1) == batch["schedule_kinds"]).sum()
@@ -297,6 +395,7 @@ def evaluate(
         exact = (label_ok & boundary_ok).all(dim=1)
         exact_sequences += int(exact.sum())
         sequences += len(indices)
+        evaluation_batches += 1
         if dataset.frames is not None and len(kind_names) > 0:
             batch_kind_ids = frame_kind_ids[np.asarray(dataset.frames[indices])]
             kind_totals += np.bincount(batch_kind_ids, minlength=len(kind_names))
@@ -305,6 +404,14 @@ def evaluate(
                 weights=exact.detach().cpu().numpy().astype(np.int64),
                 minlength=len(kind_names),
             ).astype(np.int64)
+        if evaluation_batches % 100 == 0 or sequences >= expected_sequences:
+            elapsed = time.perf_counter() - evaluation_started
+            rate = sequences / max(elapsed, 1e-9)
+            print(
+                f"evaluate {sequences:,}/{expected_sequences:,} sequences "
+                f"({rate:,.0f}/s)",
+                flush=True,
+            )
 
     precision = true_positive / max(true_positive + false_positive, 1)
     recall = true_positive / max(true_positive + false_negative, 1)
@@ -374,11 +481,15 @@ def evaluate(
 
 
 def h_selection_score(h_metrics: dict[str, object] | None) -> float | None:
-    """H rate for checkpoint/early-stop; None when H was not scored."""
+    """H-pos rate for checkpoint/early-stop; None when H was not scored.
+
+    Never the composite H: it rewards a reject-all model (723/1646 = 44 %), so
+    selecting on it stopped a1-full at epoch 3 while H-pos was still rising.
+    """
     if not h_metrics or not h_metrics.get("ok"):
         return None
-    total = h_metrics.get("total")
-    correct = h_metrics.get("correct")
+    total = h_metrics.get("positiveTotal")
+    correct = h_metrics.get("positiveCorrect")
     if not isinstance(total, (int, float)) or total <= 0:
         return None
     if not isinstance(correct, (int, float)):
@@ -450,12 +561,19 @@ def score_h_if_requested(
 
         try:
             parsed = json.loads(payload_path.read_text())
+            off = parsed.get("overlayOff") or parsed
             return {
                 "ok": True,
+                # Composite (correct + correctly rejected): diagnostic only.
                 "correct": parsed.get("correct"),
                 "total": parsed.get("total"),
-                "negatives": parsed.get("negatives"),
-                "silent": parsed.get("silentMeaningChanges"),
+                # H-pos / H-negOK: the decision and safety metrics.
+                "positiveCorrect": off.get("positiveCorrect"),
+                "positiveTotal": off.get("positiveTotal"),
+                "negativeCorrect": off.get("negativeCorrect"),
+                "negativeTotal": off.get("negativeTotal"),
+                "negatives": off.get("negativeFalseAccepts"),
+                "silent": parsed.get("positiveSilentMeaningChanges"),
             }
         except (OSError, ValueError) as error:
             return {"ok": False, "error": str(error)}
@@ -492,6 +610,92 @@ def save_checkpoint(
         },
         path,
     )
+
+
+def autotune_batch_size(model: Tagger, dataset: Dataset, starting_batch: int) -> int:
+    """Choose the fastest safe batch on representative long production rows."""
+    if not torch.cuda.is_available():
+        raise RuntimeError("automatic batch tuning requires CUDA")
+    # Width 64 covers the expensive tail while still containing enough rows to
+    # test every candidate. The 3,501 width-96 rows are separately checked at
+    # their real maximum batch below.
+    long_indices = np.flatnonzero((dataset.lengths > 48) & (dataset.lengths <= 64))
+    tail_indices = np.flatnonzero((dataset.lengths > 64) & (dataset.lengths <= 96))
+    if long_indices.size == 0:
+        long_indices = np.arange(min(len(dataset), 8192), dtype=np.int64)
+    candidates: list[int] = []
+    value = starting_batch
+    while value <= 4096:
+        candidates.append(value)
+        value *= 2
+    model.train()
+    model.qat = True
+    best = starting_batch
+    best_rate = 0.0
+    print(f"auto-batch GPU-only candidates: {candidates}", flush=True)
+    for candidate in candidates:
+        indices = np.asarray(long_indices[:candidate])
+        if indices.size < candidate:
+            break
+        try:
+            batch = dataset.batch(indices, "cuda")
+            # Warm up allocator/kernels, then time two complete forward/backward passes.
+            elapsed = 0.0
+            for iteration in range(3):
+                model.zero_grad(set_to_none=True)
+                torch.cuda.reset_peak_memory_stats()
+                torch.cuda.synchronize()
+                started = time.perf_counter()
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    outputs = model(batch["rows"], batch["valid"], batch["neighbors"])
+                    loss = sum(output.float().square().mean() for output in outputs)
+                loss.backward()
+                torch.cuda.synchronize()
+                if iteration:
+                    elapsed += time.perf_counter() - started
+            rate = candidate * 2 / max(elapsed, 1e-9)
+            del batch, outputs, loss
+            model.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+            # Validate the actual width-96 tail too; it can contain at most 3,501 rows.
+            if tail_indices.size:
+                tail = dataset.batch(
+                    np.asarray(tail_indices[: min(candidate, tail_indices.size)]), "cuda"
+                )
+                model.zero_grad(set_to_none=True)
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    outputs = model(tail["rows"], tail["valid"], tail["neighbors"])
+                    tail_loss = sum(
+                        output.float().square().mean() for output in outputs
+                    )
+                tail_loss.backward()
+                torch.cuda.synchronize()
+                del tail, outputs, tail_loss
+            peak = torch.cuda.max_memory_allocated() / 1024**3
+            model.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+            free, _ = torch.cuda.mem_get_info()
+            headroom = free / 1024**3 - peak
+            print(
+                f"auto-batch GPU-only {candidate}: {rate:,.0f} sequences/s, "
+                f"{peak:.2f} GiB peak, {headroom:.2f} GiB headroom",
+                flush=True,
+            )
+            if headroom < 2.0:
+                print(
+                    "auto-batch stopped: less than 2 GiB CUDA headroom", flush=True
+                )
+                break
+            if rate > best_rate * 1.02:
+                best = candidate
+                best_rate = rate
+        except torch.OutOfMemoryError:
+            print(f"auto-batch GPU-only {candidate}: out of memory", flush=True)
+            model.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+            break
+    print(f"auto-batch selected: {best} (GPU compute benchmark)", flush=True)
+    return best
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -548,8 +752,8 @@ def main(argv: list[str] | None = None) -> int:
         feature_rows=validation.feature_rows,
         rows_per_token=validation.rows_per_token,
         role_classes=validation.role_classes,
-        schedule_kind_classes=0,
-        speech_act_classes=0,
+        schedule_kind_classes=len(SCHEDULE_KIND_NAMES),
+        speech_act_classes=validation.manifest.speech_act_classes,
         actionable_head="actionable" in validation.manifest.format,
         hidden=config.hidden,
         quantization_bits=config.quantization_bits,
@@ -565,17 +769,46 @@ def main(argv: list[str] | None = None) -> int:
     print(f"parameters: {counts['total']} total, {counts['trainable']} trainable")
     print(f"device: {config.device}")
 
+    if config.auto_batch:
+        if external_train is None:
+            raise ValueError("--auto-batch requires --data-prefix")
+        config.batch = autotune_batch_size(model, external_train, config.batch)
+    runtime_model = (
+        torch.compile(model, mode="reduce-overhead", dynamic=False)
+        if config.compile_model
+        else model
+    )
+    if config.compile_model:
+        print("model compilation enabled (reduce-overhead)", flush=True)
+
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.learning_rate, weight_decay=WEIGHT_DECAY
     )
-    training_sequences = (
-        min(len(external_train), config.samples)
-        if external_train is not None
-        else config.samples
-    )
+    if external_train is not None and config.fresh_each_epoch:
+        training_sequences = min(
+            len(external_train), config.fresh_epoch_size, FRESH_EPOCH_SIZE
+        )
+    elif (
+        external_train is not None
+        and config.population_mix is not None
+        and config.population_cover_all
+    ):
+        training_sequences = external_train.population_epoch_size(
+            config.population_mix, cover_all=True
+        )
+    elif external_train is not None:
+        training_sequences = min(len(external_train), config.samples)
+    else:
+        training_sequences = config.samples
     steps_per_epoch = max(1, math.ceil(training_sequences / config.batch))
     scheduler = make_scheduler(
         optimizer, total_steps=config.epochs * steps_per_epoch, warmup_steps=config.warmup_steps
+    )
+    scaler = torch.amp.GradScaler("cuda", enabled=config.amp)
+    print(
+        f"epoch plan: {training_sequences:,} sequences, batch {config.batch}, "
+        f"~{steps_per_epoch:,} optimizer steps",
+        flush=True,
     )
 
     history: list[dict] = []
@@ -614,12 +847,14 @@ def main(argv: list[str] | None = None) -> int:
         epoch_seed = config.seed + epoch * EPOCH_SEED_STRIDE
         if config.fresh_each_epoch:
             train_cap = min(config.fresh_epoch_size, len(train), FRESH_EPOCH_SIZE)
+        elif config.population_cover_all:
+            train_cap = None
         elif external_train is not None:
             train_cap = training_sequences
         else:
             train_cap = None
         train_metrics = train_epoch(
-            model,
+            runtime_model,
             optimizer,
             scheduler,
             train,
@@ -631,17 +866,25 @@ def main(argv: list[str] | None = None) -> int:
             config.balance_kinds,
             config.balance_schedule_kinds,
             config.frame_balance_power,
+            config.population_mix,
+            config.population_cover_all,
+            config.amp,
+            scaler,
+            config.prefetch,
+            training_sequences,
             train_cap,
         )
         tokens_seen += int(train_metrics["trainTokens"])
 
         val_cap = min(len(validation), config.val_max_sequences, VAL_MAX_SEQUENCES)
         metrics = evaluate(
-            model,
+            runtime_model,
             validation,
             config.batch,
             config.device,
             val_cap,
+            amp=config.amp,
+            prefetch=config.prefetch,
         )
         # Equalize checkpoint selection across sentence kinds. The global
         # sequence metric is dominated by large Cartesian schedule lattices;
@@ -700,12 +943,34 @@ def main(argv: list[str] | None = None) -> int:
             )
             break
 
+    if best_epoch is not None:
+        selected = torch.load(
+            run_dir / "best.pt", map_location=config.device, weights_only=False
+        )
+        model.load_state_dict(selected["model"])
+        print(f"selected best checkpoint from epoch {best_epoch}", flush=True)
+    final_cap = None if config.full_final_eval else config.val_max_sequences
     full_validation = evaluate(
-        model,
+        runtime_model,
         validation,
         config.batch,
         config.device,
-        None if len(validation) <= config.val_max_sequences else config.val_max_sequences,
+        final_cap,
+        amp=config.amp,
+        prefetch=config.prefetch,
+    )
+    full_heldout = (
+        evaluate(
+            runtime_model,
+            heldout,
+            config.batch,
+            config.device,
+            None,
+            amp=config.amp,
+            prefetch=config.prefetch,
+        )
+        if config.full_final_eval
+        else None
     )
     label_histogram = {
         "train": latest_train.label_counts if latest_train is not None else {},
@@ -741,6 +1006,7 @@ def main(argv: list[str] | None = None) -> int:
         "epochsCompleted": len(history),
         "stoppedEarly": stopped_early,
         "fullValidation": full_validation,
+        "fullHeldout": full_heldout,
     }
     write_report(run_dir / "report.json", report)
     print(f"best epoch {best_epoch} criterion {best_criterion}")

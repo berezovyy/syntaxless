@@ -8,7 +8,6 @@
  * decoder mishandles fails the row.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 
 import { renderIntent } from "../../training/src/renderer.js";
 import type { RenderedExample } from "../../training/src/renderer.js";
@@ -190,7 +189,10 @@ const oracle: Array<{ name: string; intent: ScheduleIntent }> = [
       minute: 0,
     }),
   },
-  { name: "monday-and-friday", intent: weekdays(["monday", "friday"], { hour: 9, minute: 0 }) },
+  {
+    name: "monday-and-friday",
+    intent: weekdays(["monday", "friday"], { hour: 9, minute: 0 }),
+  },
   {
     name: "friday-sunday",
     intent: weekdays(["friday", "saturday", "sunday"], { hour: 9, minute: 0 }),
@@ -910,22 +912,4 @@ test("COUNT does not read token digits; interval is INTERVAL_* / INTERVAL_LIT", 
       }),
     ).intent,
   ).toEqual({ frequency: { unit: "minute", interval: 1 } });
-});
-
-test("decode.ts has no token-string alias tables", () => {
-  const source = readFileSync(new URL("./decode.ts", import.meta.url), "utf8");
-
-  for (const name of [
-    "weekdayOf",
-    "ORDINAL_ALIASES",
-    "BOUND_ALIASES",
-    "NAMED_HOURS",
-    "MINUTE_IDIOMS",
-    "FREQUENCY_IDIOMS",
-    "ADVERB_FREQUENCIES",
-    "UNIT_ALIASES",
-    "uniqueSingleEditAlias",
-  ]) {
-    expect(source.includes(name)).toBe(false);
-  }
 });

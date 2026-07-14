@@ -20,12 +20,17 @@ import { coarseText, fingerprintExample, fingerprintPattern, framePattern } from
 import type { CorpusRecord, Split } from "./generate";
 import { expandKinds, iterateKinds, kindIds } from "./kinds";
 import type { ExampleSplit, KindExample, KindId } from "./kinds";
+import { emptyMixAccumulator, iterateMix, noteMixExample } from "./mix/draw";
+import { mixReportFromCounts, writeMixReport } from "./mix/report";
+import { loadEasySource } from "./mix/tatoeba";
+import { normalizeAnnotatedText } from "./sentence";
+import { humanEvalTexts } from "./slots/leak";
 
 /** Provenance seed stored on every record; the expansion is not random. */
 export const BACKWARD_SEED = 20260913;
 
 /** Versioned split salt. Never depend on row order, values, or --kinds filters. */
-export const SPLIT_VERSION = "kinds-frames-v1";
+export const SPLIT_VERSION = "kinds-frames-v3"; // v3: per-kind workers use the pure global frame hash, no repair pass
 
 const SPLITS: readonly Split[] = ["train", "validation", "heldout"];
 
@@ -33,11 +38,26 @@ const GENERATOR_SOURCES: readonly string[] = [
   "../../src/parser/lexicon.ts",
   "backward.ts",
   "correction.ts",
+  "corpus/production/protected-text.ts",
   "discourse.ts",
   "fingerprint.ts",
   "kinds.ts",
+  "mix/bootstrap.ts",
+  "mix/draw.ts",
+  "mix/easy.ts",
+  "mix/filter.ts",
+  "mix/hash-set.ts",
+  "mix/quotas.ts",
   "noise.ts",
   "sentence.ts",
+  "slots/compose.ts",
+  "slots/hedge.ts",
+  "slots/reason.ts",
+  "slots/sample.ts",
+  "slots/scene.ts",
+  "slots/speech.ts",
+  "slots/tail.ts",
+  "slots/types.ts",
 ];
 
 export function generatorSha256(): string {
@@ -62,6 +82,18 @@ export interface BackwardOptions {
   cap?: number;
   /** Stop after this many records total. */
   limit?: number;
+  /** Assign splits by the global frame hash only, skipping the per-kind
+   * repair pass. Required when kinds are rendered in separate processes:
+   * the repair moves frames based on which kinds it can see, so two workers
+   * can move a shared frame to different splits and leak it. */
+  pureHashSplit?: boolean;
+  /**
+   * Sample R/H/E to quota bands instead of walking catalog order.
+   * Default true when `--kinds` is unset so `--limit` cannot starve easy-no.
+   */
+  mix?: boolean;
+  /** Kernels kept per schedule kind when mixing. Full gen uses 512+. */
+  perKindKernels?: number;
 }
 
 export interface BackwardResult {
@@ -140,6 +172,8 @@ export function parseArgs(argv: readonly string[]): BackwardOptions {
   let kinds: KindId[] | undefined;
   let cap: number | undefined;
   let limit: number | undefined;
+  let mix: boolean | undefined;
+  let perKindKernels: number | undefined;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
@@ -170,6 +204,16 @@ export function parseArgs(argv: readonly string[]): BackwardOptions {
         limit = Number(readOption(argv, index));
         index++;
         break;
+      case "--mix":
+        mix = true;
+        break;
+      case "--no-mix":
+        mix = false;
+        break;
+      case "--per-kind-kernels":
+        perKindKernels = Number(readOption(argv, index));
+        index++;
+        break;
       default:
         throw new RangeError(`unknown flag: ${arg}`);
     }
@@ -181,6 +225,8 @@ export function parseArgs(argv: readonly string[]): BackwardOptions {
     ...(kinds === undefined ? {} : { kinds }),
     ...(cap === undefined ? {} : { cap }),
     ...(limit === undefined ? {} : { limit }),
+    ...(mix === undefined ? {} : { mix }),
+    ...(perKindKernels === undefined ? {} : { perKindKernels }),
   };
 }
 
@@ -343,13 +389,13 @@ export function assignSplit(example: KindExample, plan?: SplitPlan): KindExample
 
 function toRecord(example: KindExample, index: number): CorpusRecord {
   const split = example.split;
+  const annotated = normalizeAnnotatedText(example.example.text, example.example.spans);
+  const rendered = { ...example.example, ...annotated };
 
   const fingerprint =
     example.intent === null
-      ? createHash("sha256")
-          .update(`negative\0${coarseText(example.example.text)}`)
-          .digest("hex")
-      : fingerprintExample(example.example);
+      ? createHash("sha256").update(`negative\0${rendered.text}`).digest("hex")
+      : fingerprintExample(rendered);
 
   return {
     id: `${split}-${String(index).padStart(6, "0")}`,
@@ -358,11 +404,119 @@ function toRecord(example: KindExample, index: number): CorpusRecord {
     family: example.family,
     template: example.template,
     fingerprint,
-    text: example.example.text,
+    text: rendered.text,
     intent: example.intent,
     speechAct: example.example.speechAct,
-    spans: example.example.spans,
+    spans: rendered.spans,
   };
+}
+
+function mixReportPath(out: string): string {
+  return join(dirname(out), "mix-report.json");
+}
+
+const FULL_MIX_COUNT = 400_000;
+const FULL_PER_KIND_KERNELS = 512;
+const HUGE_PER_KIND_KERNELS = 2048;
+
+function writeMixed(options: BackwardOptions): BackwardSummary {
+  const count = options.limit ?? FULL_MIX_COUNT;
+
+  const perKindKernels =
+    options.perKindKernels ??
+    (count >= 1_000_000 ? HUGE_PER_KIND_KERNELS : count >= 100_000 ? FULL_PER_KIND_KERNELS : 48);
+
+  mkdirSync(dirname(options.out), { recursive: true });
+  const file = openSync(options.out, "w");
+  const metadata = splitMetadataSets();
+  const byKind: Record<string, number> = {};
+  const bySplit: Record<Split, number> = { train: 0, validation: 0, heldout: 0 };
+  const acc = emptyMixAccumulator();
+  let index = 0;
+  let chunk = "";
+
+  try {
+    for (const example of iterateMix({
+      count,
+      seed: BACKWARD_SEED,
+      perKindKernels,
+      ...(options.split === undefined ? {} : { split: options.split }),
+    })) {
+      const record = toRecord(example, index);
+
+      index += 1;
+      noteMixExample(acc, example);
+      if (count < 1_000_000) addSplitMetadata(metadata, record);
+      const kind = record.template.split("/")[0] ?? record.template;
+
+      byKind[kind] = (byKind[kind] ?? 0) + 1;
+      bySplit[record.split] += 1;
+      chunk += `${JSON.stringify(record)}\n`;
+
+      if (chunk.length >= 4 * 1024 * 1024) {
+        writeSync(file, chunk);
+        chunk = "";
+      }
+
+      if (index % 100_000 === 0) process.stdout.write(`mixed ${index.toLocaleString()} records\r`);
+    }
+
+    if (chunk.length > 0) writeSync(file, chunk);
+  } finally {
+    closeSync(file);
+  }
+
+  if (index > 0) process.stdout.write("\n");
+  const source = loadEasySource({ blocked: new Set(humanEvalTexts()) });
+  const report = mixReportFromCounts(acc.counts, acc.uniqueE.size, acc.uniqueH.size, source.kind);
+
+  if (report.failures.length > 0) {
+    throw new Error(`mix quotas missed: ${report.failures.join("; ")}`);
+  }
+
+  if (source.kind === "tatoeba" && bySplit.train >= 10_000 && acc.uniqueE.size < 2_000) {
+    throw new Error(`mix unique E texts ${acc.uniqueE.size} < 2000`);
+  }
+
+  writeMixReport(mixReportPath(options.out), report);
+  const { fingerprintsBySplit, carrierHashesBySplit } = sortedSplitMetadata(metadata);
+  const sha = generatorSha256();
+  const fingerprintsPath = `${options.out}.fingerprints.json`;
+
+  writeFileSync(
+    fingerprintsPath,
+    `${JSON.stringify(
+      {
+        generatorSha256: sha,
+        bySplit,
+        uniqueFingerprints: {
+          train: fingerprintsBySplit.train.length,
+          validation: fingerprintsBySplit.validation.length,
+          heldout: fingerprintsBySplit.heldout.length,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  return {
+    fingerprints: [],
+    fingerprintsBySplit,
+    carrierHashesBySplit,
+    generatorSha256: sha,
+    out: options.out,
+    fingerprintsPath,
+    byKind,
+    bySplit,
+  };
+}
+
+function shouldMix(options: BackwardOptions): boolean {
+  if (options.mix === false) return false;
+  if (options.kinds !== undefined) return false;
+
+  return options.mix === true || options.limit !== undefined || options.kinds === undefined;
 }
 
 function countByKind(records: readonly CorpusRecord[]): Record<string, number> {
@@ -387,6 +541,7 @@ function countBySplit(records: readonly CorpusRecord[]): Record<Split, number> {
 
 /** Expand the catalog, assign splits, and write JSONL plus fingerprints. */
 export function generateBackward(options: BackwardOptions): BackwardResult {
+  if (shouldMix(options)) return { ...writeMixed(options), records: [] };
   const wanted = options.kinds === undefined ? undefined : new Set(options.kinds);
   const expanded = expandKinds(wanted);
 
@@ -444,6 +599,7 @@ export function generateBackward(options: BackwardOptions): BackwardResult {
 
 /** Stream a large catalog to JSONL while retaining only compact summary data. */
 export function writeBackward(options: BackwardOptions): BackwardSummary {
+  if (shouldMix(options)) return writeMixed(options);
   const wanted = options.kinds === undefined ? undefined : new Set(options.kinds);
 
   if (wanted !== undefined) {
@@ -462,9 +618,14 @@ export function writeBackward(options: BackwardOptions): BackwardSummary {
   const bySplit: Record<Split, number> = { train: 0, validation: 0, heldout: 0 };
   let index = 0;
   let chunk = "";
+
   // Only compact frame keys are retained. The catalog itself remains streamed,
   // so millions of rendered rows are never held in memory at once.
-  const plan = options.cap === undefined ? splitPlan(iterateKinds(wanted)) : undefined;
+  const plan =
+    options.cap === undefined && !options.pureHashSplit
+      ? splitPlan(iterateKinds(wanted))
+      : undefined;
+
   const perKind = new Map<string, number>();
   const fingerprintSplit = new Map<string, Split>();
 
@@ -477,15 +638,12 @@ export function writeBackward(options: BackwardOptions): BackwardSummary {
         perKind.set(expanded.kind, taken + 1);
       }
 
-      let example = assignSplit(expanded, plan);
-
-      if (options.cap !== undefined) {
-        const taken = (perKind.get(expanded.kind) ?? 1) - 1;
-
-        if (taken === 0) example = { ...example, split: "train" };
-        else if (taken === 1) example = { ...example, split: "validation" };
-        else if (taken === 2) example = { ...example, split: "heldout" };
-      }
+      // Under a cap the split is the pure frame hash: it is global and
+      // deterministic, so a frame shared by two kinds rendered in separate
+      // workers lands in the same split in both. Forcing the first rows of a
+      // kind into fixed splits (the previous behaviour) leaked shared frames
+      // across train/heldout when kinds were rendered independently.
+      const example = assignSplit(expanded, plan);
 
       if (options.split !== undefined && example.split !== options.split) continue;
       if (options.limit !== undefined && index >= options.limit) break;

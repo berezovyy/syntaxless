@@ -37,7 +37,12 @@ export type CronFailureCode = ParseFailureCode | CompileFailureCode;
 
 export type CronResult =
   | { supported: true; expression: string; intent: ScheduleIntent }
-  | { supported: false; reason: string; code: CronFailureCode; intent: ScheduleIntent | null };
+  | {
+      supported: false;
+      reason: string;
+      code: CronFailureCode;
+      intent: ScheduleIntent | null;
+    };
 
 export async function cron(text: string): Promise<CronResult> {
   const parsed = await parse(text);
@@ -50,5 +55,10 @@ export async function cron(text: string): Promise<CronResult> {
 
   return result.supported
     ? { supported: true, expression: result.expression, intent: parsed.intent }
-    : { supported: false, reason: result.reason, code: result.code, intent: parsed.intent };
+    : {
+        supported: false,
+        reason: result.reason,
+        code: result.code,
+        intent: parsed.intent,
+      };
 }

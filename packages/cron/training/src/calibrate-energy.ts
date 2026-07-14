@@ -44,12 +44,12 @@ function asPredictions(value: ReturnType<Engine["inferTokens"]>): Predictions {
 }
 
 export async function fitEnergyThreshold(
-  engine: Engine,
+  engine: Pick<Engine, "tokenize" | "inferTokens">,
   examples: readonly EnergyExample[],
   faTarget = 0.01,
 ): Promise<EnergyFit> {
   const energies: number[] = [];
-  const pooled: number[][] = [];
+  const pooled: Array<{ values: number[]; negative: boolean }> = [];
   const isNeg: boolean[] = [];
 
   for (const example of examples) {
@@ -57,13 +57,20 @@ export async function fitEnergyThreshold(
     const predictions = asPredictions(engine.inferTokens(tokens));
 
     energies.push(energyFromPredictions(predictions));
-    if (predictions.pooled !== undefined) pooled.push(Array.from(predictions.pooled));
+
+    if (predictions.pooled !== undefined) {
+      pooled.push({
+        values: Array.from(predictions.pooled),
+        negative: example.negative,
+      });
+    }
+
     isNeg.push(example.negative);
   }
 
   const negEnergy = energies.filter((_, index) => isNeg[index]);
-  const posPooled = pooled.filter((_, index) => !isNeg[index]);
-  const hidden = posPooled[0]?.length ?? pooled[0]?.length ?? 0;
+  const posPooled = pooled.filter((row) => !row.negative).map((row) => row.values);
+  const hidden = posPooled[0]?.length ?? pooled[0]?.values.length ?? 0;
   const mean = new Array<number>(hidden).fill(0);
   const variance = new Array<number>(hidden).fill(1);
 
@@ -88,12 +95,12 @@ export async function fitEnergyThreshold(
   }
 
   const mahals = pooled.map((row) => {
-    const fake = { pooled: Float32Array.from(row) } as Predictions;
+    const fake = { pooled: Float32Array.from(row.values) } as Predictions;
 
     return mahalanobisFromPredictions(fake, mean, variance) ?? 0;
   });
 
-  const negMahal = mahals.filter((_, index) => isNeg[index]);
+  const negMahal = mahals.filter((_, index) => pooled[index]!.negative);
 
   const meanEnergy =
     energies.length === 0 ? 0 : energies.reduce((sum, value) => sum + value, 0) / energies.length;

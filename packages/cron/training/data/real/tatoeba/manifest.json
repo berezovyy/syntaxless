@@ -1,0 +1,20 @@
+{
+  "url": "https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2",
+  "license": "CC-BY 2.0 FR",
+  "attribution": "Sentences from Tatoeba (https://tatoeba.org), CC-BY 2.0 FR.",
+  "retrievedAt": "2026-09-16",
+  "sha256": "7c46287a9146d8090ea26b6b2eaadc759b92a550e865e32388077806f584ee62",
+  "filterVersion": "easy-no-v1",
+  "kept": 50000,
+  "dropped": {
+    "language": 0,
+    "shape": 401436,
+    "length": 0,
+    "timeShaped": 0,
+    "timeWord": 0,
+    "reserved": 0,
+    "blocked": 0,
+    "duplicate": 0
+  },
+  "limit": 50000
+}

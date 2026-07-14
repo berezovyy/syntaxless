@@ -2,7 +2,15 @@
  * Concatenate per-kind featurize-kinds prefixes into one Dataset prefix.
  * Offsets and frame ids are rebased; other bins are byte-appended.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 
 import { LABEL_COUNT, LABELS } from "../../src/model/labels.js";
 import { SPEECH_ACT_COUNT, SPEECH_ACTS } from "../../src/model/speech-acts.js";
@@ -18,16 +26,39 @@ const SIMPLE_KEYS = [
   "neighbors",
   "speech",
   "actionable",
+  "populations",
 ] as const;
 
 function loadManifest(prefix: string): FeaturizeManifest {
   return JSON.parse(readFileSync(`${prefix}.json`, "utf8")) as FeaturizeManifest;
 }
 
-function concatBuffers(paths: string[]): Buffer {
-  const parts = paths.filter((path) => existsSync(path)).map((path) => readFileSync(path));
+const COPY_CHUNK = 64 * 1024 * 1024;
 
-  return parts.length === 0 ? Buffer.alloc(0) : Buffer.concat(parts);
+/** Byte-append `paths` into `out` in 64 MiB chunks; the uncapped pool's
+ * rows.bin is ~18 GB, so the files must never be resident at once. */
+function appendFiles(paths: string[], out: string): void {
+  const dst = openSync(out, "w");
+  const chunk = Buffer.allocUnsafe(COPY_CHUNK);
+
+  try {
+    for (const path of paths) {
+      if (!existsSync(path)) continue;
+      const src = openSync(path, "r");
+
+      try {
+        let read: number;
+
+        while ((read = readSync(src, chunk, 0, COPY_CHUNK, null)) > 0) {
+          writeSync(dst, chunk, 0, read);
+        }
+      } finally {
+        closeSync(src);
+      }
+    }
+  } finally {
+    closeSync(dst);
+  }
 }
 
 function readUint32(path: string): Uint32Array {
@@ -35,6 +66,33 @@ function readUint32(path: string): Uint32Array {
   const buf = readFileSync(path);
 
   return new Uint32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+}
+
+/** Rebase per-kind uint32 shards (offsets, frame ids) into `out`, one kind
+ * at a time, so the merged array is streamed rather than built in memory. */
+function writeRebasedUint32(
+  paths: string[],
+  out: string,
+  rebase: (values: Uint32Array, shard: number) => Uint32Array,
+  header?: Uint32Array,
+): void {
+  const dst = openSync(out, "w");
+
+  try {
+    if (header !== undefined && header.length > 0) {
+      writeSync(dst, Buffer.from(header.buffer, header.byteOffset, header.byteLength));
+    }
+
+    for (let shard = 0; shard < paths.length; shard++) {
+      const values = rebase(readUint32(paths[shard]!), shard);
+
+      if (values.length > 0) {
+        writeSync(dst, Buffer.from(values.buffer, values.byteOffset, values.byteLength));
+      }
+    }
+  } finally {
+    closeSync(dst);
+  }
 }
 
 export function concatKindPrefixes(prefixes: readonly string[], out: string): void {
@@ -49,6 +107,8 @@ export function concatKindPrefixes(prefixes: readonly string[], out: string): vo
   const frameCounts: number[] = [];
   const frameBase: number[] = [];
   const actionableCounts: Record<0 | 1, number> = { 0: 0, 1: 0 };
+  const populationCounts = { R: 0, H: 0, E: 0 };
+  const hasPopulations = manifests.every((manifest) => manifest.format.populations !== undefined);
   let framesSoFar = 0;
 
   for (const manifest of manifests) {
@@ -63,44 +123,54 @@ export function concatKindPrefixes(prefixes: readonly string[], out: string): vo
     for (const label of LABELS) labelCounts[label]! += manifest.labelCounts[label] ?? 0;
     actionableCounts[0] += manifest.actionableCounts[0] ?? 0;
     actionableCounts[1] += manifest.actionableCounts[1] ?? 0;
+
+    for (const population of ["R", "H", "E"] as const) {
+      populationCounts[population] += manifest.populationCounts?.[population] ?? 0;
+    }
   }
 
   for (const key of SIMPLE_KEYS) {
+    if (key === "populations" && !hasPopulations) continue;
     const suffix = SHARD_FORMAT[key].suffix;
 
-    writeFileSync(`${out}${suffix}`, concatBuffers(present.map((prefix) => `${prefix}${suffix}`)));
+    appendFiles(
+      present.map((prefix) => `${prefix}${suffix}`),
+      `${out}${suffix}`,
+    );
   }
 
-  const offsetChunks: number[] = [0];
+  // offsets: [0, ...] with every kind's offsets shifted by the tokens before it.
   let tokens = 0;
 
-  for (const prefix of present) {
-    const offsets = readUint32(`${prefix}${SHARD_FORMAT.offsets.suffix}`);
-
-    for (let index = 1; index < offsets.length; index++) {
-      offsetChunks.push(tokens + offsets[index]!);
-    }
-
-    tokens += offsets.length > 0 ? offsets[offsets.length - 1]! : 0;
-  }
-
-  writeFileSync(
+  writeRebasedUint32(
+    present.map((prefix) => `${prefix}${SHARD_FORMAT.offsets.suffix}`),
     `${out}${SHARD_FORMAT.offsets.suffix}`,
-    Buffer.from(new Uint32Array(offsetChunks).buffer),
+    (offsets) => {
+      const shifted = new Uint32Array(Math.max(0, offsets.length - 1));
+
+      for (let index = 1; index < offsets.length; index++) {
+        shifted[index - 1] = tokens + offsets[index]!;
+      }
+
+      tokens += offsets.length > 0 ? offsets[offsets.length - 1]! : 0;
+
+      return shifted;
+    },
+    new Uint32Array([0]),
   );
 
-  const frameParts: number[] = [];
-
-  for (let shard = 0; shard < present.length; shard++) {
-    const frames = readUint32(`${present[shard]!}${SHARD_FORMAT.frames.suffix}`);
-    const base = frameBase[shard]!;
-
-    for (const id of frames) frameParts.push(id + base);
-  }
-
-  writeFileSync(
+  // frames: per-kind frame ids shifted by the kind's frame base.
+  writeRebasedUint32(
+    present.map((prefix) => `${prefix}${SHARD_FORMAT.frames.suffix}`),
     `${out}${SHARD_FORMAT.frames.suffix}`,
-    Buffer.from(new Uint32Array(frameParts).buffer),
+    (frames, shard) => {
+      const base = frameBase[shard]!;
+      const shifted = new Uint32Array(frames.length);
+
+      for (let index = 0; index < frames.length; index++) shifted[index] = frames[index]! + base;
+
+      return shifted;
+    },
   );
 
   const merged: FeaturizeManifest = {
@@ -114,7 +184,12 @@ export function concatKindPrefixes(prefixes: readonly string[], out: string): vo
     speechActClasses: manifests[0]?.speechActClasses ?? SPEECH_ACT_COUNT,
     speechActNames: manifests[0]?.speechActNames ?? SPEECH_ACTS,
     actionableCounts: { 0: actionableCounts[0], 1: actionableCounts[1] },
-    format: SHARD_FORMAT,
+    ...(hasPopulations ? { populationCounts } : {}),
+    format: hasPopulations
+      ? SHARD_FORMAT
+      : (Object.fromEntries(
+          Object.entries(SHARD_FORMAT).filter(([key]) => key !== "populations"),
+        ) as FeaturizeManifest["format"]),
   };
 
   writeFileSync(`${out}.json`, `${JSON.stringify(merged, null, 2)}\n`);

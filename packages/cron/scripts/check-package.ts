@@ -187,13 +187,23 @@ function runConsumer(tarball: string, root: string): void {
     `${JSON.stringify(CONSUMER_TSCONFIG, null, 2)}\n`,
   );
 
-  execFileSync("bun", ["add", tarball], { cwd: consumerDir, stdio: "inherit" });
-  execFileSync("bun", ["run", "consumer.ts"], { cwd: consumerDir, stdio: "inherit" });
+  execFileSync("bun", ["add", tarball], {
+    cwd: consumerDir,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      BUN_INSTALL_CACHE_DIR: join(root, "cache"),
+      BUN_TMPDIR: root,
+    },
+  });
 
+  // Check public declarations even if the current model later fails inference.
   execFileSync(process.execPath, [tscBinary, "-p", "tsconfig.json"], {
     cwd: consumerDir,
     stdio: "inherit",
   });
+
+  execFileSync("bun", ["run", "consumer.ts"], { cwd: consumerDir, stdio: "inherit" });
 }
 
 function main(): void {

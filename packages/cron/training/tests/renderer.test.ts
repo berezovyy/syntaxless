@@ -175,7 +175,10 @@ test("the same intent, style, and seed render byte-identically", () => {
     {
       family: "time-of-day",
       style: "digits",
-      intent: { frequency: { unit: "day", interval: 1 }, time: { hour: 21, minute: 30 } },
+      intent: {
+        frequency: { unit: "day", interval: 1 },
+        time: { hour: 21, minute: 30 },
+      },
     },
     {
       family: "bounds",
@@ -216,7 +219,7 @@ test("the same intent, style, and seed render byte-identically", () => {
   expect(JSON.stringify(negative)).toBe(JSON.stringify(renderNegative(createRng(4242))));
 });
 
-test("labels are supplied by add() and never derived from parsing", () => {
+test("a bare weekday has one supervised weekday token", () => {
   const example = renderIntent(
     { frequency: { unit: "week", interval: 1 }, weekdays: ["monday"] },
     "terse",

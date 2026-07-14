@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "sourceId": "tatoeba-english-v2",
+  "snapshotDate": "2026-09-19",
+  "retrievedOn": "2026-09-20",
+  "license": "CC-BY-2.0-FR",
+  "licenseURL": "https://creativecommons.org/licenses/by/2.0/fr/",
+  "documentationURL": "https://tatoeba.org/ca/downloads",
+  "sentences": {
+    "file": "data/synth/production-sources/tatoeba-20260919/eng_sentences_detailed.tsv.bz2",
+    "url": "https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences_detailed.tsv.bz2",
+    "sha256": "028ba8e2b8ae3a5e1694e95d901a3f50b9eb8fcdf6ebe033ce6ab265ec183468"
+  },
+  "links": {
+    "file": "data/synth/production-sources/tatoeba-20260919/eng-eng_links.tsv.bz2",
+    "url": "https://downloads.tatoeba.org/exports/per_language/eng/eng-eng_links.tsv.bz2",
+    "sha256": "cefa98434db0bac2d2ade367d072b407fe3e9d7d382b08994db13e61cd73b787"
+  },
+  "grouping": {
+    "version": "tatoeba-linked-numeric-names-v1",
+    "relatedNames": ["tom", "mary", "john", "sami", "ziri", "yanni"],
+    "rules": [
+      "transitive official English-English sentence links",
+      "punctuation-normalized duplicate identity",
+      "digit substitutions and listed common-person-name substitutions"
+    ],
+    "limitation": "Unlinked paraphrases are not guaranteed to be discovered. This source grouping is not independent acceptance-data certification."
+  },
+  "transformation": "Runtime normalization changes casing, punctuation and spacing; source IDs and the pinned original archive preserve traceability.",
+  "purpose": "Full eligible ordinary-English source pool; final production mix controls selection and concentration separately. Not genuine user scheduling requests."
+}

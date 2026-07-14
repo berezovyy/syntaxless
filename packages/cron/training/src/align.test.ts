@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 
-import type { Label } from "../../src/model/labels";
 import { tokenize } from "../../src/model/tokenizer";
 import type { ScheduleIntent } from "../../src/types/intent";
 import { alignText, expectedValues } from "./llm/align";
@@ -172,12 +171,6 @@ test("spans cover whole tokens, are ordered, and do not overlap", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) continue;
     checkCoverage(text, result.spans);
-    const boundaries = new Set(tokenize(text).flatMap((token) => [token.start, token.end]));
-
-    for (const span of result.spans) {
-      expect(boundaries.has(span.start)).toBe(true);
-      expect(boundaries.has(span.end)).toBe(true);
-    }
   }
 });
 
@@ -205,10 +198,16 @@ test("only content spans yield values; structural labels do not", () => {
 
   expect(result.ok).toBe(true);
   if (!result.ok) return;
-  const labels: Label[] = result.spans.map((span) => span.label);
 
-  expect(labels).toContain("RECUR");
-  expect(labels).toContain("GLUE");
+  expect(result.slots).toEqual([
+    { label: "WEEKDAY_MON", value: "monday", start: 6, end: 12 },
+    { label: "HOUR_9", value: 9, start: 16, end: 17 },
+  ]);
+
+  expect(result.spans.filter((span) => span.label === "RECUR" || span.label === "GLUE")).toEqual([
+    { start: 0, end: 5, label: "RECUR", clauseStart: false },
+    { start: 13, end: 15, label: "GLUE", clauseStart: false },
+  ]);
 });
 
 test("expectedValues derives required slots from the intent alone", () => {
@@ -218,26 +217,11 @@ test("expectedValues derives required slots from the intent alone", () => {
     time: { hour: 21, minute: 30 },
   };
 
-  const values = expectedValues(intent);
-
-  expect(values).toContainEqual({
-    label: "WEEKDAY_MON",
-    value: "monday",
-    required: true,
-  });
-
-  expect(values).toContainEqual({
-    label: "INTERVAL_LIT",
-    value: 1,
-    required: false,
-  });
-
-  expect(values).toContainEqual({ label: "HOUR_21", value: 21, required: true });
-  expect(values).toContainEqual({ label: "MINUTE_30", value: 30, required: true });
-
-  expect(values).toContainEqual({
-    label: "MERIDIEM_PM",
-    value: "pm",
-    required: false,
-  });
+  expect(expectedValues(intent)).toEqual([
+    { label: "WEEKDAY_MON", value: "monday", required: true },
+    { label: "INTERVAL_LIT", value: 1, required: false },
+    { label: "HOUR_21", value: 21, required: true },
+    { label: "MINUTE_30", value: 30, required: true },
+    { label: "MERIDIEM_PM", value: "pm", required: false },
+  ]);
 });

@@ -130,8 +130,8 @@ Promote the candidate to `packages/cron/src/model/weights.gen.ts` when, on the *
 
 - **O** = 100% (CI).
 - **G2** = 100% exact AST, every family; negative half 0 false-accept.
-- **H-neg** = 0, **H-silent** = 0 on the regression union.
-- **H** ≥ 95% overall and ≥ 90% per family (H is real English written by humans with real ambiguity; 100% on it means the gold is wrong somewhere — investigate, don't chase).
+- **FA@cov** ≤ 0.01 @ coverage ≥ 0.90, **H-silent** = 0 on the regression union (supersedes "H-neg = 0"; see `STACK-PLAN.md` §Metrics).
+- **H-pos** ≥ 95% of positives (886) and ≥ 90% per family (real English has real ambiguity; 100% means the gold is wrong somewhere — investigate, don't chase). The composite H is retired: it scored a reject-all model 44%.
 - **INV** ≥ 99%.
 - Fresh, unconsumed `human-v16` acceptance run recorded once, hash into `consumed.json`.
 - Size/privacy gates (`packages/cron/tests/browser.ts`, Brotli) green.

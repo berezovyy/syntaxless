@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,12 @@ SCHEDULE_KIND_NAMES = (
     "ambiguous",
 )
 SCHEDULE_KIND_INDEX = {name: index for index, name in enumerate(SCHEDULE_KIND_NAMES)}
+
+# Must match the production featurizer. This is corpus population, not a model
+# target: it exists only so a complete, unique corpus can be mixed at training
+# time without deleting rows while the corpus is built.
+POPULATION_NAMES = ("R", "H", "E")
+POPULATION_INDEX = {name: index for index, name in enumerate(POPULATION_NAMES)}
 
 # Must match packages/cron/src/model/speech-acts.ts. Never reorder.
 SPEECH_ACT_NAMES = (
@@ -165,6 +172,29 @@ def schedule_kind_for_frame(frame_name: str) -> int:
     """Map a detailed generator kind onto the compact utterance-level head."""
     parts = frame_name.split("/")
     kind = parts[0]
+    # Whole-utterance production sources name their semantic family, not the
+    # legacy renderer kind. Never let ordinary negatives, clocks, bounds, or
+    # corrections silently inherit the old catch-all "weekly" target.
+    production_kinds = {
+        "easy-no": "none",
+        "minute-interval": "interval",
+        "hour-interval": "interval",
+        "day-interval": "interval",
+        "week-interval": "interval",
+        "month-interval": "interval",
+        "daily-clock": "daily",
+        "last-day-of-month": "monthly",
+        "last-business-day": "monthly",
+        "start-bound": "bounded",
+        "exclusive-end-bound": "bounded",
+        "inclusive-end-bound": "bounded",
+        "date-window": "bounded",
+        "correction-interval": "interval",
+        "correction-clock": "daily",
+        "correction-weekday": "weekly",
+    }
+    if kind in production_kinds:
+        return SCHEDULE_KIND_INDEX[production_kinds[kind]]
     if kind == "negative":
         category = parts[1] if len(parts) > 1 else "ordinary"
         return SCHEDULE_KIND_INDEX[
@@ -223,6 +253,47 @@ def group_frame_members(frames: np.ndarray, frame_count: int) -> list[np.ndarray
     return [order[start:stop] for start, stop in zip(starts, stops, strict=True)]
 
 
+def population_draw_counts(
+    counts: np.ndarray,
+    weights: np.ndarray,
+    draw_total: int | None,
+    *,
+    cover_all: bool,
+) -> np.ndarray:
+    """Allocate an exact population mix, optionally retaining every member."""
+    counts = np.asarray(counts, dtype=np.int64)
+    weights = np.asarray(weights, dtype=np.float64)
+    if counts.shape != weights.shape or counts.ndim != 1:
+        raise ValueError("population counts and weights must be matching vectors")
+    if np.any(counts < 0) or not np.all(np.isfinite(weights)) or np.any(weights < 0):
+        raise ValueError("invalid population counts or weights")
+    total_weight = float(weights.sum())
+    if total_weight <= 0:
+        raise ValueError("population mix must have positive total weight")
+    weights = weights / total_weight
+    if cover_all:
+        if np.any((counts > 0) & (weights == 0)):
+            raise ValueError("cover-all population mix cannot assign zero weight")
+        total = max(
+            int(counts.sum()),
+            math.ceil(max(float(count) / float(weight) for count, weight in zip(counts, weights, strict=True) if count)),
+        )
+    else:
+        if draw_total is None:
+            draw_total = int(counts.sum())
+        total = int(draw_total)
+    while True:
+        raw = weights * total
+        allocated = np.floor(raw).astype(np.int64)
+        remainder = total - int(allocated.sum())
+        if remainder:
+            order = np.argsort(-(raw - allocated), kind="stable")
+            allocated[order[:remainder]] += 1
+        if not cover_all or bool(np.all(allocated >= counts)):
+            return allocated
+        total += 1
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -246,6 +317,7 @@ class ShardManifest:
     speech_act_classes: int
     speech_act_names: list[str]
     actionable_counts: dict[str, int]
+    population_counts: dict[str, int]
 
     @classmethod
     def load(cls, prefix: Path) -> "ShardManifest":
@@ -264,6 +336,10 @@ class ShardManifest:
             actionable_counts={
                 str(key): int(value)
                 for key, value in parsed.get("actionableCounts", {}).items()
+            },
+            population_counts={
+                str(key): int(value)
+                for key, value in parsed.get("populationCounts", {}).items()
             },
         )
 
@@ -287,6 +363,11 @@ class Dataset:
         self.neighbors = self._load("neighbors")
         self.offsets = self._load("offsets")
         self.frames = self._load("frames") if "frames" in self.manifest.format else None
+        self.populations = (
+            self._load("populations")
+            if "populations" in self.manifest.format
+            else None
+        )
         self.speech = None
         self.actionable = None
 
@@ -300,7 +381,7 @@ class Dataset:
         self.rows = self.rows.reshape(self.token_count, self.rows_per_token)
         self.neighbors = self.neighbors.reshape(self.token_count, 2)
         self.lengths = (self.offsets[1:] - self.offsets[:-1]).astype(np.int64)
-        self.frame_members: list[np.ndarray] = []
+        self.frame_members: list[np.ndarray] | None = None
         self.frame_schedule_kinds = np.asarray(
             [schedule_kind_for_frame(name) for name in self.manifest.frame_names],
             dtype=np.int64,
@@ -311,14 +392,16 @@ class Dataset:
                     f"{self.prefix}: frames has {self.frames.size} values, "
                     f"expected {self.sequences}"
                 )
-            frame_count = len(self.manifest.frame_names)
-            try:
-                self.frame_members = group_frame_members(self.frames, frame_count)
-            except ValueError as error:
-                raise ValueError(f"{self.prefix}: {error}") from error
-            actual_counts = [int(members.size) for members in self.frame_members]
-            if self.manifest.frame_counts and actual_counts != self.manifest.frame_counts:
-                raise ValueError(f"{self.prefix}: frame counts do not match frames shard")
+        if self.populations is not None:
+            if self.populations.size != self.sequences:
+                raise ValueError(
+                    f"{self.prefix}: populations has {self.populations.size} values, "
+                    f"expected {self.sequences}"
+                )
+            invalid = np.asarray(self.populations) >= len(POPULATION_NAMES)
+            if bool(np.any(invalid)):
+                value = int(np.asarray(self.populations)[np.flatnonzero(invalid)[0]])
+                raise ValueError(f"{self.prefix}: invalid population id {value}")
         self._load_discourse()
 
     def _load(self, key: str) -> np.ndarray:
@@ -371,11 +454,77 @@ class Dataset:
     def __len__(self) -> int:
         return self.sequences
 
+    def _frame_members(self) -> list[np.ndarray]:
+        """Build the large frame index only when frame balancing requests it."""
+        if self.frames is None:
+            return []
+        if self.frame_members is None:
+            frame_count = len(self.manifest.frame_names)
+            try:
+                members = group_frame_members(self.frames, frame_count)
+            except ValueError as error:
+                raise ValueError(f"{self.prefix}: {error}") from error
+            actual_counts = [int(group.size) for group in members]
+            if self.manifest.frame_counts and actual_counts != self.manifest.frame_counts:
+                raise ValueError(f"{self.prefix}: frame counts do not match frames shard")
+            self.frame_members = members
+        return self.frame_members
+
+    def population_epoch_size(
+        self, population_mix: tuple[float, float, float], *, cover_all: bool
+    ) -> int:
+        if self.populations is None:
+            raise ValueError("population epoch size requires a populations shard")
+        counts = np.bincount(
+            np.asarray(self.populations), minlength=len(POPULATION_NAMES)
+        )
+        allocated = population_draw_counts(
+            counts, np.asarray(population_mix), self.sequences, cover_all=cover_all
+        )
+        return int(allocated.sum())
+
     def digests(self) -> dict[str, str]:
-        """SHA-256 of the manifest and every shard file for the report."""
-        result = {"manifest": _sha256(Path(f"{self.prefix}.json"))}
+        """SHA-256 of the manifest and every shard file for the report.
+
+        Hashing 20 GB of shards took 94 s of a 106 s run (S.1 profile). Digests
+        are cached in `<prefix>.digests.json` keyed by file size and mtime, so a
+        shard is re-hashed only when it changes.
+        """
+        cache_path = Path(f"{self.prefix}.digests.json")
+        cache: dict[str, dict[str, object]] = {}
+        if cache_path.exists():
+            try:
+                cache = json.loads(cache_path.read_text())
+            except (OSError, ValueError):
+                cache = {}
+        files = {"manifest": Path(f"{self.prefix}.json")}
         for key, spec in self.manifest.format.items():
-            result[key] = _sha256(Path(f"{self.prefix}{spec['suffix']}"))
+            files[key] = Path(f"{self.prefix}{spec['suffix']}")
+        result: dict[str, str] = {}
+        dirty = False
+        for key, path in files.items():
+            stat = path.stat()
+            entry = cache.get(key)
+            if (
+                isinstance(entry, dict)
+                and entry.get("size") == stat.st_size
+                and entry.get("mtime_ns") == stat.st_mtime_ns
+                and isinstance(entry.get("sha256"), str)
+            ):
+                result[key] = str(entry["sha256"])
+                continue
+            result[key] = _sha256(path)
+            cache[key] = {
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "sha256": result[key],
+            }
+            dirty = True
+        if dirty:
+            try:
+                cache_path.write_text(json.dumps(cache, indent=2, sort_keys=True) + "\n")
+            except OSError:
+                pass
         return result
 
     def batches(
@@ -386,6 +535,8 @@ class Dataset:
         balance_kinds: bool = False,
         balance_schedule_kinds: bool = False,
         frame_balance_power: float = 0.5,
+        population_mix: tuple[float, float, float] | None = None,
+        population_cover_all: bool = False,
         max_sequences: int | None = None,
     ):
         """Yield batches of sequence indices, grouped by similar length.
@@ -395,13 +546,77 @@ class Dataset:
         """
         rng = np.random.default_rng(shuffle_seed)
         selected = np.arange(self.sequences)
-        if balance_frames or balance_kinds or balance_schedule_kinds:
-            if not self.frame_members:
+        cover_all_extras: np.ndarray | None = None
+        if population_mix is not None:
+            if balance_frames or balance_kinds or balance_schedule_kinds:
+                raise ValueError(
+                    "population mixing cannot be combined with frame/kind balancing"
+                )
+            if self.populations is None:
+                raise ValueError(
+                    f"{self.prefix}: population mixing requires a populations shard"
+                )
+            weights = np.asarray(population_mix, dtype=np.float64)
+            if weights.shape != (len(POPULATION_NAMES),):
+                raise ValueError("population mix must have exactly R,H,E weights")
+            if not np.all(np.isfinite(weights)) or np.any(weights < 0):
+                raise ValueError("population mix weights must be finite and non-negative")
+            total_weight = float(weights.sum())
+            if total_weight <= 0:
+                raise ValueError("population mix must have positive total weight")
+            counts = np.bincount(
+                np.asarray(self.populations), minlength=len(POPULATION_NAMES)
+            )
+            draw_total = min(self.sequences, max_sequences) if max_sequences is not None else self.sequences
+            draw_counts = population_draw_counts(
+                counts,
+                weights,
+                draw_total,
+                cover_all=population_cover_all,
+            )
+            population_values = np.asarray(self.populations)
+            draws: list[np.ndarray] = []
+            for population_id, count in enumerate(draw_counts):
+                if count == 0:
+                    continue
+                members = np.flatnonzero(population_values == population_id)
+                if members.size == 0:
+                    raise ValueError(
+                        f"{self.prefix}: population {POPULATION_NAMES[population_id]} "
+                        "is empty but has non-zero requested weight"
+                    )
+                count = int(count)
+                if population_cover_all:
+                    extra = count - members.size
+                    if extra:
+                        draws.append(
+                            rng.choice(
+                                members, size=extra, replace=extra > members.size
+                            )
+                        )
+                else:
+                    draws.append(rng.choice(members, size=count, replace=count > members.size))
+            if population_cover_all:
+                cover_all_extras = (
+                    np.concatenate(draws)
+                    if draws
+                    else np.empty(0, dtype=np.int64)
+                )
+            else:
+                selected = np.concatenate(draws)
+                rng.shuffle(selected)
+            del draws, members
+            # The cap was incorporated into the population allocation. Applying
+            # it again would disturb the requested R/H/E proportions.
+            max_sequences = None
+        elif balance_frames or balance_kinds or balance_schedule_kinds:
+            frame_members = self._frame_members()
+            if not frame_members:
                 raise ValueError(
                     f"{self.prefix}: balanced batching requires a frames shard"
                 )
             counts = np.asarray(
-                [members.size for members in self.frame_members], dtype=np.float64
+                [members.size for members in frame_members], dtype=np.float64
             )
             masses = (
                 np.power(counts, 1.0 - frame_balance_power)
@@ -429,25 +644,100 @@ class Dataset:
                     masses[frame_ids] /= class_mass
             draw_counts = rng.multinomial(self.sequences, masses / masses.sum())
             draws: list[np.ndarray] = []
-            for count, members in zip(draw_counts, self.frame_members, strict=True):
+            for count, members in zip(draw_counts, frame_members, strict=True):
                 if count:
                     draws.append(rng.choice(members, size=count, replace=True))
             selected = np.concatenate(draws)
             rng.shuffle(selected)
+            del draws, members
 
         if max_sequences is not None and selected.size > max_sequences:
             selected = rng.choice(selected, size=max_sequences, replace=False)
 
-        tie_break = np.arange(selected.size)
-        if shuffle_seed is not None:
-            permutation = rng.permutation(selected.size)
-            tie_break = np.empty(selected.size, dtype=np.int64)
-            tie_break[permutation] = np.arange(selected.size)
-        order = selected[np.lexsort((tie_break, self.lengths[selected]))]
-        for start in range(0, order.size, batch_size):
-            yield [int(index) for index in order[start : start + batch_size]]
+        if population_cover_all:
+            # The 38 GiB rows shard is larger than RAM. Globally randomized
+            # sequence ids turn every batch into thousands of NVMe page faults
+            # and leave CUDA idle. Shuffle 262k-sequence locality blocks, then
+            # bucket and shuffle batches inside each block. Every unique row is
+            # still visited once, minority duplicates stay beside their source,
+            # and each gather becomes predominantly sequential I/O.
+            block_size = 262_144
+            block_count = math.ceil(self.sequences / block_size)
+            extras = (
+                cover_all_extras
+                if cover_all_extras is not None
+                else np.empty(0, dtype=np.int64)
+            )
+            if extras.size:
+                extra_blocks = extras // block_size
+                extra_order = np.argsort(extra_blocks, kind="stable")
+                extras = extras[extra_order]
+                extra_counts = np.bincount(extra_blocks, minlength=block_count)
+            else:
+                extra_counts = np.zeros(block_count, dtype=np.int64)
+            extra_stops = np.cumsum(extra_counts, dtype=np.int64)
+            extra_starts = np.concatenate(
+                (np.zeros(1, dtype=np.int64), extra_stops[:-1])
+            )
+            block_order = np.arange(block_count)
+            if shuffle_seed is not None:
+                rng.shuffle(block_order)
+            for block in block_order:
+                start = int(block) * block_size
+                stop = min(start + block_size, self.sequences)
+                block_selected = np.arange(start, stop, dtype=np.int64)
+                extra_start = int(extra_starts[block])
+                extra_stop = int(extra_stops[block])
+                if extra_stop > extra_start:
+                    block_selected = np.concatenate(
+                        (block_selected, extras[extra_start:extra_stop])
+                    )
+                bucket_ids = np.searchsorted(
+                    BUCKETS, self.lengths[block_selected], side="left"
+                )
+                groups = [
+                    block_selected[bucket_ids == index]
+                    for index in range(len(BUCKETS))
+                ]
+                descriptors: list[tuple[int, int, int]] = []
+                for bucket_index, group in enumerate(groups):
+                    if shuffle_seed is not None:
+                        rng.shuffle(group)
+                    descriptors.extend(
+                        (bucket_index, offset, min(offset + batch_size, group.size))
+                        for offset in range(0, group.size, batch_size)
+                    )
+                if shuffle_seed is not None:
+                    rng.shuffle(descriptors)
+                for bucket_index, offset, end in descriptors:
+                    # Sorted ids preserve sequential memmap reads; order inside
+                    # a batch cannot affect its averaged gradient.
+                    yield np.sort(groups[bucket_index][offset:end])
+            return
 
-    def batch(self, indices, device: str | None = None) -> dict:
+        # Group into the fixed padding buckets, then shuffle whole batches. This
+        # keeps padding low without the old 20M-row global lexsort or a permanent
+        # shortest-to-longest curriculum.
+        bucket_ids = np.searchsorted(BUCKETS, self.lengths[selected], side="left")
+        groups = [selected[bucket_ids == index] for index in range(len(BUCKETS))]
+        del bucket_ids, selected
+        descriptors = [
+            (bucket_index, start, min(start + batch_size, group.size))
+            for bucket_index, group in enumerate(groups)
+            for start in range(0, group.size, batch_size)
+        ]
+        if shuffle_seed is not None:
+            rng.shuffle(descriptors)
+        for bucket_index, start, stop in descriptors:
+            yield groups[bucket_index][start:stop]
+
+    def batch(
+        self,
+        indices: np.ndarray | list[int],
+        device: str | None = None,
+        *,
+        pin_memory: bool = False,
+    ) -> dict:
         """Pad `indices` to the next length bucket and return model tensors.
 
         Length-bucket shards are contiguous arrays built once. A batch is a
@@ -521,8 +811,13 @@ class Dataset:
             "speech_acts": torch.as_tensor(speech_acts),
             "actionable": torch.as_tensor(actionable),
         }
+        if pin_memory:
+            tensors = {key: value.pin_memory() for key, value in tensors.items()}
         if device is not None:
-            tensors = {key: value.to(device) for key, value in tensors.items()}
+            tensors = {
+                key: value.to(device, non_blocking=pin_memory)
+                for key, value in tensors.items()
+            }
         return tensors
 
 

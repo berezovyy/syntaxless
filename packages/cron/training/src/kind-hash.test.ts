@@ -1,14 +1,19 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { tempDir } from "../tests/helpers/temp-dir";
 import { SPLIT_VERSION } from "./backward";
 import { hashKindDef, kindArtifactNames, labelsHash, noiseHash, planKindRegen } from "./kind-hash";
 import { KINDS } from "./kinds";
 
 test("each kind hash is stable and unique for the current catalog", () => {
-  const extras = { noise: noiseHash(), labels: labelsHash(), splitVersion: SPLIT_VERSION };
+  const extras = {
+    noise: noiseHash(),
+    labels: labelsHash(),
+    splitVersion: SPLIT_VERSION,
+  };
+
   const hashes = KINDS.map((kind) => hashKindDef(kind, extras));
 
   expect(hashes.every((value) => /^[0-9a-f]{16}$/.test(value))).toBe(true);
@@ -17,7 +22,7 @@ test("each kind hash is stable and unique for the current catalog", () => {
 });
 
 test("planKindRegen marks missing artifacts stale and present ones ready", () => {
-  const dir = mkdtempSync(join(tmpdir(), "cron-kind-hash-"));
+  const dir = tempDir("cron-kind-hash-");
   const extras = { noise: noiseHash(), labels: labelsHash() };
   const kind = KINDS[0]!;
   const hash = hashKindDef(kind, extras);

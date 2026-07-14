@@ -37,6 +37,7 @@ import { acceptedRecordSchema, alignedSpanSchema, scheduleIntentSchema } from ".
 import type { AcceptedRecord } from "../llm/schema.js";
 import type { Family } from "../sampler.js";
 import { normalizeForKey } from "./normalize.js";
+import { type CorpusProvenance, provenanceSchema } from "./provenance.js";
 
 export const SPLITS = ["train", "validation", "heldout"] as const;
 
@@ -82,6 +83,7 @@ export interface CorpusRecord {
   model?: string;
   promptHash?: string;
   runId?: string;
+  provenance?: CorpusProvenance;
 }
 
 const splitSchema = z.enum(SPLITS);
@@ -105,6 +107,7 @@ export const corpusRecordSchema = z
     model: z.string().optional(),
     promptHash: z.string().optional(),
     runId: z.string().optional(),
+    provenance: provenanceSchema.optional(),
   })
   .strict();
 

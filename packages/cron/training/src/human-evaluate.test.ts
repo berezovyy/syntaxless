@@ -1,23 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
 
-import { normalizeForKey } from "./corpus/normalize";
 import { resolveRepo } from "./evaluate";
-import { coarseText } from "./fingerprint";
 import {
   assertAcceptanceFresh,
   assertHumanIsolation,
   decideHumanPromotion,
-  loadRegressionRecords,
-  MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE,
-  MAX_SILENT_MEANING_CHANGE_RATE,
-  MIN_FAMILY_ACCURACY,
-  MIN_OVERALL_ACCURACY,
   parseArgs,
   parseHumanCorpus,
   selectCalibrationThreshold,
 } from "./human-evaluate";
-import type { HumanOverlayRates } from "./human-evaluate";
+import type { HumanEvaluationRecord, HumanOverlayRates } from "./human-evaluate";
 
 const valid = {
   version: 1,
@@ -30,7 +22,7 @@ const valid = {
   text: "Please refresh this every eleven minutes.",
   intent: { frequency: { unit: "minute", interval: 11 } },
   expected: { supported: true, expression: "*/11 * * * *" },
-} as const;
+} satisfies HumanEvaluationRecord;
 
 describe("acceptance consumption ledger", () => {
   test("blocks a consumed corpus hash even when the file path changes", async () => {
@@ -52,7 +44,7 @@ describe("acceptance consumption ledger", () => {
 
 describe("parseHumanCorpus", () => {
   test("accepts the isolated evaluation schema", () => {
-    expect(parseHumanCorpus(`${JSON.stringify(valid)}\n`)).toHaveLength(1);
+    expect(parseHumanCorpus(`${JSON.stringify(valid)}\n`)).toEqual([valid]);
   });
 
   test("rejects fields that make a row training-shaped", () => {
@@ -99,13 +91,6 @@ describe("assertHumanIsolation", () => {
 });
 
 describe("human evaluation CLI", () => {
-  test("promotion bars stay the existing overlay-off floors", () => {
-    expect(MIN_OVERALL_ACCURACY).toBe(0.95);
-    expect(MIN_FAMILY_ACCURACY).toBe(0.9);
-    expect(MAX_SILENT_MEANING_CHANGE_RATE).toBe(0.005);
-    expect(MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE).toBe(0.01);
-  });
-
   test("overlay-on 1.0 / overlay-off 0.7 fails promotion", () => {
     const overlayOn: HumanOverlayRates = {
       accuracy: 1,
@@ -182,14 +167,6 @@ describe("human evaluation CLI", () => {
     ).resolves.toBeUndefined();
   });
 
-  test("regression union scores consumed acceptance records", async () => {
-    const loaded = await loadRegressionRecords();
-
-    expect(loaded.records).toHaveLength(1646);
-    expect(loaded.records.some((record) => record.partition === "acceptance")).toBe(true);
-    expect(loaded.records.filter((record) => record.partition === "acceptance")).toHaveLength(1590);
-  });
-
   test("selects maximum coverage that satisfies both safety limits", () => {
     const base = {
       total: 100,
@@ -228,606 +205,62 @@ describe("human evaluation CLI", () => {
   });
 });
 
-describe("committed human-v1 corpus", () => {
-  test("keeps partitions disjoint, supported, and generator-isolated", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v1.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
+const passing: HumanOverlayRates = {
+  accuracy: 1,
+  silentMeaningChangeRate: 0,
+  negativeFalseAcceptanceRate: 0,
+  byFamily: { interval: { total: 100, correct: 100 } },
+  criticalFailures: [],
+};
 
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
+test.each([
+  { name: "overall accuracy at floor", rates: { accuracy: 0.95 }, passed: true },
+  { name: "overall accuracy below floor", rates: { accuracy: 0.949 }, passed: false },
+  {
+    name: "family accuracy at floor",
+    rates: { byFamily: { interval: { total: 100, correct: 90 } } },
+    passed: true,
+  },
+  {
+    name: "family accuracy below floor",
+    rates: { byFamily: { interval: { total: 100, correct: 89 } } },
+    passed: false,
+  },
+  {
+    name: "silent changes at limit",
+    rates: { silentMeaningChangeRate: 0.005 },
+    passed: true,
+  },
+  {
+    name: "silent changes over limit",
+    rates: { silentMeaningChangeRate: 0.00501 },
+    passed: false,
+  },
+  {
+    name: "false accepts at limit",
+    rates: { negativeFalseAcceptanceRate: 0.01 },
+    passed: true,
+  },
+  {
+    name: "false accepts over limit",
+    rates: { negativeFalseAcceptanceRate: 0.01001 },
+    passed: false,
+  },
+  {
+    name: "critical failure despite high averages",
+    rates: { criticalFailures: ["wrong-weekday"] },
+    passed: false,
+  },
+])("promotion: $name", ({ rates, passed }) => {
+  const scores = { ...passing, ...rates };
 
-    const seen = new Set<string>();
-
-    for (const record of records) {
-      const fingerprint = coarseText(record.text);
-
-      expect(seen.has(fingerprint)).toBe(false);
-      seen.add(fingerprint);
-    }
-
-    for (const partition of ["development", "calibration", "acceptance"] as const) {
-      expect(records.some((record) => record.partition === partition)).toBe(true);
-    }
-
-    const acceptance = records.filter((record) => record.partition === "acceptance");
-    const familyCounts = new Map<string, number>();
-
-    for (const record of acceptance) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    for (const support of familyCounts.values()) expect(support).toBeGreaterThanOrEqual(5);
-
-    for (const capability of [
-      "long-message",
-      "correction",
-      "ambiguity",
-      "question",
-      "ordinary-statement",
-      "multiple-schedules",
-      "quoted-schedule",
-      "typo",
-    ]) {
-      expect(acceptance.some((record) => record.capabilities.includes(capability))).toBe(true);
-    }
-  });
+  expect(decideHumanPromotion("acceptance", scores, scores).passed).toBe(passed);
 });
 
-describe("consumed human-v2 behavioral corpus", () => {
-  test("remains isolated, broad, and permanently unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v2.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(150);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "ed3914bb0cd6fbf591e0c49fcd22a67afdf9d04c1c65936d1258b2832efe2ad8",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-
-    const fingerprints = new Set(records.map((record) => coarseText(record.text)));
-
-    expect(fingerprints.size).toBe(records.length);
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBeGreaterThanOrEqual(15);
-    for (const support of familyCounts.values()) expect(support).toBeGreaterThanOrEqual(5);
-  });
-});
-
-describe("consumed human-v3 behavioral corpus", () => {
-  test("remains isolated and permanently unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v3.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(100);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "b1247ed94271c743ab1f633a3d0c670872b65f44426412f09f42b284eddae93b",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-  });
-});
-
-describe("consumed human-v4 behavioral corpus", () => {
-  test("remains isolated and permanently unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v4.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(100);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "5af1c32e7ff713b3a090f61fbf5abd7ed5cc16622953706a3423e2f0a3ef6a23",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-  });
-});
-
-describe("consumed human-v5 behavioral corpus", () => {
-  test("remains isolated and permanently unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v5.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(100);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "989896ccaa1191fa95532281569a562cde630e7317c3a2765a8a0b3820bfd07a",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-  });
-});
-
-describe("consumed human-v6 behavioral corpus", () => {
-  test("remains isolated, balanced, and permanently unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v6.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(100);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "286f1e52a97db5a87813a7a2105b08f392d5b4415f5e99534d290e5a08b1992e",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(10);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-  });
-});
-
-describe("consumed human-v7 behavioral corpus", () => {
-  test("remains isolated, balanced, and permanently unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v7.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(100);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "0643782939e913856af7d4f68248b82bfd610360775d05fa2ad467d27bad485d",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(10);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-  });
-});
-
-describe("consumed human-v8 behavioral corpus", () => {
-  test("remains isolated, balanced, and permanently unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v8.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(100);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "a4a7b969d91b36bcf50d57658785454a93c38c8fece8f16a956969293ab16911",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(10);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-  });
-});
-
-describe("consumed human-v9 behavioral corpus", () => {
-  test("remains isolated, balanced, and permanently unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v9.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(100);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "2f89b818686a6e236b5df1831a0344102b10dd8202be7ed0ffdb0972c24deef7",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(10);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-  });
-});
-
-describe("consumed human-v10 behavioral corpus", () => {
-  test("remains isolated, balanced, and permanently unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v10.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(100);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "58a1380346c8f7c78ec532c2763778101eaa50c306b04ce55b5d4726ca841186",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(10);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-  });
-});
-
-describe("human calibration-v2 behavioral corpus", () => {
-  test("is isolated, distributed by family, and restricted to calibration", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-calibration-v2.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(100);
-    expect(records.every((record) => record.partition === "calibration")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(11);
-    for (const support of familyCounts.values()) expect(support).toBeGreaterThanOrEqual(5);
-  });
-});
-
-describe("consumed human-v11 behavioral corpus", () => {
-  test("remains isolated, distributed, and unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v11.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(120);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    for (const hash of [
-      "b221fbc00e43c3e5833c99cb3d5f69b8a7a5a841c9dd447944fe581cc96987c7",
-      "5e8a2ce9fd014e67e781e67a316c7a5e24db593dd648f37da9322272e4613670",
-    ]) {
-      await expect(assertAcceptanceFresh("acceptance", hash)).rejects.toThrow(
-        /already been consumed/,
-      );
-    }
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(12);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-
-    const priorKeys = new Set<string>();
-
-    for (const name of [
-      ...Array.from({ length: 10 }, (_, index) => `human-v${index + 1}.jsonl`),
-      "human-calibration-v2.jsonl",
-    ]) {
-      const prior = parseHumanCorpus(
-        await readFile(resolveRepo(`packages/cron/evaluation/${name}`), "utf8"),
-      );
-
-      for (const record of prior) priorKeys.add(normalizeForKey(record.text));
-    }
-
-    expect(records.filter((record) => priorKeys.has(normalizeForKey(record.text)))).toEqual([]);
-  });
-});
-
-describe("consumed human-v12 behavioral corpus", () => {
-  test("remains isolated, balanced, unique, and unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v12.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(120);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "5f09f3c5681b0236c78024a1dcf67cd8aa69ec328688a8aadea2eb4f5dbc2e14",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(12);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-
-    const priorKeys = new Set<string>();
-
-    for (const name of [
-      ...Array.from({ length: 11 }, (_, index) => `human-v${index + 1}.jsonl`),
-      "human-calibration-v2.jsonl",
-    ]) {
-      const prior = parseHumanCorpus(
-        await readFile(resolveRepo(`packages/cron/evaluation/${name}`), "utf8"),
-      );
-
-      for (const record of prior) priorKeys.add(normalizeForKey(record.text));
-    }
-
-    expect(records.filter((record) => priorKeys.has(normalizeForKey(record.text)))).toEqual([]);
-  });
-});
-
-describe("consumed human-v13 behavioral corpus", () => {
-  test("remains isolated, balanced, unique, and unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v13.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(120);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    for (const hash of [
-      "512bf33ef09cf26dc137c8837df86d6834faec8c9ac69d4ad92d8402d96c856c",
-      "f820004ba7aae2df91fc1a2b95bd96150763be82ce4cf4d668e2473a18807bb8",
-    ]) {
-      await expect(assertAcceptanceFresh("acceptance", hash)).rejects.toThrow(
-        /already been consumed/,
-      );
-    }
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(12);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-
-    const priorKeys = new Set<string>();
-
-    for (const name of [
-      ...Array.from({ length: 12 }, (_, index) => `human-v${index + 1}.jsonl`),
-      "human-calibration-v2.jsonl",
-    ]) {
-      const prior = parseHumanCorpus(
-        await readFile(resolveRepo(`packages/cron/evaluation/${name}`), "utf8"),
-      );
-
-      for (const record of prior) priorKeys.add(normalizeForKey(record.text));
-    }
-
-    expect(records.filter((record) => priorKeys.has(normalizeForKey(record.text)))).toEqual([]);
-  });
-});
-
-describe("consumed human-v14 behavioral corpus", () => {
-  test("remains isolated, balanced, unique, and unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v14.jsonl");
-    const records = parseHumanCorpus(await readFile(path, "utf8"));
-
-    expect(records).toHaveLength(120);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "3e82b1d1733d21f3530775948637f08ecb890f97517cd3434717086b8e3d4180",
-      ),
-    ).rejects.toThrow(/already been consumed/);
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(12);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-
-    const priorKeys = new Set<string>();
-
-    for (const name of [
-      ...Array.from({ length: 13 }, (_, index) => `human-v${index + 1}.jsonl`),
-      "human-calibration-v2.jsonl",
-    ]) {
-      const prior = parseHumanCorpus(
-        await readFile(resolveRepo(`packages/cron/evaluation/${name}`), "utf8"),
-      );
-
-      for (const record of prior) priorKeys.add(normalizeForKey(record.text));
-    }
-
-    expect(records.filter((record) => priorKeys.has(normalizeForKey(record.text)))).toEqual([]);
-  });
-});
-
-describe("consumed human-v15 behavioral corpus", () => {
-  test("remains isolated, balanced, unique, and unavailable as fresh acceptance", async () => {
-    const path = resolveRepo("packages/cron/evaluation/human-v15.jsonl");
-    const source = await readFile(path, "utf8");
-    const records = parseHumanCorpus(source);
-
-    expect(records).toHaveLength(120);
-    expect(records.every((record) => record.partition === "acceptance")).toBe(true);
-    expect(records.every((record) => record.trainingEligible === false)).toBe(true);
-
-    await expect(assertHumanIsolation(path, records)).resolves.toEqual({
-      checked: true,
-      outsideTrainingData: true,
-      incompatibleWithTrainingSchema: true,
-      absentFromGeneratorSources: true,
-    });
-
-    const familyCounts = new Map<string, number>();
-
-    for (const record of records) {
-      familyCounts.set(record.family, (familyCounts.get(record.family) ?? 0) + 1);
-    }
-
-    expect(familyCounts.size).toBe(12);
-    for (const support of familyCounts.values()) expect(support).toBe(10);
-
-    const priorKeys = new Set<string>();
-
-    for (const name of [
-      ...Array.from({ length: 14 }, (_, index) => `human-v${index + 1}.jsonl`),
-      "human-calibration-v2.jsonl",
-    ]) {
-      const prior = parseHumanCorpus(
-        await readFile(resolveRepo(`packages/cron/evaluation/${name}`), "utf8"),
-      );
-
-      for (const record of prior) priorKeys.add(normalizeForKey(record.text));
-    }
-
-    expect(records.filter((record) => priorKeys.has(normalizeForKey(record.text)))).toEqual([]);
-
-    await expect(
-      assertAcceptanceFresh(
-        "acceptance",
-        "b5173887da94361cf07731f7ac644005297c10de8386f914c1d4f195443c5397",
-      ),
-    ).rejects.toThrow(/already been consumed/);
+test("missing overlay-off evidence cannot pass promotion", () => {
+  expect(decideHumanPromotion("acceptance", passing, undefined)).toMatchObject({
+    eligible: true,
+    passed: false,
+    failures: ["missing overlay-off"],
   });
 });

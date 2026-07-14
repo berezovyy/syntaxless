@@ -12,6 +12,7 @@
  */
 import type { Label } from "../../src/model/labels";
 import { isStructural } from "../../src/model/labels";
+import { tokenize } from "../../src/model/tokenizer";
 import { normalize } from "../../src/parser/normalize";
 
 export interface Span {
@@ -81,4 +82,43 @@ export class Sentence {
       actionable: actionable ?? defaultActionable(label),
     });
   }
+}
+
+/**
+ * Normalize the assembled sentence too: separate fragments can form `9:25am`,
+ * even though each fragment was normalized. Production sees `9:25 am`.
+ * Remap offsets by identical non-space tokens, never infer or rewrite roles.
+ * Any normalization that changes non-space tokens must be fixed at the source;
+ * guessing alignment would silently manufacture supervision.
+ */
+export function normalizeAnnotatedText(
+  text: string,
+  spans: readonly Span[],
+): { text: string; spans: Span[] } {
+  const normalized = normalize(text);
+
+  if (normalized === text) return { text, spans: spans.map((span) => ({ ...span })) };
+  const before = tokenize(text).filter((token) => token.kind !== 3);
+  const after = tokenize(normalized).filter((token) => token.kind !== 3);
+
+  if (before.length !== after.length || before.some((token, i) => token.text !== after[i]!.text)) {
+    throw new Error("Normalization changes annotated tokens; repair the source construction");
+  }
+
+  const starts = new Map(before.map((token, i) => [token.start, after[i]!.start]));
+  const ends = new Map(before.map((token, i) => [token.end, after[i]!.end]));
+
+  return {
+    text: normalized,
+    spans: spans.map((span) => {
+      const start = starts.get(span.start);
+      const end = ends.get(span.end);
+
+      if (start === undefined || end === undefined) {
+        throw new Error("Cannot normalize a span that is not token-aligned");
+      }
+
+      return { ...span, start, end };
+    }),
+  };
 }

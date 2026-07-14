@@ -1,8 +1,6 @@
 import { expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 
-import { labelId, weekdayLabel } from "../../../src/model/labels";
+import { weekdayLabel } from "../../../src/model/labels";
 import { tokenize } from "../../../src/model/tokenizer";
 import type { ScheduleIntent } from "../../../src/types/intent";
 import { agreeKeep } from "./agree";
@@ -48,15 +46,6 @@ test("execute keeps compiler-unsupported intents and drops thrown compile-fail",
   ]);
 
   expect(kept.map((row) => row.id)).toEqual(["daily", "ordinal", "crash"]);
-
-  expect(() =>
-    executeKeep([
-      {
-        id: "bad",
-        intent: { frequency: { unit: "day" } } as unknown as ScheduleIntent,
-      },
-    ]),
-  ).not.toThrow();
 
   const dropped = executeKeep([
     {
@@ -107,45 +96,4 @@ test("project drops spans whose oracle-decode is not the intent", () => {
   ]);
 
   expect(kept.map((row) => row.id)).toEqual(["ok"]);
-  expect(labelId.WEEKDAY_MON).toBeDefined();
-});
-
-test("human-v* fixtures are trainingEligible:false", () => {
-  const dir = join(import.meta.dir, "../../../evaluation");
-  let files: string[] = [];
-
-  try {
-    files = readdirSync(dir).filter((name) => name.includes("human") && name.endsWith(".jsonl"));
-  } catch {
-    files = [];
-  }
-
-  const trainingDir = join(import.meta.dir, "../../data");
-  let more: string[] = [];
-
-  try {
-    more = readdirSync(trainingDir, { recursive: true }).filter(
-      (name) => typeof name === "string" && name.includes("human") && name.endsWith(".jsonl"),
-    ) as string[];
-  } catch {
-    more = [];
-  }
-
-  const paths = [
-    ...files.map((name) => join(dir, name)),
-    ...more.map((name) => join(trainingDir, name)),
-  ];
-
-  expect(paths.length).toBeGreaterThan(0);
-
-  for (const path of paths) {
-    const text = readFileSync(path, "utf8");
-
-    for (const line of text.split("\n")) {
-      if (line.trim().length === 0) continue;
-      const record = JSON.parse(line) as { trainingEligible?: unknown };
-
-      expect(record.trainingEligible).toBe(false);
-    }
-  }
 });

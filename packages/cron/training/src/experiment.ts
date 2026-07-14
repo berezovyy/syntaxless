@@ -11,7 +11,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { writeBackward } from "./backward";
+import { featurizeKindsStreaming } from "./featurize-kinds";
 import { runIncrementalKinds } from "./incremental-kinds";
+import { kindIds } from "./kinds";
 import type { KindId } from "./kinds";
 import { loadAcceptedReal } from "./real/accepted";
 import { mixAcceptedIntoTrain } from "./real/mix";
@@ -24,8 +27,10 @@ export type LedgerMetrics = {
   "FA@cov": string;
   RT: string;
   stack: string;
-  H?: string;
-  "H-neg"?: string;
+  /** Positives with the exact intent, of all positives (decision metric). */
+  "H-pos"?: string;
+  /** Negatives correctly rejected, of all negatives (safety metric). */
+  "H-negOK"?: string;
   "H-silent"?: string;
   O?: string;
 };
@@ -51,10 +56,15 @@ export interface ExperimentOptions {
   kindCap?: number;
   sweep?: boolean;
   earlyStoppingPatience?: number;
+  /** Extra argv appended to train.py (e.g. --balance-kinds, --learning-rate 1e-3). */
+  trainArgs?: string[];
   init?: string;
   dataPrefix?: string;
   rt?: number;
   real?: string;
+  /** Generate via R/H/E mix quotas instead of catalog walk / per-kind concat. */
+  mixQuotas?: boolean;
+  mixLimit?: number;
 }
 
 /** A/B grid over train.py flags (STACK-PLAN S.5). */
@@ -87,6 +97,9 @@ const INPUT_FILES = [
   "packages/cron/training/src/noise.ts",
   "packages/cron/training/src/splits.ts",
   "packages/cron/training/src/background.ts",
+  "packages/cron/training/src/mix/quotas.ts",
+  "packages/cron/training/src/mix/draw.ts",
+  "packages/cron/training/src/mix/filter.ts",
   "packages/cron/src/model/labels.ts",
 ] as const;
 
@@ -123,7 +136,7 @@ export function formatLedgerRow(options: ExperimentOptions, metrics: LedgerMetri
   assertLedgerComplete(metrics);
   const seeds = options.seeds ?? 1;
 
-  return `| ${options.name} | ${new Date().toISOString().slice(0, 10)} | ${options.change} | seeds=${seeds} | ${metrics.H ?? "—"} | ${metrics["H-neg"] ?? "—"} | ${metrics["H-silent"] ?? "—"} | ${metrics.O ?? "—"} | ${metrics.EXEC} | ${metrics["FA@cov"]} | ${metrics.RT} | ${metrics.stack} |\n`;
+  return `| ${options.name} | ${new Date().toISOString().slice(0, 10)} | ${options.change} | seeds=${seeds} | ${metrics["H-pos"] ?? "—"} | ${metrics["H-negOK"] ?? "—"} | ${metrics["H-silent"] ?? "—"} | ${metrics.O ?? "—"} | ${metrics.EXEC} | ${metrics["FA@cov"]} | ${metrics.RT} | ${metrics.stack} |\n`;
 }
 
 function parseFraction(value: string | undefined): { num: number; den: number } | undefined {
@@ -163,8 +176,8 @@ export function aggregateSeedMetrics(rows: readonly LedgerMetrics[], stack: stri
       : rows.map((row) => row["FA@cov"]).join(","),
     RT: rows[0]!.RT,
     stack,
-    H: formatMeanRange(rows.map((row) => row.H ?? "")),
-    "H-neg": formatMeanRange(rows.map((row) => row["H-neg"] ?? "")),
+    "H-pos": formatMeanRange(rows.map((row) => row["H-pos"] ?? "")),
+    "H-negOK": formatMeanRange(rows.map((row) => row["H-negOK"] ?? "")),
     "H-silent": formatMeanRange(rows.map((row) => row["H-silent"] ?? "")),
     O: formatMeanRange(rows.map((row) => row.O ?? "")),
   };
@@ -316,24 +329,22 @@ export function metricsFromReports(
     }
   }
 
-  let h: string | undefined;
-  let hNeg: string | undefined;
+  let hPos: string | undefined;
+  let hNegOk: string | undefined;
   let hSilent: string | undefined;
 
   if (humanPath !== undefined && existsSync(humanPath)) {
     const human = readJson(humanPath);
-    const overlay = human.overlayOff as Record<string, unknown> | undefined;
-    const hCorrect = Number(overlay?.correct ?? human.correct ?? 0);
-    const hTotal = Number(overlay?.total ?? human.total ?? 0);
+    const overlay = (human.overlayOff ?? human) as Record<string, unknown>;
+    const posTotal = Number(overlay.positiveTotal ?? 0);
+    const negTotal = Number(overlay.negativeTotal ?? 0);
 
-    if (hTotal > 0) h = `${hCorrect}/${hTotal}`;
-    const humanFa = overlay?.faAtCov ?? human.faAtCov;
+    if (posTotal > 0) hPos = `${Number(overlay.positiveCorrect ?? 0)}/${posTotal}`;
+    if (negTotal > 0) hNegOk = `${Number(overlay.negativeCorrect ?? 0)}/${negTotal}`;
+    const humanFa = overlay.faAtCov ?? human.faAtCov;
 
     if (typeof humanFa === "string" && humanFa.trim() !== "") fa = humanFa;
-    const neg = overlay?.negativeFalseAccepts ?? human.negativeFalseAccepts;
-
-    if (neg !== undefined) hNeg = String(neg);
-    const silent = overlay?.silentMeaningChanges ?? human.silentMeaningChanges;
+    const silent = human.positiveSilentMeaningChanges ?? overlay.silentMeaningChanges;
 
     if (silent !== undefined) hSilent = String(silent);
   }
@@ -347,8 +358,8 @@ export function metricsFromReports(
     RT: rt,
     stack,
     ...(o === "" ? {} : { O: o }),
-    ...(h === undefined ? {} : { H: h }),
-    ...(hNeg === undefined ? {} : { "H-neg": hNeg }),
+    ...(hPos === undefined ? {} : { "H-pos": hPos }),
+    ...(hNegOk === undefined ? {} : { "H-negOK": hNegOk }),
     ...(hSilent === undefined ? {} : { "H-silent": hSilent }),
   };
 }
@@ -431,6 +442,7 @@ export async function runExperiment(options: ExperimentOptions): Promise<Experim
   let renderedKinds: string[] = [];
   let skippedKinds: string[] = [];
   let rtLedger = "0";
+  let kindsJsonlForOracle: string | undefined;
 
   const dataPrefix =
     options.dataPrefix === undefined ? join(work, "kinds") : resolveRepo(options.dataPrefix);
@@ -438,6 +450,36 @@ export async function runExperiment(options: ExperimentOptions): Promise<Experim
   if (options.dataPrefix !== undefined) {
     skippedRegen = true;
     skipStep(steps, "regen-data-prefix", [dataPrefix]);
+  } else if (options.mixQuotas) {
+    const pooledJsonl = join(work, "kinds.jsonl");
+
+    kindsJsonlForOracle = pooledJsonl;
+
+    if (skippedRegen && existsSync(pooledJsonl)) {
+      skipStep(steps, "mix-quotas-generate", [pooledJsonl]);
+      skipStep(steps, "featurize-mix", [dataPrefix]);
+    } else {
+      const mixLimit = options.mixLimit ?? 200_000;
+
+      writeBackward({ out: pooledJsonl, limit: mixLimit });
+
+      steps.push({
+        step: "mix-quotas-generate",
+        skipped: false,
+        argv: [pooledJsonl, `--limit`, String(mixLimit)],
+      });
+
+      await featurizeKindsStreaming(pooledJsonl, dataPrefix);
+
+      steps.push({
+        step: "featurize-mix",
+        skipped: false,
+        argv: [pooledJsonl, dataPrefix],
+      });
+
+      skippedRegen = false;
+      writeInputCache(cachePath, inputHash, rt);
+    }
   } else if (options.kinds !== undefined || options.kindCap !== undefined) {
     const incremental = await runIncrementalKinds({
       dir: work,
@@ -449,6 +491,26 @@ export async function runExperiment(options: ExperimentOptions): Promise<Experim
     skippedRegen = incremental.rendered.length === 0;
     renderedKinds = incremental.rendered;
     skippedKinds = incremental.skipped;
+    // One pooled jsonl so the oracle's --kinds-sample scores the corpus we
+    // are about to train on, not the legacy data/synth/kinds.jsonl.
+    const pooledJsonl = join(work, "kinds.jsonl");
+
+    if (!skippedRegen || !existsSync(pooledJsonl)) {
+      const parts = incremental.plan.current
+        .map((record) => record.jsonl)
+        .filter((path) => existsSync(path));
+
+      const cat = spawnSync("sh", ["-c", `cat "$@" > "${pooledJsonl}"`, "cat", ...parts], {
+        stdio: "inherit",
+      });
+
+      if (cat.status !== 0) throw new Error("failed to pool per-kind jsonl files");
+      steps.push({ step: "pool-kinds-jsonl", skipped: false, argv: [pooledJsonl] });
+    } else {
+      skipStep(steps, "pool-kinds-jsonl", [pooledJsonl]);
+    }
+
+    kindsJsonlForOracle = pooledJsonl;
     writeInputCache(cachePath, inputHash, rt);
   } else if (!skippedRegen) {
     const heldoutJsonl = join(work, "heldout.jsonl");
@@ -578,6 +640,7 @@ export async function runExperiment(options: ExperimentOptions): Promise<Experim
       String(oracleSeeds),
       "--kinds-sample",
       String(kindsSample),
+      ...(kindsJsonlForOracle === undefined ? [] : ["--kinds-jsonl", kindsJsonlForOracle]),
       "--out",
       oracleOut,
     ],
@@ -632,8 +695,8 @@ export async function runExperiment(options: ExperimentOptions): Promise<Experim
       "FA@cov": String(b1["FA@cov"] ?? "n/a"),
       RT: rtLedger,
       stack: "seq2seq",
-      H: String(b1.H ?? "n/a"),
-      "H-neg": String(b1["H-neg"] ?? "n/a"),
+      "H-pos": String(b1["H-pos"] ?? "n/a"),
+      "H-negOK": String(b1["H-negOK"] ?? "n/a"),
       "H-silent": String(b1["H-silent"] ?? "n/a"),
       ...(oTotal > 0 ? { O: `${oCorrect}/${oTotal}` } : {}),
     };
@@ -697,6 +760,7 @@ export async function runExperiment(options: ExperimentOptions): Promise<Experim
         String(options.earlyStoppingPatience ?? 2),
         ...(options.freshEachEpoch ? ["--fresh-each-epoch"] : []),
         ...(options.init === undefined ? [] : ["--init", options.init]),
+        ...(options.trainArgs ?? []),
       ],
       root,
       steps,
@@ -818,15 +882,30 @@ function parseArgs(argv: string[]): ExperimentOptions {
       case "--seed":
         options.seed = Number(take());
         break;
-      case "--kinds":
-        options.kinds = take()
-          .split(",")
-          .map((value) => value.trim())
-          .filter((value) => value.length > 0) as KindId[];
+
+      case "--kinds": {
+        const value = take();
+
+        // `all` = every kind through the parallel incremental path, uncapped.
+        options.kinds =
+          value.trim() === "all"
+            ? kindIds()
+            : (value
+                .split(",")
+                .map((part) => part.trim())
+                .filter((part) => part.length > 0) as KindId[]);
 
         break;
+      }
+
       case "--kind-cap":
         options.kindCap = Number(take());
+        break;
+      case "--mix-quotas":
+        options.mixQuotas = true;
+        break;
+      case "--mix-limit":
+        options.mixLimit = Number(take());
         break;
       case "--sweep":
         options.sweep = true;
@@ -848,6 +927,9 @@ function parseArgs(argv: string[]): ExperimentOptions {
         break;
       case "--fresh-each-epoch":
         options.freshEachEpoch = true;
+        break;
+      case "--train-arg":
+        (options.trainArgs ??= []).push(take());
         break;
       case "--samples":
         options.samples = Number(take());

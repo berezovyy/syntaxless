@@ -192,8 +192,15 @@ class Tagger(nn.Module):
         embedding_weight = self.embedding.weight
         if self.qat:
             embedding_weight = fake_quantize(embedding_weight, self.quantization_bits)
-        embedded = F.embedding(rows, embedding_weight, padding_idx=self.feature_rows)
-        states = embedded.sum(dim=2)
+        # Each token owns a fixed bag of sparse feature-row ids. embedding_bag
+        # computes their sum directly instead of materializing the former
+        # [batch, width, rows_per_token, hidden] tensor (32x larger than states).
+        states = F.embedding_bag(
+            rows.reshape(batch * width, self.rows_per_token),
+            embedding_weight,
+            mode="sum",
+            padding_idx=self.feature_rows,
+        ).reshape(batch, width, self.hidden)
         states = states + self.neighbor(self._gather_neighbors(states, neighbors))
 
         mask = valid.unsqueeze(-1).to(states.dtype)

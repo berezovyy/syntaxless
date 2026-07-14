@@ -1,10 +1,3 @@
-/**
- * Unit tests for the promotion gate's pure core.
- *
- * The engine-backed run is exercised by the `gate` script; these tests pin the
- * decision arithmetic so a rejected candidate can never be argued into an
- * acceptance by moving a threshold.
- */
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -12,47 +5,10 @@ import {
   decide,
   decidePromotion,
   familyGuards,
-  g2OnlyImprovementIsNotPass,
   parseArgs,
   proportionGuard,
-  refuseIncompletePromotion,
 } from "./gate";
-import type { GateScores } from "./gate";
-
-describe("promotion metrics", () => {
-  test("refuses a candidate without EXEC/FA@cov/H/O", () => {
-    expect(() => refuseIncompletePromotion({ H: "1/2" })).toThrow(/missing/);
-
-    expect(() =>
-      refuseIncompletePromotion({
-        H: "1/2",
-        EXEC: "1/1",
-        "FA@cov": "0@1",
-        O: "1/1",
-      }),
-    ).not.toThrow();
-  });
-
-  test("G2-only improvement is not a pass", () => {
-    expect(
-      g2OnlyImprovementIsNotPass({
-        g2Improved: true,
-        hImproved: false,
-        execImproved: false,
-        faAtCovOk: false,
-      }),
-    ).toBe(true);
-
-    expect(
-      g2OnlyImprovementIsNotPass({
-        g2Improved: true,
-        hImproved: true,
-        execImproved: true,
-        faAtCovOk: true,
-      }),
-    ).toBe(false);
-  });
-});
+import type { GateScores, PromotionMetrics } from "./gate";
 
 describe("proportionGuard", () => {
   test("accepts a regression inside the tolerance band", () => {
@@ -62,7 +18,8 @@ describe("proportionGuard", () => {
     expect(guard.reason).toBeNull();
     expect(guard.support).toBe(100);
     expect(guard.delta).toBeCloseTo(0.01, 10);
-    expect(guard.tolerance).toBeGreaterThan(guard.delta);
+    // 1.96 * sqrt(((12/102)*(90/102) + (11/102)*(91/102)) / 100).
+    expect(guard.tolerance).toBeCloseTo(0.08765807712468944, 10);
   });
 
   test("rejects a regression beyond the tolerance band", () => {
@@ -81,12 +38,16 @@ describe("proportionGuard", () => {
     expect(guard.reason).toBe("support mismatch");
   });
 
-  test("rejects support below thirty", () => {
-    const guard = proportionGuard({ total: 20, correct: 18 }, { total: 20, correct: 19 });
+  test("requires at least thirty samples per family", () => {
+    const guard = proportionGuard({ total: 29, correct: 29 }, { total: 29, correct: 29 });
 
     expect(guard.passed).toBe(false);
     expect(guard.reason).toBe("insufficient support");
-    expect(guard.support).toBe(20);
+    expect(guard.support).toBe(29);
+
+    expect(proportionGuard({ total: 30, correct: 30 }, { total: 30, correct: 30 }).passed).toBe(
+      true,
+    );
   });
 });
 
@@ -104,131 +65,198 @@ describe("familyGuards", () => {
   });
 });
 
-function passingScores(correct: number, total = 100): GateScores {
-  const terseCorrect = Math.min(40, correct);
-
+function scores(correct = 98, overrides: Partial<GateScores> = {}): GateScores {
   return {
-    total,
+    total: 100,
     correct,
-    byFamily: { terse: { total: 40, correct: terseCorrect } },
+    byFamily: {
+      terse: { total: 40, correct: 39 },
+      interval: { total: 60, correct: correct - 39 },
+    },
     selective: {
       silentMeaningChangeRate: 0,
       negativeFalseAcceptanceRate: 0,
-      typoInvariance: 0.96,
+      typoInvariance: 1,
     },
+    ...overrides,
   };
 }
 
-describe("decide", () => {
-  test("rejects equal counts with no strict improvement", () => {
-    const decision = decide(
-      { total: 100, correct: 80, byFamily: { terse: { total: 40, correct: 30 } } },
-      { total: 100, correct: 80, byFamily: { terse: { total: 40, correct: 30 } } },
-    );
+const ledger: PromotionMetrics = {
+  H: "98/100",
+  EXEC: "98/100",
+  "FA@cov": "0@0.9",
+  O: "100/100",
+};
 
-    expect(decision.accepted).toBe(false);
-    expect(decision.improvement).toBe(0);
-    expect(decision.failures).toContain("reserved-carrier exact sequences did not improve");
-  });
+const baseline = { overlayOn: scores(96), overlayOff: scores(96) };
 
-  test("accepts a strict improvement when every guard passes", () => {
-    const decision = decide(
-      { total: 100, correct: 98, byFamily: { terse: { total: 40, correct: 39 } } },
-      { total: 100, correct: 96, byFamily: { terse: { total: 40, correct: 38 } } },
-    );
+function promote(candidate: GateScores, metrics: Partial<PromotionMetrics> = ledger) {
+  return decidePromotion({ overlayOn: candidate, overlayOff: candidate }, baseline, metrics);
+}
 
-    expect(decision.accepted).toBe(true);
-    expect(decision.improvement).toBeCloseTo(0.02, 10);
-    expect(decision.failures).toEqual([]);
-  });
+test("a strictly better candidate with complete evidence is promoted", () => {
+  const decision = promote(scores());
 
-  test("rejects a candidate that regresses a family", () => {
-    const decision = decide(
-      { total: 100, correct: 90, byFamily: { terse: { total: 40, correct: 10 } } },
-      { total: 100, correct: 80, byFamily: { terse: { total: 40, correct: 40 } } },
-    );
+  expect(decision.accepted).toBe(true);
+  expect(decision.failures).toEqual([]);
+  expect(decision.improvement).toBeCloseTo(0.02, 10);
 
-    expect(decision.accepted).toBe(false);
-    expect(decision.failures.some((failure) => failure.startsWith("terse:"))).toBe(true);
-  });
+  expect(decision.guards.map(({ family, passed }) => ({ family, passed }))).toEqual([
+    { family: "interval", passed: true },
+    { family: "terse", passed: true },
+  ]);
+});
 
-  test("rejects relative improvement that remains below an absolute floor", () => {
-    const decision = decide(
-      { total: 100, correct: 30, byFamily: { terse: { total: 40, correct: 12 } } },
-      { total: 100, correct: 20, byFamily: { terse: { total: 40, correct: 10 } } },
-    );
-
-    expect(decision.accepted).toBe(false);
-    expect(decision.failures).toContain("overall accuracy below 0.95");
-  });
-
-  test("rejects silent meaning changes and negative false acceptance", () => {
-    const decision = decide(
-      {
-        total: 100,
-        correct: 90,
-        byFamily: { terse: { total: 40, correct: 32 } },
-        selective: {
-          silentMeaningChangeRate: 0.02,
-          negativeFalseAcceptanceRate: 0.03,
-          typoInvariance: 0.94,
-        },
-      },
-      { total: 100, correct: 80, byFamily: { terse: { total: 40, correct: 30 } } },
-    );
-
-    expect(decision.accepted).toBe(false);
-    expect(decision.failures).toContain("silent meaning-change rate above 0.005");
-    expect(decision.failures).toContain("negative false-acceptance rate above 0.01");
-    expect(decision.failures).toContain("typo invariance below 0.95");
+test("an improvement exactly at the overall floor is accepted", () => {
+  expect(decide(scores(95), scores(94))).toMatchObject({
+    accepted: true,
+    failures: [],
   });
 });
 
-describe("decidePromotion ledger", () => {
-  test("refuses promotion when H/EXEC/FA@cov/O are missing", () => {
-    const scores = {
-      overlayOn: passingScores(98),
-      overlayOff: passingScores(98),
-    };
-
-    const decision = decidePromotion(scores, scores, { H: "1/2" });
-
-    expect(decision.accepted).toBe(false);
-    expect(decision.failures.some((item) => item.includes("missing"))).toBe(true);
+test("overall improvement cannot hide a statistically significant family regression", () => {
+  const before = scores(18800, {
+    total: 20000,
+    byFamily: {
+      terse: { total: 10000, correct: 9700 },
+      interval: { total: 10000, correct: 9100 },
+    },
   });
 
-  test("runGate path: empty ledger is not an implied pass", () => {
-    const scores = {
-      overlayOn: passingScores(98),
-      overlayOff: passingScores(98),
-    };
-
-    const decision = decidePromotion(scores, scores, {});
-
-    expect(decision.accepted).toBe(false);
-    expect(decision.failures.some((item) => item.includes("missing"))).toBe(true);
+  const candidate = scores(19000, {
+    total: 20000,
+    byFamily: {
+      terse: { total: 10000, correct: 9000 },
+      interval: { total: 10000, correct: 10000 },
+    },
   });
 
-  test("G2-only reserved-carrier lift is not a promotion pass", () => {
-    const decision = decidePromotion(
-      {
-        overlayOn: passingScores(98),
-        overlayOff: passingScores(98),
-      },
-      {
-        overlayOn: passingScores(96),
-        overlayOff: passingScores(96),
-      },
-      {
-        H: "1/1646",
-        EXEC: "1/360",
-        "FA@cov": "0.5@0.4",
-        O: "360/360",
-      },
-    );
+  // Both absolute floors pass; the family regression alone blocks promotion.
+  expect(decide(candidate, before)).toMatchObject({
+    accepted: false,
+    failures: ["terse: regression", "bare expressions: regression"],
+  });
+});
 
-    expect(decision.accepted).toBe(false);
-    expect(decision.failures).toContain("G2-only improvement is not a promotion pass");
+test.each([
+  {
+    name: "equal score",
+    candidate: scores(96),
+    reason: "reserved-carrier exact sequences did not improve",
+  },
+  {
+    name: "different support",
+    candidate: scores(98, { total: 101 }),
+    reason: "evaluation support mismatch",
+  },
+  {
+    name: "below overall floor",
+    candidate: scores(94),
+    reason: "overall accuracy below 0.95",
+  },
+])("decide rejects $name", ({ candidate, reason }) => {
+  // A lower baseline isolates the absolute floor from strict improvement.
+  const before = reason.startsWith("overall") ? scores(93) : scores(96);
+  const decision = decide(candidate, before);
+
+  expect(decision.accepted).toBe(false);
+  expect(decision.failures).toEqual([reason]);
+});
+
+test.each([
+  {
+    name: "silent changes",
+    field: "silentMeaningChangeRate",
+    boundary: 0.005,
+    failing: 0.00501,
+    reason: "silent meaning-change rate above 0.005",
+  },
+  {
+    name: "false accepts",
+    field: "negativeFalseAcceptanceRate",
+    boundary: 0.01,
+    failing: 0.01001,
+    reason: "negative false-acceptance rate above 0.01",
+  },
+  {
+    name: "typo invariance",
+    field: "typoInvariance",
+    boundary: 0.95,
+    failing: 0.94999,
+    reason: "typo invariance below 0.95",
+  },
+] as const)("promotion boundary: $name", ({ field, boundary, failing, reason }) => {
+  for (const [value, accepted] of [
+    [boundary, true],
+    [failing, false],
+  ] as const) {
+    const candidate = scores();
+
+    candidate.selective = { ...candidate.selective!, [field]: value };
+
+    expect(promote(candidate)).toMatchObject({
+      accepted,
+      failures: accepted ? [] : [`overlay-off ${reason}`],
+    });
+  }
+});
+
+test("overall improvement cannot hide a family below its absolute floor", () => {
+  const before = scores(970, {
+    total: 1000,
+    byFamily: {
+      terse: { total: 100, correct: 90 },
+      interval: { total: 900, correct: 880 },
+    },
+  });
+
+  const candidate = scores(980, {
+    total: 1000,
+    byFamily: {
+      terse: { total: 100, correct: 89 },
+      interval: { total: 900, correct: 891 },
+    },
+  });
+
+  expect(decide(candidate, before)).toMatchObject({
+    accepted: false,
+    failures: ["terse: accuracy below 0.9"],
+  });
+
+  candidate.byFamily.terse!.correct = 90;
+  candidate.byFamily.interval!.correct = 890;
+  expect(decide(candidate, before).accepted).toBe(true);
+});
+
+test.each(["H", "EXEC", "FA@cov", "O"] as const)(
+  "missing or blank %s cannot promote an otherwise passing candidate",
+  (key) => {
+    for (const value of [undefined, "", "  "]) {
+      const metrics = { ...ledger } as Partial<PromotionMetrics>;
+
+      if (value === undefined) delete metrics[key];
+      else metrics[key] = value;
+
+      expect(promote(scores(), metrics)).toMatchObject({
+        accepted: false,
+        failures: [`gate refused: missing ${key}`],
+      });
+    }
+  },
+);
+
+test("an empty ledger is not an implied pass", () => {
+  expect(promote(scores(), {})).toMatchObject({
+    accepted: false,
+    failures: ["gate refused: missing H, EXEC, FA@cov, O"],
+  });
+});
+
+test("reserved-carrier improvement alone is insufficient evidence", () => {
+  expect(promote(scores(), { ...ledger, H: "1/100", EXEC: "1/100" })).toMatchObject({
+    accepted: false,
+    failures: ["G2-only improvement is not a promotion pass"],
   });
 });
 
@@ -254,58 +282,46 @@ describe("parseArgs promotion metrics", () => {
   });
 });
 
-describe("decidePromotion", () => {
-  test("rejects overlay-on 1.0 when overlay-off is 0.7", () => {
-    const decision = decidePromotion(
-      {
-        overlayOn: passingScores(100),
-        overlayOff: passingScores(70),
-      },
-      {
-        overlayOn: passingScores(96),
-        overlayOff: passingScores(96),
-      },
-    );
+test("perfect overlay-on cannot rescue a failing overlay-off candidate", () => {
+  const decision = decidePromotion(
+    { overlayOn: scores(100), overlayOff: scores(94) },
+    { overlayOn: scores(93), overlayOff: scores(93) },
+    ledger,
+  );
 
-    expect(decision.accepted).toBe(false);
-    expect(decision.failures.some((failure) => failure.includes("overlay-off"))).toBe(true);
-    expect(decision.failures.some((failure) => /overlay-on overall/.test(failure))).toBe(false);
-    expect(decision.failures).toContain("overlay-off overall accuracy below 0.95");
+  expect(decision).toMatchObject({
+    accepted: false,
+    failures: ["overlay-off overall accuracy below 0.95"],
   });
+});
 
-  test("rejects overlay-off silent-change worse than overlay-on on the same artifact", () => {
-    const overlayOff = passingScores(96);
+test.each([
+  {
+    field: "silentMeaningChangeRate",
+    value: 0.001,
+    reason: "overlay-off silent meaning-change worse than overlay-on",
+  },
+  {
+    field: "negativeFalseAcceptanceRate",
+    value: 0.001,
+    reason: "overlay-off negative false-accept worse than overlay-on",
+  },
+] as const)(
+  "overlay-off cannot worsen $field even within the absolute limit",
+  ({ field, value, reason }) => {
+    const overlayOff = scores();
 
-    overlayOff.selective = {
-      silentMeaningChangeRate: 0.01,
-      negativeFalseAcceptanceRate: 0,
-      typoInvariance: 0.96,
-    };
+    overlayOff.selective = { ...overlayOff.selective!, [field]: value };
+    const decision = decidePromotion({ overlayOn: scores(), overlayOff }, baseline, ledger);
 
-    const decision = decidePromotion(
-      {
-        overlayOn: passingScores(100),
-        overlayOff,
-      },
-      {
-        overlayOn: passingScores(94),
-        overlayOff: passingScores(94),
-      },
-    );
+    expect(decision).toMatchObject({ accepted: false, failures: [reason] });
+  },
+);
 
-    expect(decision.accepted).toBe(false);
-    expect(decision.failures).toContain("overlay-off silent meaning-change worse than overlay-on");
-    expect(decision.failures).toContain("overlay-off silent meaning-change rate above 0.005");
-  });
-
-  test("missing overlay-off is a failed run, not an implied pass", () => {
-    const decision = decidePromotion(
-      { overlayOn: passingScores(100) },
-      { overlayOn: passingScores(96), overlayOff: passingScores(96) },
-    );
-
-    expect(decision.accepted).toBe(false);
-    expect(decision.failures).toContain("missing overlay-off");
+test("missing overlay-off fails despite passing overlay-on and complete evidence", () => {
+  expect(decidePromotion({ overlayOn: scores() }, baseline, ledger)).toMatchObject({
+    accepted: false,
+    failures: ["missing overlay-off"],
   });
 });
 

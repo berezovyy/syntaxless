@@ -44,7 +44,7 @@ export const MAHALANOBIS_VARIANCE: readonly number[] | undefined = Array.isArray
 
 export const MAHALANOBIS_THRESHOLD: number | undefined = ARTIFACT.mahalanobisThreshold;
 
-/** False until an A1 export ships weights for the typed label set. */
+/** True when the bundled artifact's role list equals the typed vocabulary. */
 export const WEIGHTS_MATCH_LABELS =
   ROLE_CLASSES === LABEL_COUNT &&
   ARTIFACT.labels.length === LABELS.length &&

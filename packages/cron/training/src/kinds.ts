@@ -30,7 +30,6 @@ import {
   ADVERB_FREQUENCIES,
   CLOCK_EXACT_SUFFIXES,
   CLOCK_PREFIXES,
-  DAY_ORDINALS,
   DAY_RULES,
   DAYGROUP_EXPRESSIONS,
   END_BOUND_PREFIXES,
@@ -38,7 +37,6 @@ import {
   FREQUENCY_IDIOMS,
   INCLUSIVE_END_BOUND_PREFIXES,
   INTERVAL_FRAME_SUFFIXES,
-  MONTHLY_PREFIXES,
   numberWord,
   PAST_CONNECTORS,
   RECURRENCE_PREFIXES,
@@ -72,6 +70,7 @@ import type { RenderedExample } from "./renderer";
 import type { Family } from "./sampler";
 import { assertValid } from "./sampler";
 import { Sentence } from "./sentence";
+import { wrapsForKernel } from "./slots/sample";
 
 export type KindId =
   | "unit-interval"
@@ -160,7 +159,9 @@ const WEEKDAY_SETS: readonly Weekday[][] = integers(1, 127).map((mask) =>
 const WEEKDAY_INTENTS = WEEKDAY_SETS.filter((weekdays) => weekdays.length > 1);
 
 const WEEKDAY_RUNS: readonly Weekday[][] = WEEKDAY_SEQUENCE.flatMap((_, start) =>
-  integers(start + 1, 6).map((end) => WEEKDAY_SEQUENCE.slice(start, end + 1)),
+  integers(2, 7).map((length) =>
+    Array.from({ length }, (_, offset) => WEEKDAY_SEQUENCE[(start + offset) % 7]!),
+  ),
 );
 
 const DAYGROUPS: readonly { surface: string; weekdays: Weekday[] }[] = [
@@ -204,6 +205,13 @@ const MONTH_RANGES_2026: readonly { start: string; end: string }[] = integers(1,
   }),
 );
 
+/**
+ * Ordinary all-O leftovers. Schedule-bearing groups (quoted, temporal,
+ * conversational, ambiguous, …) used to paint `every Monday` as `O` and are
+ * gone. Hard-no is a labeled hole + non-request wrap from `src/mix`. Easy-no
+ * mass is Tatoeba (or bootstrap). This list is retired as E mass once Tatoeba
+ * is on; kept so the `negative` kind still has ≥3 frames.
+ */
 const NEGATIVE_GROUPS = {
   ordinary: [
     "Please open the file.",
@@ -219,229 +227,13 @@ const NEGATIVE_GROUPS = {
     "The build completed successfully.",
     "I prefer the second proposal.",
   ],
-  incomplete: [
-    "every",
-    "every other",
-    "once per",
-    "at",
-    "at half past",
-    "on Monday at",
-    "from Tuesday through",
-    "the last Friday of",
-    "weekdays except",
-    "starting on",
-    "until the",
-    "monthly on the",
-    "repeat this every",
-    "schedule it for",
-  ],
-  ambiguous: [
-    "Monday works for me.",
-    "Friday might be better.",
-    "Morning is probably fine.",
-    "Sometime after nine would work.",
-    "Let's discuss it next week.",
-    "The first day is the hardest.",
-    "We could do this monthly.",
-    "Every option has drawbacks.",
-    "I visit often on weekends.",
-    "Nine people joined on Tuesday.",
-    "The deadline moved from Monday to Friday.",
-    "The shop is open daily.",
-    "Hourly billing is expensive.",
-    "This report is produced every month by another system.",
-    "Tuesday or Thursday could both be reasonable choices.",
-    "Perhaps mornings would suit the team, but we have not decided.",
-    "I am unsure whether the cadence should be daily or weekly.",
-    "Either the first or the fifteenth may work.",
-    "There are several possible reminder times under discussion.",
-    "The group has not chosen between weekdays and weekends.",
-    "Nine in the morning is only one option we are considering.",
-    "A monthly cadence was suggested, not agreed.",
-    "The planning board lists Thursday as a possible date.",
-    "Our busiest support day is Monday.",
-    "The timetable shows noon for informational purposes.",
-    "A weekly frequency appears in the requirements document.",
-    "Her preferred day happens to be Friday.",
-    "The dashboard displays an hourly estimate.",
-    "Their draft mentions the second Tuesday.",
-    "This paragraph describes a daily process owned elsewhere.",
-  ],
-  corrective: [
-    "No, not Monday.",
-    "Forget what I said about Friday.",
-    "Cancel the weekday idea.",
-    "That time was a mistake.",
-    "I did not mean every hour.",
-    "Ignore the previous schedule.",
-    "Actually, never mind.",
-    "Do not create that recurrence.",
-    "Scratch the nine o'clock suggestion.",
-    "The monthly option is wrong.",
-    "I am correcting the date, not scheduling anything.",
-    "Stop; the schedule is still undecided.",
-    "Please disregard my earlier note about Tuesdays.",
-    "That Friday suggestion should not be treated as final.",
-    "I withdraw the request for an hourly reminder.",
-    "The time in my previous message was incorrect.",
-    "Do not use the date I mentioned above.",
-    "I was correcting a typo rather than setting a recurrence.",
-    "Neither of those proposed schedules is right.",
-    "Hold off while I confirm the actual timing.",
-  ],
-  conversational: [
-    "When would you like to meet?",
-    "Does Monday work for everyone?",
-    "What time is the appointment?",
-    "Should this happen every week?",
-    "Are weekends included?",
-    "Which Friday did you mean?",
-    "Do you want morning or afternoon?",
-    "Is this a recurring task?",
-    "Can we decide the schedule later?",
-    "Why was the reminder moved?",
-    "Who changed it to Tuesday?",
-    "Where can I see the current schedule?",
-    "When did the weekly job last execute?",
-    "How many reminders run every morning?",
-    "Would an hourly task consume too much power?",
-    "Could this schedule conflict with the existing one?",
-    "Did anyone approve the Monday recurrence?",
-    "What does the phrase monthly on the first mean?",
-    "Are we certain that Friday is the intended day?",
-    "Can the system display jobs that run at noon?",
-  ],
-  quoted: [
-    "The documentation uses the example 'every Monday'.",
-    "She wrote 'at nine' in the message.",
-    "The phrase 'once a month' appears twice.",
-    "Translate 'every weekday' into French.",
-    "Explain what 'every other Friday' means.",
-    "Search for messages containing 'daily at noon'.",
-    "The button is labeled 'schedule weekly'.",
-    "Remove the words 'at midnight' from the title.",
-    "He asked whether 'Monday through Friday' was clear.",
-    "The test case named 'every hour' is failing.",
-    "Copy 'the last Friday' to the clipboard.",
-    "Bold the text 'weekdays except Friday'.",
-    'The article mentions "every Tuesday at ten" as an illustration.',
-    "Her message says 'run daily' but does not request a change.",
-    "Find the sentence containing 'at seven each morning'.",
-    "The sample output reads 'every thirty minutes'.",
-    "Replace the example 'first Monday' in the guide.",
-    "A tooltip shows the words 'weekly on Thursday'.",
-    "He quoted 'midnight every day' during the discussion.",
-    "Count occurrences of 'every weekend' in this document.",
-  ],
-  meta: [
-    "Show me the existing schedule.",
-    "Delete the current schedule.",
-    "Is there already a reminder?",
-    "Why did this run at midnight?",
-    "List all recurring jobs.",
-    "Disable scheduling for this task.",
-    "The cron expression is invalid.",
-    "This parser does not understand Tuesdays.",
-    "How does an hourly schedule work?",
-    "Compare daily and weekly recurrence.",
-    "Do not change any dates.",
-    "Keep the schedule exactly as it is.",
-  ],
-  temporal: [
-    "The meeting happened Monday at nine.",
-    "I finished the report last Friday.",
-    "We met at noon yesterday.",
-    "The server failed twice this morning.",
-    "Alex arrived at half past eight.",
-    "The office closes on weekends.",
-    "Sales increased every month last year.",
-    "The train leaves at six, according to the timetable.",
-    "I used to call every Sunday.",
-    "The alarm rang hourly during the test.",
-    "They worked Monday through Friday in June.",
-    "The invoice was due on the first of May.",
-    "Previously the backup ran every evening.",
-    "Yesterday's import started at seven in the morning.",
-    "The old service was scheduled for every Wednesday.",
-    "During the trial, alerts arrived every ten minutes.",
-    "Our former process ran monthly on the fifth.",
-    "The team met each Friday before the reorganization.",
-    "Last year the report appeared on the first Monday.",
-    "The retired timer triggered hourly overnight.",
-  ],
-  multiple: [
-    "We are comparing every Monday with every Thursday.",
-    "The alternatives are daily at eight or weekly at noon.",
-    "One proposal says hourly; another says every thirty minutes.",
-    "Should we choose the first Friday or the last Friday?",
-    "The draft lists both weekdays at nine and weekends at ten.",
-    "Two candidates remain: monthly on the first, or monthly on the fifteenth.",
-    "I have not chosen between Tuesday mornings and Thursday evenings.",
-    "Either run it every day or do not schedule it yet.",
-    "We discussed starting in March as well as ending in June.",
-    "There are separate suggestions for noon and midnight.",
-    "Compare every other week against once a month.",
-    "Monday at nine and Friday at five are competing options.",
-  ],
 } as const;
 
 const NEGATIVES: readonly { category: string; text: string }[] = Object.entries(
   NEGATIVE_GROUPS,
 ).flatMap(([category, texts]) => texts.map((text) => ({ category, text })));
 
-/** Natural carriers deliberately distinct from the reserved promotion corpus.
- * Preposition-tailed carriers exist so the model sees `at`/`to` as `O` when
- * they close ordinary prose rather than open a clock. */
-const POSITIVE_CARRIERS = [
-  "set a reminder for",
-  "can you schedule this for",
-  "please make this happen",
-  "I'd like this to run",
-  "actually, change it to",
-  "instead, make the schedule",
-  "could you remind me",
-  "would you please set this to",
-  "the next occurrence is at",
-  "please record this at",
-  "the job should fire at",
-  "log the next run at",
-  "queue this job for",
-  "put this on the rota for",
-  "configure the worker as",
-  "the next firing should be",
-  "please persist this as",
-  "I'd like a recurrence of",
-  "the daemon should use",
-  "write this cadence as",
-  "the next pulse should land at",
-  "please enqueue this at",
-  "the worker ought to emit at",
-  "stamp the next run at",
-  "please register this to",
-  "would you persist this for",
-  // Scene-setting event-noun prefixes. Reserved gold wraps the same inner
-  // frames with held-out "the train leaves at" / "our rehearsal begins at"
-  // wording; train must see the *shape* (determiner + event + intransitive
-  // verb + at) without copying those phrases.
-  "the shuttle departs at",
-  "the ferry pulls out at",
-  "our workshop commences at",
-  "the briefing kicks off at",
-  "the clinic unlocks at",
-  "our lesson gets going at",
-  "the seminar convenes at",
-  "the shift gets underway at",
-] as const;
-
-/** Trailing `O` prose on preposition-tailed carriers; never a reserved phrase. */
-const TRAILING_CARRIERS = [
-  "if that is acceptable",
-  "when you have a moment",
-  "if that still holds",
-  "once you confirm",
-] as const;
-
-/** Semantically complete base frames that receive conversational carriers.
+/** Semantically complete base frames that receive slot-bag wraps.
  * Clock-only schedules deliberately cover several surface families: otherwise
  * a frame-disjoint split can leave the model with no training example where
  * prose is followed directly by an HOUR clause start. Carrier text is O; the
@@ -1392,6 +1184,24 @@ function renderDaygroup(sentence: Sentence, intent: ScheduleIntent, templateId: 
       sentence.add(expression.prefix, expression.prefix === "on" ? "GLUE" : "RECUR");
     }
 
+    if (
+      expression.surface === "monday through friday" ||
+      expression.surface === "monday to friday"
+    ) {
+      // These are explicit ranges, not opaque DAYGROUP tokens. Keep identical
+      // wording identically supervised when it also comes from weekday-range.
+      sentence.add("monday", weekdayLabel("monday"));
+
+      sentence.add(
+        expression.surface === "monday to friday" ? "to" : "through",
+        boundLabel("between"),
+      );
+
+      sentence.add("friday", weekdayLabel("friday"));
+
+      return true;
+    }
+
     sentence.add(
       expression.surface,
       sameWeekdays(weekdays, WEEKDAY_GROUPS.weekends!)
@@ -1682,19 +1492,19 @@ function renderWeekdayRange(
     case "dash":
       sentence.add(WEEKDAY_ABBR[first], weekdayLabel(first));
       sentence.add(WORDS.glue.dash, boundLabel("between"), "");
-      sentence.add(WEEKDAY_ABBR[last], weekdayLabel(last));
+      sentence.add(WEEKDAY_ABBR[last], weekdayLabel(last), "");
 
       return true;
     case "full-dash":
       sentence.add(WEEKDAY_NAME[first], weekdayLabel(first));
       sentence.add(WORDS.glue.dash, boundLabel("between"), "");
-      sentence.add(WEEKDAY_NAME[last], weekdayLabel(last));
+      sentence.add(WEEKDAY_NAME[last], weekdayLabel(last), "");
 
       return true;
     case "dotted-dash":
       sentence.add(`${WEEKDAY_ABBR[first]}.`, weekdayLabel(first));
       sentence.add(WORDS.glue.dash, boundLabel("between"), "");
-      sentence.add(`${WEEKDAY_ABBR[last]}.`, weekdayLabel(last));
+      sentence.add(`${WEEKDAY_ABBR[last]}.`, weekdayLabel(last), "");
 
       return true;
     case "span-runs":
@@ -2067,20 +1877,7 @@ function renderDaygroupAtTime(
     }
 
     if (dynamic[1] === "time-expression") addClock(sentence, time, naturalClockStyle(time));
-
-    if (expression.prefix !== "") {
-      sentence.add(expression.prefix, expression.prefix === "on" ? "GLUE" : "RECUR");
-    }
-
-    sentence.add(
-      expression.surface,
-      sameWeekdays(weekdays, WEEKDAY_GROUPS.weekends!)
-        ? dayGroupLabel("weekend")
-        : sameWeekdays(weekdays, WEEKDAY_GROUPS.weekdays!)
-          ? dayGroupLabel("weekday")
-          : dayGroupLabel("day"),
-    );
-
+    if (!renderDaygroup(sentence, intent, `expression-${dynamic[2]}`)) return false;
     if (dynamic[1] === "expression") addClock(sentence, time, naturalClockStyle(time));
 
     if (dynamic[1] === "qualified-expression") {
@@ -3136,7 +2933,9 @@ function renderFrequencyIdiom(
   if (match === null) return false;
   const phrase = Object.keys(FREQUENCY_IDIOMS)[Number(match[2])];
 
-  if (phrase === undefined) return false;
+  // The explicit numeric-unit renderer owns this wording as seven days.
+  // Do not also emit a conflicting one-week AST from the idiom alias table.
+  if (phrase === undefined || phrase === "every seven days") return false;
   const value = FREQUENCY_IDIOMS[phrase];
 
   if (
@@ -3151,7 +2950,10 @@ function renderFrequencyIdiom(
   else if (match[1] === "cadence") sentence.add("the cadence is", "GLUE");
   else if (match[1] === "repeat") sentence.add("repeat", "RECUR");
 
-  if (value.interval === 1) {
+  if (value.interval === 1 && phrase === `once per ${value.unit}`) {
+    sentence.add("once per", "RECUR");
+    sentence.add(value.unit, unitLabel(value.unit));
+  } else if (value.interval === 1) {
     sentence.add(phrase, unitLabel(value.unit));
   } else if (value.interval >= 2 && value.interval <= 12) {
     const words = phrase.split(/\s+/);
@@ -3950,11 +3752,13 @@ export const KINDS: readonly KindDef[] = [
   {
     id: "frequency-idiom",
     family: "interval",
-    templates: Object.keys(FREQUENCY_IDIOMS).flatMap((_, index) =>
-      (["idiom", "run", "cadence", "repeat"] as const).map((frame) => ({
-        id: `${frame}-${index}`,
-        split: "train" as const,
-      })),
+    templates: Object.keys(FREQUENCY_IDIOMS).flatMap((phrase, index) =>
+      phrase === "every seven days"
+        ? []
+        : (["idiom", "run", "cadence", "repeat"] as const).map((frame) => ({
+            id: `${frame}-${index}`,
+            split: "train" as const,
+          })),
     ),
     intents: frequencyIdiomIntents(),
     render: (sentence, intent, templateId) => renderFrequencyIdiom(sentence, intent!, templateId),
@@ -4251,46 +4055,6 @@ function* iterateCorrectionExamples(): Generator<KindExample> {
   }
 }
 
-function* yieldCarried(
-  kind: KindDef,
-  intent: ScheduleIntent,
-  template: KindTemplate,
-  prefix: string,
-  suffix: string | undefined,
-  name: string,
-): Generator<KindExample> {
-  const sentence = new Sentence();
-
-  sentence.add(prefix, "O");
-  sentence.clause();
-  if (!kind.render(sentence, intent, template.id)) return;
-  if (suffix !== undefined) sentence.add(suffix, "O");
-  const clean = finish(sentence, name);
-
-  yield {
-    kind: kind.id,
-    family: kind.family,
-    template: name,
-    split: template.split,
-    intent,
-    example: clean,
-  };
-
-  const noisy = spellingVariant(clean, name);
-
-  if (noisy !== undefined) {
-    yield {
-      kind: kind.id,
-      family: kind.family,
-      template: `${kind.id}/noise-${noisy.noise}-${name.slice(kind.id.length + 1)}`,
-      split: template.split,
-      intent,
-      example: noisy.example,
-      splitExample: clean,
-    };
-  }
-}
-
 export function* iterateKinds(wanted?: ReadonlySet<KindId>): Generator<KindExample> {
   let negativeIndex = 0;
 
@@ -4350,29 +4114,36 @@ export function* iterateKinds(wanted?: ReadonlySet<KindId>): Generator<KindExamp
         }
 
         if (receivesCarrier(kind.id, template.id) && intent !== null) {
-          for (let carrierIndex = 0; carrierIndex < POSITIVE_CARRIERS.length; carrierIndex++) {
-            const prefix = POSITIVE_CARRIERS[carrierIndex]!;
+          const wraps = wrapsForKernel(sentence, [kind.id, template.id, JSON.stringify(intent)]);
 
-            yield* yieldCarried(
-              kind,
+          for (const wrap of wraps) {
+            const { speech, scene, position, hedge, reason, tail } = wrap.draw;
+            const slot = `${speech.id}-${scene.id}-${position}-${hedge.id}-${reason.id}-${tail.id}`;
+            const slotName = `${kind.id}/slot-${slot}-${template.id}`;
+            const slotted = finish(wrap.sentence, slotName, wrap.speechAct);
+
+            yield {
+              kind: kind.id,
+              family: kind.family,
+              template: slotName,
+              split: template.split,
               intent,
-              template,
-              prefix,
-              undefined,
-              `${kind.id}/carrier-${carrierIndex}-${template.id}`,
-            );
+              example: slotted,
+            };
 
-            if (!prefix.endsWith(" at")) continue;
-            const trail = TRAILING_CARRIERS[carrierIndex % TRAILING_CARRIERS.length]!;
+            const noisy = spellingVariant(slotted, slotName);
 
-            yield* yieldCarried(
-              kind,
-              intent,
-              template,
-              prefix,
-              trail,
-              `${kind.id}/carrier-${carrierIndex}-trail-${template.id}`,
-            );
+            if (noisy !== undefined) {
+              yield {
+                kind: kind.id,
+                family: kind.family,
+                template: `${kind.id}/noise-${noisy.noise}-${slotName.slice(kind.id.length + 1)}`,
+                split: template.split,
+                intent,
+                example: noisy.example,
+                splitExample: slotted,
+              };
+            }
           }
         }
       }
@@ -4474,6 +4245,64 @@ export function* iterateKindOracleSeeds(seedsPerTemplate = 50): Generator<KindEx
 
         collected += 1;
       }
+    }
+  }
+}
+
+export interface ScheduleKernel {
+  kernel: KindExample;
+  hole: Sentence;
+}
+
+/**
+ * Kernel-only schedule rows (no slot wraps, no noise, no all-O negatives).
+ * Mix draws R/H wraps from this pool instead of walking catalog order.
+ */
+export function* iterateScheduleKernels(
+  perKind = 16,
+  wanted?: ReadonlySet<KindId>,
+): Generator<ScheduleKernel> {
+  for (const kind of KINDS) {
+    if (wanted !== undefined && !wanted.has(kind.id)) continue;
+    if (kind.id === "negative" || isDiscourseKind(kind.id) || kind.id === "correction") continue;
+    const trainTemplates = kind.templates.filter((template) => template.split === "train");
+
+    const intents = kind.intents.filter((intent): intent is NonNullable<typeof intent> => {
+      if (intent === null) return false;
+      assertValid(intent);
+
+      return true;
+    });
+
+    if (trainTemplates.length === 0 || intents.length === 0) continue;
+    let taken = 0;
+    let attempts = 0;
+    const budget = perKind * 8;
+
+    while (taken < perKind && attempts < budget) {
+      const intent = intents[Math.floor((taken * intents.length) / perKind) % intents.length]!;
+      const template = trainTemplates[attempts % trainTemplates.length]!;
+
+      attempts += 1;
+      const sentence = new Sentence();
+
+      sentence.clause();
+      if (!kind.render(sentence, intent, template.id)) continue;
+      const name = `${kind.id}/${template.id}`;
+
+      yield {
+        kernel: {
+          kind: kind.id,
+          family: kind.family,
+          template: name,
+          split: "train",
+          intent,
+          example: finish(sentence, name, "request"),
+        },
+        hole: sentence,
+      };
+
+      taken += 1;
     }
   }
 }

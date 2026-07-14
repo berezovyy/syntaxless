@@ -22,8 +22,10 @@ import type { ScheduleIntent } from "../../src/types/intent";
 import { canonicalizeIntent } from "./canonical-intent";
 import { iterateKindOracleSeeds } from "./kinds";
 import type { KindExample } from "./kinds";
+import type { RenderedExample } from "./renderer";
 import { createRng } from "./rng";
-import { defaultActionable } from "./sentence";
+import { defaultActionable, Sentence } from "./sentence";
+import { wrapsForKernel } from "./slots/sample";
 
 function repoRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -139,7 +141,22 @@ export function oracleDecode(record: OracleRecord): OracleOutcome {
   }
 }
 
-export function oracleAgrees(outcome: OracleOutcome, expected: ScheduleIntent | null): boolean {
+const SPEECH_ACT_REFUSE = new Set<SpeechAct>([
+  "descriptive",
+  "question",
+  "quoted",
+  "one-off",
+  "cancel",
+  "incomplete",
+  "none",
+]);
+
+export function oracleAgrees(
+  outcome: OracleOutcome,
+  expected: ScheduleIntent | null,
+  speechAct?: SpeechAct,
+): boolean {
+  if (speechAct !== undefined && SPEECH_ACT_REFUSE.has(speechAct)) return !outcome.ok;
   if (expected === null) return !outcome.ok;
 
   return (
@@ -149,7 +166,7 @@ export function oracleAgrees(outcome: OracleOutcome, expected: ScheduleIntent | 
 }
 
 export function oracleMatches(record: OracleRecord): boolean {
-  return oracleAgrees(oracleDecode(record), record.intent);
+  return oracleAgrees(oracleDecode(record), record.intent, speechActFor(record));
 }
 
 export function kindTemplateKey(
@@ -194,7 +211,7 @@ const MAX_FAILURES_PER_GROUP = 3;
 
 export function recordOracleOutcome(report: OracleReport, record: OracleRecord): boolean {
   const outcome = oracleDecode(record);
-  const ok = oracleAgrees(outcome, record.intent);
+  const ok = oracleAgrees(outcome, record.intent, speechActFor(record));
   const { kind, template } = kindTemplateKey(record);
   const groupKey = `${kind}\t${template}`;
 
@@ -440,6 +457,52 @@ export function loadKindSeedOracleRecords(seedsPerTemplate = KIND_SEED_COUNT): O
   return records;
 }
 
+function sentenceFromRendered(example: RenderedExample): Sentence {
+  const out = new Sentence();
+  const text = example.text;
+
+  example.spans.forEach((span, index) => {
+    const previousEnd = index === 0 ? 0 : example.spans[index - 1]!.end;
+    const gap = text.slice(previousEnd, span.start);
+    const fragment = text.slice(span.start, span.end);
+
+    if (span.clauseStart) out.clause();
+    out.add(fragment, span.label, index === 0 ? "" : gap, span.actionable);
+  });
+
+  return out;
+}
+
+/** Composed slot wraps over kind-seed holes; request/correction must oracle-match. */
+export function loadSlottedOracleRecords(limit = 400): OracleRecord[] {
+  const records: OracleRecord[] = [];
+
+  for (const example of iterateKindOracleSeeds(2)) {
+    if (example.intent === null) continue;
+    if (!example.example.spans.some((span) => span.label !== "O")) continue;
+    const hole = sentenceFromRendered(example.example);
+    const wraps = wrapsForKernel(hole, ["oracle", example.kind, example.template], 2);
+
+    for (const wrap of wraps) {
+      records.push({
+        id: `slot/${example.kind}/${records.length}`,
+        text: wrap.sentence.text,
+        spans: wrap.sentence.spans,
+        intent: example.intent,
+        speechAct: wrap.speechAct,
+        kind: example.kind,
+        template: `slot/${wrap.draw.speech.id}`,
+        family: example.family,
+        source: "kind-seed",
+      });
+
+      if (records.length >= limit) return records;
+    }
+  }
+
+  return records;
+}
+
 export async function runOracleSuite(options?: {
   kindsSample?: number;
   seedsPerTemplate?: number;
@@ -453,6 +516,7 @@ export async function runOracleSuite(options?: {
     recordOracleOutcome(report, record);
   }
 
+  for (const record of loadSlottedOracleRecords()) recordOracleOutcome(report, record);
   const kindsSample = options?.kindsSample ?? 0;
 
   if (kindsSample > 0) {

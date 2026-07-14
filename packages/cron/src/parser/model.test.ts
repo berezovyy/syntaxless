@@ -1,89 +1,162 @@
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 
-import { labelId } from "../model/labels";
+import { LABEL_COUNT, labelId } from "../model/labels";
 import { tokenize } from "../model/tokenizer";
+import { classifyConfidence } from "./confidence";
 import type { LabeledToken } from "./decode";
 import { resultFromLabeledTokens } from "./model";
-import { normalize } from "./normalize";
 
-describe("heads-only correction span", () => {
-  test("the string reaching tokenize equals normalize(source)", () => {
-    const source = "Sorry, I meant Tuesday at 10 am rather than Monday at nine.";
+function daily(score = 1): LabeledToken[] {
+  return [
+    {
+      token: tokenize("daily")[0]!,
+      role: labelId.UNIT_DAY,
+      boundary: true,
+      score,
+      actionable: true,
+    },
+  ];
+}
 
-    expect(tokenize(normalize(source)).length).toBeGreaterThan(0);
-    expect(normalize(source)).toBe(normalize(source));
+test("a score below 0.5 suppresses the decoded intent", () => {
+  const result = resultFromLabeledTokens(daily(0.499), undefined, "daily", "off", "request");
+
+  expect(result).toMatchObject({
+    ok: false,
+    source: "model",
+    code: "low-confidence",
+    confidence: 0.499,
+    diagnostics: [expect.objectContaining({ code: "low-confidence", severity: "warning" })],
   });
 
-  test("correction + gold actionable span yields the replacement weekday", () => {
-    const tokens = tokenize("thursday friday").filter((token) => token.kind !== 3);
+  expect(result).not.toHaveProperty("intent");
+});
 
-    const labeled: LabeledToken[] = tokens.map((token) => ({
+test.each([
+  { score: 0.5, diagnostic: "low-margin" },
+  { score: 0.899, diagnostic: "low-margin" },
+  { score: 0.9, diagnostic: null },
+])(
+  "confidence $score preserves the intent with the correct diagnostic",
+  ({ score, diagnostic }) => {
+    const result = resultFromLabeledTokens(daily(score), undefined, "daily", "off", "request");
+
+    expect(result).toMatchObject({
+      ok: true,
+      source: "model",
+      confidence: score,
+      intent: { frequency: { unit: "day", interval: 1 } },
+    });
+
+    expect(result.diagnostics).toEqual(
+      diagnostic === null
+        ? []
+        : [expect.objectContaining({ code: diagnostic, severity: "suggestion" })],
+    );
+  },
+);
+
+test.each([NaN, Infinity, -Infinity])("non-finite confidence %s cannot be accepted", (score) => {
+  expect(classifyConfidence(score)).toBe("low");
+});
+
+test.each([
+  "none",
+  "descriptive",
+  "question",
+  "quoted",
+  "one-off",
+  "cancel",
+  "incomplete",
+] as const)("%s rejects even a high-confidence actionable schedule", (speechAct) => {
+  const result = resultFromLabeledTokens(
+    daily(),
+    undefined,
+    "Please run this daily",
+    "off",
+    speechAct,
+  );
+
+  expect(result).toMatchObject({ ok: false, code: "unsafe-context", source: "model" });
+  expect(result).not.toHaveProperty("intent");
+});
+
+test.each([
+  {
+    name: "unknown role",
+    tokens: [{ ...daily()[0]!, role: LABEL_COUNT }],
+    act: "request" as const,
+    diagnostic: "unknown-role",
+  },
+  {
+    name: "missing speech act",
+    tokens: daily(),
+    act: undefined,
+    diagnostic: "decode-error",
+  },
+])(
+  "$name becomes an explicit model error rather than a guessed intent",
+  ({ tokens, act, diagnostic }) => {
+    const result = resultFromLabeledTokens(tokens, undefined, "daily", "off", act);
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "model-error",
+      diagnostics: [expect.objectContaining({ code: diagnostic, severity: "error" })],
+    });
+
+    expect(result).not.toHaveProperty("intent");
+  },
+);
+
+test.each(["thursday friday", "friday thursday"])(
+  "correction selects the actionable replacement, not the first weekday: %s",
+  (text) => {
+    const tokens = tokenize(text).filter((token) => token.kind !== 3);
+
+    const labeled = tokens.map((token, index) => ({
       token,
-      role: token.text === "thursday" ? labelId.WEEKDAY_THU : labelId.WEEKDAY_FRI,
-      boundary: token.text === "thursday",
+      role: token.text === "friday" ? labelId.WEEKDAY_FRI : labelId.WEEKDAY_THU,
+      boundary: index === 0,
       score: 1,
       actionable: token.text === "friday",
     }));
 
-    const result = resultFromLabeledTokens(
-      labeled,
-      undefined,
-      "thursday friday",
-      "off",
-      "correction",
-    );
-
-    expect(result.ok).toBe(true);
-
-    if (result.ok) {
-      expect(result.intent).toEqual({
+    expect(resultFromLabeledTokens(labeled, undefined, text, "off", "correction")).toMatchObject({
+      ok: true,
+      intent: {
         frequency: { unit: "week", interval: 1 },
         weekdays: ["friday"],
-      });
-    }
-  });
+      },
+    });
 
-  test("correction + empty actionable rejects", () => {
-    const tokens = tokenize("thursday friday").filter((token) => token.kind !== 3);
-
-    const labeled: LabeledToken[] = tokens.map((token) => ({
-      token,
-      role: token.text === "thursday" ? labelId.WEEKDAY_THU : labelId.WEEKDAY_FRI,
-      boundary: token.text === "thursday",
-      score: 1,
-      actionable: false,
-    }));
-
-    const result = resultFromLabeledTokens(
-      labeled,
+    const empty = resultFromLabeledTokens(
+      labeled.map((token) => ({ ...token, actionable: false })),
       undefined,
-      "thursday friday",
+      text,
       "off",
       "correction",
     );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe("unsafe-context");
+    expect(empty).toMatchObject({ ok: false, code: "unsafe-context" });
+    expect(empty).not.toHaveProperty("intent");
+  },
+);
+
+test("raw schedule wording cannot rescue all-O labels", () => {
+  const result = resultFromLabeledTokens(
+    [{ ...daily()[0]!, role: labelId.O }],
+    undefined,
+    "Please run this daily",
+    "on",
+    "request",
+  );
+
+  expect(result).toMatchObject({
+    ok: false,
+    code: "unsafe-context",
+    diagnostics: [expect.objectContaining({ code: "no-actionable-span" })],
   });
 
-  test.each([
-    "Cancel the weekday idea.",
-    "Actually, never mind.",
-    "Monday or Tuesday might work; I have not decided.",
-  ])("cancellation or unresolved choice is not rewritten into a request: %s", (source) => {
-    const tokens = tokenize(normalize(source)).filter((token) => token.kind !== 3);
-
-    const labeled: LabeledToken[] = tokens.map((token) => ({
-      token,
-      role: labelId.O,
-      boundary: false,
-      score: 1,
-      actionable: false,
-    }));
-
-    const result = resultFromLabeledTokens(labeled, undefined, source, "off", "cancel");
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe("unsafe-context");
-  });
+  expect(result).not.toHaveProperty("intent");
 });

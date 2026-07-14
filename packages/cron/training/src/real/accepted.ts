@@ -7,6 +7,14 @@ import { join } from "node:path";
 
 import type { Label } from "../../../src/model/labels";
 import type { ScheduleIntent } from "../../../src/types/intent";
+import type { CorpusProvenance } from "../corpus/provenance";
+
+/** Explicit consent metadata required before a real row may enter training. */
+export interface ModelTrainingConsent {
+  granted: true;
+  scope: "model-training";
+  recordedBy: string;
+}
 
 export interface AcceptedRealRecord {
   id: string;
@@ -25,6 +33,10 @@ export interface AcceptedRealRecord {
   family?: string;
   fingerprint?: string;
   speechAct?: string;
+  /** Optional at collection time; complete-corpus integration requires it. */
+  trainingConsent?: ModelTrainingConsent;
+  /** Optional at collection time; integration requires human-authored provenance. */
+  provenance?: CorpusProvenance;
 }
 
 const SKIP = new Set(["rejected.jsonl", "yield.json", "manifest.json"]);

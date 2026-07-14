@@ -133,10 +133,6 @@ test.each(failureCases)("parse fails: $phrase -> $code", async ({ phrase, code }
   }
 });
 
-test("parse returns a promise", () => {
-  expect(parse("every day")).toBeInstanceOf(Promise);
-});
-
 test("normalize canonicalizes and is idempotent", () => {
   const once = normalize("Every Monday at 9 A.M.!!");
 

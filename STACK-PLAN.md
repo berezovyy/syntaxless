@@ -20,7 +20,7 @@ The plan replaces each choice rather than tuning it. Tracks are ordered so that 
 
 These were gpu-time's product goals, not ours. Decide budget from the accuracy target, not the reverse.
 
-- **50 KB Brotli** → new budget **≤ 2 MB** gzipped for the shipped model. Revisit downward only after H ≥ 95 %.
+- **50 KB Brotli** → new budget **≤ 2 MB** gzipped for the shipped model. Revisit downward only after H-pos ≥ 95 %.
 - **Zero-dependency WGSL runtime** → CPU typed-array inference in `inference.ts` stays; no GPU kernel work until accuracy is solved.
 - **Hidden size ∈ {32, 48, 64}** (`training/cron/config.py`) → any size the budget allows.
 - **Frozen 13.7 M-row corpus regenerated per change** → 1–2 M pool, fresh 300 k draw per epoch, per-kind incremental regen (Track S).
@@ -29,7 +29,14 @@ Kept: browser-only, no network at inference, deterministic output, `ScheduleInte
 
 ## Metrics
 
-Unchanged from v2: **H**, **H-neg**, **H-silent**, **O**, **G2**, **INV**, **R** (diagnostic). Added:
+From v2: **H-silent**, **O**, **G2**, **INV**, **R** (diagnostic). **Retired: composite H and H-neg** — H counted correct rejections together with correct schedules, so a reject-all model scored 723/1646 (44 %) and B0 (733) sat one point above that floor. Replaced by:
+
+| id          | what                                  | why                               |
+| ----------- | ------------------------------------- | --------------------------------- |
+| **H-pos**   | positives (886) with the exact intent | the decision metric; E1 = 345/886 |
+| **H-negOK** | negatives (760) correctly rejected    | the safety column; E1 = 403/760   |
+
+Added:
 
 | id         | what                                                                                             | why                                                                                                                               |
 | ---------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -295,7 +302,7 @@ Decision gates:
 
 ## Task checklist
 
-- [x] S.1 loader: bucket-contiguous tensors, single gather, `uint16` rows / `int32` neighbors, batch 1024, validation cap 20 k; exit check vs E1b
+- [ ] S.1 loader: vectorised gather landed; **exit check not met** — 1 epoch × 200 k = 106 s, of which 94 s is `Dataset.digests()` hashing 20 GB of shards per run. Fix: write shard SHA-256 into the manifest at featurize time; re-measure
 - [x] S.4 `experiment.ts` one-command run with hash-keyed steps and mandatory ledger row
 - [x] S.3 H per epoch in `train.py`; early stop on H; epoch-1 vs final correlation check over `runs/`
 - [x] S.2 pool render + `--fresh-each-epoch`; per-kind hashed regen + per-kind shards; `Bun.spawn` workers
@@ -305,19 +312,19 @@ Decision gates:
 - [x] A.3 delete lexicon lookups from `parser/decode.ts`; `_LIT` via `parseInt` only
 - [x] A.4 `schedule-semantics.ts` arithmetic-only
 - [x] A.5 model/inference `role_classes` from `LABEL_COUNT`
-- [x] A.6 oracle 100 % on gold + kind-seeds + `--kinds-sample 200000`; CI gate includes kinds-sample
+- [ ] A.6 oracle on the typed corpus with `--kinds-sample 200000` (experiment ran `--seeds 0 --kinds-sample 0`: gold rows only)
 - [x] A.7 `noise.ts` allowlist = all non-`_LIT` labels
-- [x] A1 train (E1 recipe) + ledger row
-- [x] A2 train (`--fresh-each-epoch`, batch 1024, `--init` A1) + ledger row
+- [ ] A1 train (E1 recipe, 3 seeds) + ledger row — `a1` was a 19 s smoke run on a 200 k pool, degenerate
+- [ ] A2 train (`--fresh-each-epoch`, batch 1024, `--init` A1) + ledger row — `a2` smoke, degenerate
 - [x] C.1 sources + `manifest.json` + `collect.ts`
 - [x] C.2 `label.ts` k=3 constrained
 - [x] C.3 `agree.ts`, C.4 `execute.ts`, C.5 `roundtrip.ts`, C.6 `project.ts`
 - [ ] C.7 `data/real/*.jsonl` + `rejected.jsonl` coverage report (pipeline writes `yield.json` with 0 accepted; no LLM)
 - [ ] C1 (RT 10 %), C2 (RT 30 %) trains + rows
-- [x] F.1 remove kind/speech-act heads, F.2 energy + Mahalanobis, F.3 conformal calibration, F.4 `model.ts` abstention
-- [x] E.1 CRF training on best tagger
-- [x] D.1 pretrain encoder, D.2 fine-tune
-- [x] B.1 `grammar.ts` + mask export, B.2 `seq2seq.py`, B.3 `featurize-seq2seq.ts`, B.4 `inference-seq2seq.ts`
+- [ ] F.1–F.4 abstention: code landed, **no ledger row**; calibrate on the first non-degenerate A1
+- [ ] E.1 CRF: code landed, no row
+- [ ] D.1/D.2 pretrain: code landed, no row
+- [ ] B.1–B.4 seq2seq: code landed; `b1` accepts everything with a wrong intent — debug before any B2
 - [x] B1 train; seq2seq lost to tagger-typed (B2 needs C2 mix)
 - [ ] C3 (real only) if C2 ≥ C1
 - [x] E.2 executable-reward MRT on the chosen stack

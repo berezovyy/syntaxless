@@ -7,6 +7,7 @@ the resolved value — not the request — is what the report records.
 from __future__ import annotations
 
 import argparse
+import math
 from dataclasses import asdict, dataclass
 
 
@@ -32,6 +33,13 @@ class Config:
     balance_frames: bool = False
     balance_kinds: bool = False
     balance_schedule_kinds: bool = False
+    population_mix: tuple[float, float, float] | None = None
+    population_cover_all: bool = False
+    compile_model: bool = False
+    amp: bool = False
+    prefetch: bool = False
+    auto_batch: bool = False
+    full_final_eval: bool = False
     frame_balance_power: float = 0.5
     early_stopping_patience: int = 0
     min_epochs: int = 1
@@ -98,6 +106,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="give each global schedule class equal total sampling mass",
     )
     parser.add_argument(
+        "--population-mix",
+        default=None,
+        metavar="R,H,E",
+        help=(
+            "sample an exact per-epoch R/H/E mix from a complete corpus "
+            "(for example 0.68,0.22,0.10); requires a populations shard"
+        ),
+    )
+    parser.add_argument(
+        "--population-cover-all",
+        action="store_true",
+        help="include every population member, then oversample only minorities",
+    )
+    parser.add_argument(
+        "--compile",
+        dest="compile_model",
+        action="store_true",
+        help="compile the model with the reduce-overhead CUDA mode",
+    )
+    parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="use CUDA float16 autocast with gradient scaling",
+    )
+    parser.add_argument(
+        "--prefetch",
+        action="store_true",
+        help="prepare and pin the next batch on a background thread",
+    )
+    parser.add_argument(
+        "--auto-batch",
+        action="store_true",
+        help="benchmark safe batch sizes on the selected CUDA device",
+    )
+    parser.add_argument(
+        "--full-final-eval",
+        action="store_true",
+        help="score the selected checkpoint over complete validation and heldout splits",
+    )
+    parser.add_argument(
         "--frame-balance-power",
         type=float,
         default=0.5,
@@ -155,6 +203,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_args(argv: list[str] | None = None) -> Config:
     args = build_parser().parse_args(argv)
+    population_mix: tuple[float, float, float] | None = None
+    if args.population_mix is not None:
+        try:
+            values = tuple(float(value.strip()) for value in args.population_mix.split(","))
+        except ValueError as error:
+            raise ValueError("--population-mix must be three comma-separated numbers") from error
+        if len(values) != 3:
+            raise ValueError("--population-mix must contain exactly R,H,E weights")
+        if (
+            any(not math.isfinite(value) or value < 0 for value in values)
+            or sum(values) <= 0
+        ):
+            raise ValueError(
+                "--population-mix weights must be finite and non-negative "
+                "with a positive sum"
+            )
+        population_mix = values
     if args.epochs < 1:
         raise ValueError("--epochs must be at least 1")
     if args.samples < 1:
@@ -179,6 +244,23 @@ def parse_args(argv: list[str] | None = None) -> Config:
         raise ValueError("--frame-balance-power must be in [0, 1]")
     if args.balance_kinds and args.balance_schedule_kinds:
         raise ValueError("choose either --balance-kinds or --balance-schedule-kinds")
+    if population_mix is not None and (
+        args.balance_frames or args.balance_kinds or args.balance_schedule_kinds
+    ):
+        raise ValueError(
+            "--population-mix cannot be combined with frame/kind balancing"
+        )
+    if args.population_cover_all and population_mix is None:
+        raise ValueError("--population-cover-all requires --population-mix")
+    if (
+        (args.amp or args.auto_batch)
+        and args.device != "auto"
+        and not str(args.device).startswith("cuda")
+    ):
+        raise ValueError("--amp and --auto-batch require a CUDA device")
+    resolved_device = resolve_device(args.device)
+    if (args.amp or args.auto_batch) and not resolved_device.startswith("cuda"):
+        raise ValueError("--amp and --auto-batch resolved to a non-CUDA device")
     return Config(
         run=args.run,
         seed=args.seed,
@@ -192,12 +274,19 @@ def parse_args(argv: list[str] | None = None) -> Config:
         quantization_bits=args.quantization_bits,
         hidden=args.hidden,
         storage=args.storage,
-        device=resolve_device(args.device),
+        device=resolved_device,
         device_requested=args.device,
         data_prefix=args.data_prefix,
         balance_frames=args.balance_frames,
         balance_kinds=args.balance_kinds,
         balance_schedule_kinds=args.balance_schedule_kinds,
+        population_mix=population_mix,
+        population_cover_all=args.population_cover_all,
+        compile_model=args.compile_model,
+        amp=args.amp,
+        prefetch=args.prefetch,
+        auto_batch=args.auto_batch,
+        full_final_eval=args.full_final_eval,
         frame_balance_power=args.frame_balance_power,
         early_stopping_patience=args.early_stopping_patience,
         min_epochs=args.min_epochs,

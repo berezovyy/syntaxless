@@ -143,6 +143,31 @@ def test_finite_gradients() -> None:
     print(f"finite qat gradients: ok ({checked} tensors)")
 
 
+def test_embedding_bag_matches_materialized_embedding() -> None:
+    generator = torch.Generator().manual_seed(29)
+    rows = torch.randint(0, FEATURE_ROWS, (3, 7, ROWS_PER_TOKEN), generator=generator)
+    rows[:, -2:, 10:] = FEATURE_ROWS
+    original_weight = torch.randn(
+        FEATURE_ROWS + 1, HIDDEN, generator=generator, requires_grad=True
+    )
+    with torch.no_grad():
+        original_weight[FEATURE_ROWS].zero_()
+    bag_weight = original_weight.detach().clone().requires_grad_(True)
+    materialized = torch.nn.functional.embedding(
+        rows, original_weight, padding_idx=FEATURE_ROWS
+    ).sum(dim=2)
+    bagged = torch.nn.functional.embedding_bag(
+        rows.reshape(-1, ROWS_PER_TOKEN),
+        bag_weight,
+        mode="sum",
+        padding_idx=FEATURE_ROWS,
+    ).reshape(3, 7, HIDDEN)
+    torch.testing.assert_close(bagged, materialized)
+    materialized.square().mean().backward()
+    bagged.square().mean().backward()
+    torch.testing.assert_close(bag_weight.grad, original_weight.grad)
+
+
 def test_legacy_heads_are_empty() -> None:
     model = build_model(speech_act_classes=0, actionable_head=False).eval()
     batch = make_batch(4, 2, seed=3)
@@ -167,6 +192,22 @@ def test_schedule_kind_taxonomy() -> None:
         "negative/ordinary/0": "none",
         "negative/ambiguous/0": "ambiguous",
         "negative/multiple/0": "ambiguous",
+        "easy-no/tatoeba-v2": "none",
+        "minute-interval": "interval",
+        "hour-interval": "interval",
+        "day-interval": "interval",
+        "week-interval": "interval",
+        "month-interval": "interval",
+        "daily-clock": "daily",
+        "last-day-of-month": "monthly",
+        "last-business-day": "monthly",
+        "start-bound": "bounded",
+        "exclusive-end-bound": "bounded",
+        "inclusive-end-bound": "bounded",
+        "date-window": "bounded",
+        "correction-interval": "interval",
+        "correction-clock": "daily",
+        "correction-weekday": "weekly",
     }
     for frame, name in expected.items():
         assert schedule_kind_for_frame(frame) == SCHEDULE_KIND_NAMES.index(name)

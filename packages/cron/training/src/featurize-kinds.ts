@@ -6,15 +6,7 @@
  * writes all three split shards in one pass. Binary output is byte-for-byte the
  * same contract consumed by `training/cron/dataset.py`.
  */
-import {
-  closeSync,
-  createReadStream,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  writeFileSync,
-  writeSync,
-} from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -22,20 +14,25 @@ import { fileURLToPath } from "node:url";
 import { LABEL_COUNT, LABELS } from "../../src/model/labels.js";
 import { SPEECH_ACT_COUNT, SPEECH_ACTS } from "../../src/model/speech-acts.js";
 import { EMBEDDING_ROWS, FEATURE_COUNT, tokenize } from "../../src/model/tokenizer.js";
+import { createJsonlReadStream } from "./corpus/jsonl-io.js";
 import { corpusRecordSchema } from "./corpus/merge.js";
 import type { CorpusRecord } from "./corpus/merge.js";
-import { featurizeRecord, MAX_TOKENS, SHARD_FORMAT } from "./featurize.js";
+import { featurizeRecord, MAX_TOKENS, POPULATION_IDS, SHARD_FORMAT } from "./featurize.js";
 import type { FeaturizeManifest, PerRecord } from "./featurize.js";
 import type { Split } from "./generate.js";
+import { classifyPopulation } from "./mix/quotas.js";
 
 const SPLITS: readonly Split[] = ["train", "validation", "heldout"];
-const WRITE_BUFFER_BYTES = 4 * 1024 * 1024;
+// Keep one fixed buffer per output file.  Retaining thousands of small typed
+// array backing stores until Buffer.concat() was cheap for small corpora, but
+// caused Bun's RSS to grow until Linux killed production featurization.
+const WRITE_BUFFER_BYTES = 1024 * 1024;
 
 class BufferedWriter {
   readonly path: string;
   readonly #fd: number;
-  #chunks: Buffer[] = [];
-  #bytes = 0;
+  readonly #buffer = Buffer.allocUnsafe(WRITE_BUFFER_BYTES);
+  #offset = 0;
 
   constructor(path: string) {
     this.path = path;
@@ -45,22 +42,27 @@ class BufferedWriter {
 
   append(view: ArrayBufferView): void {
     if (view.byteLength === 0) return;
-    this.#chunks.push(Buffer.from(view.buffer, view.byteOffset, view.byteLength));
-    this.#bytes += view.byteLength;
-    if (this.#bytes >= WRITE_BUFFER_BYTES) this.flush();
+    const input = Buffer.from(view.buffer, view.byteOffset, view.byteLength);
+    let inputOffset = 0;
+
+    while (inputOffset < input.length) {
+      if (this.#offset === this.#buffer.length) this.flush();
+      const bytes = Math.min(input.length - inputOffset, this.#buffer.length - this.#offset);
+
+      input.copy(this.#buffer, this.#offset, inputOffset, inputOffset + bytes);
+      this.#offset += bytes;
+      inputOffset += bytes;
+    }
   }
 
   flush(): void {
-    if (this.#bytes === 0) return;
-    const buffer = Buffer.concat(this.#chunks, this.#bytes);
-    let offset = 0;
+    let written = 0;
 
-    while (offset < buffer.length) {
-      offset += writeSync(this.#fd, buffer, offset, buffer.length - offset);
+    while (written < this.#offset) {
+      written += writeSync(this.#fd, this.#buffer, written, this.#offset - written);
     }
 
-    this.#chunks = [];
-    this.#bytes = 0;
+    this.#offset = 0;
   }
 
   close(): void {
@@ -82,17 +84,19 @@ interface SplitState {
     frames: BufferedWriter;
     speech: BufferedWriter;
     actionable: BufferedWriter;
+    populations: BufferedWriter;
   };
   sequences: number;
   tokens: number;
   skippedEmpty: number;
   skippedLong: number;
   labelCounts: Record<string, number>;
-  fingerprints: Set<string>;
+  fingerprints: number;
   frameIds: Map<string, number>;
   frameNames: string[];
   frameCounts: number[];
   actionableCounts: Record<0 | 1, number>;
+  populationCounts: Record<"R" | "H" | "E", number>;
 }
 
 export interface StreamingSplitSummary {
@@ -162,17 +166,19 @@ function createState(outputBase: string, split: Split): SplitState {
       frames: new BufferedWriter(shardPath(prefix, "frames")),
       speech: new BufferedWriter(shardPath(prefix, "speech")),
       actionable: new BufferedWriter(shardPath(prefix, "actionable")),
+      populations: new BufferedWriter(shardPath(prefix, "populations")),
     },
     sequences: 0,
     tokens: 0,
     skippedEmpty: 0,
     skippedLong: 0,
     labelCounts: Object.fromEntries(LABELS.map((label) => [label, 0])),
-    fingerprints: new Set<string>(),
+    fingerprints: 0,
     frameIds: new Map<string, number>(),
     frameNames: [],
     frameCounts: [],
     actionableCounts: { 0: 0, 1: 0 },
+    populationCounts: { R: 0, H: 0, E: 0 },
   };
 }
 
@@ -205,6 +211,15 @@ function appendRecord(state: SplitState, record: CorpusRecord): void {
   state.writers.speech.append(shard.speech);
   state.writers.actionable.append(shard.actionable);
 
+  const population = classifyPopulation({
+    intent: record.intent,
+    speechAct: record.speechAct ?? "none",
+    spans: record.spans,
+  });
+
+  state.writers.populations.append(Uint8Array.of(POPULATION_IDS[population]));
+  state.populationCounts[population]++;
+
   for (let index = 0; index < shard.tokenCount; index++) {
     if (shard.kinds[index] === 3) continue;
     const bit = shard.actionable[index]! === 1 ? 1 : 0;
@@ -212,7 +227,8 @@ function appendRecord(state: SplitState, record: CorpusRecord): void {
     state.actionableCounts[bit] += 1;
   }
 
-  const frameName = record.template ?? `${record.family}/unspecified`;
+  const rawFrame = record.template ?? `${record.family}/unspecified`;
+  const frameName = rawFrame.split("/")[0] ?? rawFrame;
   let frameId = state.frameIds.get(frameName);
 
   if (frameId === undefined) {
@@ -232,7 +248,7 @@ function appendRecord(state: SplitState, record: CorpusRecord): void {
   }
 
   state.writers.offsets.append(Uint32Array.of(state.tokens));
-  state.fingerprints.add(record.fingerprint);
+  state.fingerprints += 1;
 
   for (const label of LABELS) {
     state.labelCounts[label]! += shard.labelCounts[label] ?? 0;
@@ -271,7 +287,7 @@ function parseBackwardRecord(line: string, lineNumber: number): CorpusRecord {
 
 function writeManifest(state: SplitState): void {
   const manifest: FeaturizeManifest = {
-    fingerprints: [...state.fingerprints].sort(),
+    fingerprints: [],
     roleClasses: LABEL_COUNT,
     rowsPerToken: FEATURE_COUNT,
     featureRows: EMBEDDING_ROWS,
@@ -281,25 +297,11 @@ function writeManifest(state: SplitState): void {
     speechActClasses: SPEECH_ACT_COUNT,
     speechActNames: SPEECH_ACTS,
     actionableCounts: state.actionableCounts,
+    populationCounts: state.populationCounts,
     format: SHARD_FORMAT,
   };
 
   writeFileSync(`${state.prefix}.json`, `${JSON.stringify(manifest, null, 2)}\n`);
-}
-
-function assertSplitDisjoint(states: Record<Split, SplitState>): void {
-  for (let left = 0; left < SPLITS.length; left++) {
-    for (let right = left + 1; right < SPLITS.length; right++) {
-      const leftSplit = SPLITS[left]!;
-      const rightSplit = SPLITS[right]!;
-
-      for (const fingerprint of states[leftSplit].fingerprints) {
-        if (states[rightSplit].fingerprints.has(fingerprint)) {
-          throw new Error(`${leftSplit}/${rightSplit} fingerprint leaked: ${fingerprint}`);
-        }
-      }
-    }
-  }
 }
 
 export async function featurizeKindsStreaming(
@@ -314,11 +316,10 @@ export async function featurizeKindsStreaming(
   ) as Record<Split, SplitState>;
 
   let records = 0;
-  let succeeded = false;
 
   try {
     const lines = createInterface({
-      input: createReadStream(input, { encoding: "utf8" }),
+      input: createJsonlReadStream(input),
       crlfDelay: Number.POSITIVE_INFINITY,
     });
 
@@ -330,17 +331,23 @@ export async function featurizeKindsStreaming(
       appendRecord(states[record.split], record);
 
       if (records % 100_000 === 0) {
-        process.stdout.write(`featurized ${records.toLocaleString()} records\r`);
+        // Force collection of short-lived tokenizer/feature arrays.  Bun's
+        // automatic collection can lag far behind a multi-hour, allocation-
+        // heavy stream on machines without swap.
+        Bun.gc(true);
+        const rssGiB = process.memoryUsage.rss() / 1024 ** 3;
+
+        process.stdout.write(
+          `featurized ${records.toLocaleString()} records (${rssGiB.toFixed(2)} GiB RSS)\r`,
+        );
       }
     }
-
-    assertSplitDisjoint(states);
-    succeeded = true;
+    // Split disjointness is enforced by the generator. Do not retain all
+    // fingerprints here: streaming corpora can contain tens of millions of rows.
   } finally {
     for (const state of Object.values(states)) closeState(state);
   }
 
-  if (!succeeded) throw new Error("streaming featurization failed");
   for (const state of Object.values(states)) writeManifest(state);
   process.stdout.write("\n");
 
@@ -361,7 +368,7 @@ export async function featurizeKindsStreaming(
             tokens: state.tokens,
             skippedEmpty: state.skippedEmpty,
             skippedLong: state.skippedLong,
-            fingerprints: state.fingerprints.size,
+            fingerprints: state.fingerprints,
           },
         ];
       }),
@@ -373,7 +380,7 @@ if (import.meta.main) {
   const [input, outputBase, ...extra] = process.argv.slice(2);
 
   if (input === undefined || outputBase === undefined || extra.length > 0) {
-    throw new RangeError("usage: featurize-kinds <kinds.jsonl> <output-prefix>");
+    throw new RangeError("usage: featurize-kinds <kinds.jsonl[.gz]> <output-prefix>");
   }
 
   const summary = await featurizeKindsStreaming(input, outputBase);

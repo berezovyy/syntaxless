@@ -1,4 +1,7 @@
-import { compile, cron, parse } from "../dist/index.js";
+// Type-check from a clean checkout, but exercise only the built artifact.
+const { compile, cron, parse }: typeof import("../src/index.js") = await import(
+  new URL("../dist/index.js", import.meta.url).href
+);
 
 function check(condition: boolean, message: string): void {
   if (!condition) {

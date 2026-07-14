@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { LABEL_COUNT, LABELS } from "../../src/model/labels";
+import { compile } from "../../src/compiler/cron";
+import { LABEL_COUNT, labelId, LABELS } from "../../src/model/labels";
 import { tokenize } from "../../src/model/tokenizer";
-import type { EvaluationResult, GoldRecord } from "./evaluate";
+import type { ParseResult } from "../../src/parser/parse";
+import { loadTestEngine } from "../tests/helpers/candidate-engine";
+import { tempDir } from "../tests/helpers/temp-dir";
+import type { ContractReport, Engine, GoldRecord } from "./evaluate";
 import {
   canonicalizeIntent,
+  evaluateCorpus,
   lintGoldRecords,
   loadEngine,
   parseCorpus,
@@ -142,82 +150,9 @@ describe("riskCoverage", () => {
   });
 });
 
-describe("overlay-off report column", () => {
-  test("is a sibling of overlay-on contracts and never a fifth summed metric", () => {
-    const metrics: Array<EvaluationResult["contracts"][number]["metric"]> = [
-      "tokenRoles",
-      "rawDecode",
-      "exactAst",
-      "compiledExpression",
-    ];
-
-    expect(metrics).toHaveLength(4);
-
-    const overlayOff = {
-      contracts: [],
-      selectivePrediction: [],
-      rawSelectivePrediction: [],
-      typoInvariance: {
-        total: 0,
-        cleanCorrect: 0,
-        noisyCorrect: 0,
-        pairedCorrect: 0,
-        noisySilentWrong: 0,
-        noisyAccuracy: 0,
-        pairedAccuracy: 0,
-        byFamily: {},
-        byNoise: {},
-        failureCounts: {},
-        failures: [],
-      },
-    };
-
-    const result: EvaluationResult = {
-      artifactSha256: "0".repeat(64),
-      corpus: "unused.jsonl",
-      corpusSha256: "0".repeat(64),
-      familyDistribution: {},
-      scope: "unit",
-      contracts: [],
-      selectivePrediction: [],
-      rawSelectivePrediction: [],
-      typoInvariance: {
-        total: 0,
-        cleanCorrect: 0,
-        noisyCorrect: 0,
-        pairedCorrect: 0,
-        noisySilentWrong: 0,
-        noisyAccuracy: 0,
-        pairedAccuracy: 0,
-        byFamily: {},
-        byNoise: {},
-        failureCounts: {},
-        failures: [],
-      },
-      overlayOff,
-      attribution: {
-        ROLE: 0,
-        ACT: 0,
-        DECODE: 0,
-        CONF: 0,
-        GOLD: 0,
-        records: [],
-      },
-      exec: { correct: 0, total: 0 },
-      faAtCov: "0@0",
-    };
-
-    expect(result.contracts).toEqual([]);
-    expect(result.overlayOff).toBe(overlayOff);
-  });
-});
-
 describe("loadEngine candidate uses src labels", () => {
-  test("a candidate is scored against typed LABELS, not the 15-class dist bundle", async () => {
-    const engine = await loadEngine(
-      "packages/cron/dist",
-      "packages/cron/training/data/synth/experiments/a1/weights-seed-20260913.gen.ts",
-    );
+  test("a candidate is scored against typed LABELS without a dist build", async () => {
+    const engine = await loadTestEngine();
 
     try {
       expect(engine.labelName(0)).toBe("O");
@@ -227,5 +162,128 @@ describe("loadEngine candidate uses src labels", () => {
     } finally {
       await engine.dispose();
     }
+  });
+
+  test("failed candidate imports remove their scratch source tree", async () => {
+    const directory = tempDir("syntaxless-invalid-candidate-");
+    const path = join(directory, "weights.gen.ts");
+
+    // The import in the copied source tree is deliberately invalid. Record that
+    // exact tree rather than inspecting unrelated temporary directories.
+    writeFileSync(
+      path,
+      `import { writeFileSync } from "node:fs";
+       import { dirname, resolve } from "node:path";
+       if (import.meta.dirname !== ${JSON.stringify(directory)}) {
+         writeFileSync(${JSON.stringify(join(directory, "scratch.txt"))}, resolve(dirname(import.meta.path), "../.."));
+         throw new Error("invalid candidate fixture");
+       }
+       export const weights = { q: "f", roleClasses: ${LABEL_COUNT} };\n`,
+    );
+
+    await expect(loadEngine(join(directory, "no-dist"), path)).rejects.toThrow(
+      "invalid candidate fixture",
+    );
+
+    const scratch = await Bun.file(join(directory, "scratch.txt")).text();
+
+    expect(scratch.startsWith(join(tmpdir(), "syntaxless-evaluate-"))).toBe(true);
+    expect(() => readdirSync(scratch)).toThrow();
+  });
+});
+
+test("evaluation keeps overlay-on and overlay-off scores separate and counts false accepts", async () => {
+  const intent = { frequency: { unit: "hour" as const, interval: 1 } };
+  const wrong = { frequency: { unit: "day" as const, interval: 1 } };
+
+  const records: GoldRecord[] = [
+    {
+      id: "hourly",
+      family: "interval",
+      text: "hourly",
+      speechAct: "request",
+      spans: [{ start: 0, end: 6, label: "UNIT_HOUR", clauseStart: true, actionable: true }],
+      intent,
+      expected: { supported: true, expression: "0 * * * *" },
+    },
+    {
+      id: "negative",
+      family: "negative",
+      text: "coffee",
+      speechAct: "none",
+      spans: [{ start: 0, end: 6, label: "O", clauseStart: false, actionable: false }],
+      intent: null,
+      expected: { supported: false, expression: null },
+    },
+  ];
+
+  const corpus = join(tempDir("syntaxless-evaluation-"), "gold.jsonl");
+
+  writeFileSync(corpus, records.map((row) => JSON.stringify(row)).join("\n"));
+
+  const accepted: ParseResult = {
+    ok: true,
+    source: "model",
+    intent,
+    confidence: 0.9,
+    diagnostics: [],
+  };
+
+  const rejected: ParseResult = {
+    ok: false,
+    source: "model",
+    code: "low-confidence",
+    reason: "fixture rejection",
+    confidence: 0,
+    diagnostics: [],
+  };
+
+  const engine: Engine = {
+    artifactSha256: "a".repeat(64),
+    compile,
+    tokenize,
+    inferTokens: (tokens) => ({
+      labels: Uint8Array.from(tokens, (token) =>
+        token.text === "hourly" ? labelId.UNIT_HOUR : labelId.O,
+      ),
+    }),
+    labelName: (id) => LABELS[id]!,
+    parse: async (text, options) =>
+      (text === "hourly") !== (options?.overlay === "off") ? accepted : rejected,
+    decodeRaw: (text, overlay) => {
+      if (text !== "hourly") throw new RangeError("fixture negative");
+
+      return { intent: overlay === "off" ? wrong : intent, confidence: 0.9 };
+    },
+    dispose: async () => {},
+  };
+
+  const result = await evaluateCorpus(engine, corpus, "unit");
+
+  const counts = (reports: readonly ContractReport[]) =>
+    reports.map(({ metric, correct, total }) => ({ metric, correct, total }));
+
+  expect(counts(result.contracts)).toEqual([
+    { metric: "tokenRoles", correct: 2, total: 2 },
+    { metric: "rawDecode", correct: 2, total: 2 },
+    { metric: "exactAst", correct: 2, total: 2 },
+    { metric: "compiledExpression", correct: 2, total: 2 },
+  ]);
+
+  expect(counts(result.overlayOff.contracts)).toEqual([
+    { metric: "rawDecode", correct: 1, total: 2 },
+    { metric: "exactAst", correct: 0, total: 2 },
+    { metric: "compiledExpression", correct: 0, total: 2 },
+  ]);
+
+  expect(result.exec).toEqual({ correct: 0, total: 2 });
+
+  expect(
+    result.overlayOff.selectivePrediction.find((point) => point.threshold === 0.5),
+  ).toMatchObject({
+    accepted: 1,
+    acceptedWrong: 1,
+    coverage: 0.5,
+    negativeFalseAcceptanceRate: 1,
   });
 });

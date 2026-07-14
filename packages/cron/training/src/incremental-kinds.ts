@@ -51,6 +51,7 @@ async function renderAndFeaturize(record: KindHashRecord, cap?: number): Promise
   writeBackward({
     out: record.jsonl,
     kinds: [record.id],
+    pureHashSplit: true,
     ...(cap === undefined ? {} : { cap }),
   });
 

@@ -4,8 +4,8 @@
  * Baseline numbers come from the *built* `packages/cron/dist/` runtime. When a
  * candidate weight module is supplied, the engine is loaded from a scratch
  * copy of **current `src/`** (typed labels) with that candidate as
- * `weights.gen.ts`. Dist is a 15-class bundle; swapping only `weights.gen.js`
- * into it cannot score a 77-role tagger.
+ * `weights.gen.ts`. The candidate replaces that copy's weights, so scoring
+ * uses the role vocabulary `src/` was built for.
  *
  * The corpus is gold data with rendered spans, an expected AST, and an expected
  * compiled expression. The four contracts (`tokenRoles`, `rawDecode`,
@@ -332,81 +332,86 @@ export async function loadEngine(distDir: string, weightsModulePath?: string): P
   let index: DistIndex;
   let evaluation: DistEvaluation;
 
-  if (weightsModulePath === undefined) {
-    const built = resolveRepo(distDir);
-
-    if (!existsSync(join(built, "index.js"))) {
-      throw new Error(`built runtime missing: ${built}/index.js (run the build)`);
-    }
-
-    evaluation = await importModule<DistEvaluation>(join(built, "evaluation.js"));
-    artifact = evaluation.weights;
-    index = await importModule<DistIndex>(join(built, "index.js"));
-  } else {
-    const modulePath = resolveRepo(weightsModulePath);
-
-    if (!existsSync(modulePath)) {
-      throw new Error(`weights module not found: ${modulePath}`);
-    }
-
-    const supplied = await importModule<{ weights: WeightsArtifact }>(modulePath);
-
-    artifact = supplied.weights;
-    const typedCandidate = (artifact.roleClasses ?? artifact.labels?.length) === LABEL_COUNT;
-
-    temp = await mkdtemp(join(tmpdir(), "syntaxless-evaluate-"));
-
-    if (typedCandidate) {
-      const srcRoot = join(temp, "src");
-
-      await cp(resolveRepo("packages/cron/src"), srcRoot, { recursive: true });
-      const candidate = await readFile(modulePath, "utf8");
-
-      await writeFile(join(srcRoot, "model", "weights.gen.ts"), candidate);
-      evaluation = await importModule<DistEvaluation>(join(srcRoot, "model", "evaluation.ts"));
-      index = await importModule<DistIndex>(join(srcRoot, "index.ts"));
-    } else {
+  try {
+    if (weightsModulePath === undefined) {
       const built = resolveRepo(distDir);
 
       if (!existsSync(join(built, "index.js"))) {
         throw new Error(`built runtime missing: ${built}/index.js (run the build)`);
       }
 
-      const root = join(temp, "dist");
+      evaluation = await importModule<DistEvaluation>(join(built, "evaluation.js"));
+      artifact = evaluation.weights;
+      index = await importModule<DistIndex>(join(built, "index.js"));
+    } else {
+      const modulePath = resolveRepo(weightsModulePath);
 
-      await cp(built, root, { recursive: true });
+      if (!existsSync(modulePath)) {
+        throw new Error(`weights module not found: ${modulePath}`);
+      }
 
-      await writeFile(
-        join(root, "model", "weights.gen.js"),
-        `export const weights = ${JSON.stringify(artifact)};\n`,
-      );
+      const supplied = await importModule<{ weights: WeightsArtifact }>(modulePath);
 
-      evaluation = await importModule<DistEvaluation>(join(root, "evaluation.js"));
-      index = await importModule<DistIndex>(join(root, "index.js"));
+      artifact = supplied.weights;
+      const typedCandidate = (artifact.roleClasses ?? artifact.labels?.length) === LABEL_COUNT;
+
+      temp = await mkdtemp(join(tmpdir(), "syntaxless-evaluate-"));
+
+      if (typedCandidate) {
+        const srcRoot = join(temp, "src");
+
+        await cp(resolveRepo("packages/cron/src"), srcRoot, { recursive: true });
+        const candidate = await readFile(modulePath, "utf8");
+
+        await writeFile(join(srcRoot, "model", "weights.gen.ts"), candidate);
+        evaluation = await importModule<DistEvaluation>(join(srcRoot, "model", "evaluation.ts"));
+        index = await importModule<DistIndex>(join(srcRoot, "index.ts"));
+      } else {
+        const built = resolveRepo(distDir);
+
+        if (!existsSync(join(built, "index.js"))) {
+          throw new Error(`built runtime missing: ${built}/index.js (run the build)`);
+        }
+
+        const root = join(temp, "dist");
+
+        await cp(built, root, { recursive: true });
+
+        await writeFile(
+          join(root, "model", "weights.gen.js"),
+          `export const weights = ${JSON.stringify(artifact)};\n`,
+        );
+
+        evaluation = await importModule<DistEvaluation>(join(root, "evaluation.js"));
+        index = await importModule<DistIndex>(join(root, "index.js"));
+      }
     }
+
+    const artifactSha256 = sha256Hex(artifact.q);
+    const scratch = temp;
+
+    return {
+      artifactSha256,
+      parse: index.parse.bind(index),
+      compile: index.compile.bind(index),
+      tokenize: evaluation.tokenize.bind(evaluation),
+      inferTokens: evaluation.inferTokens.bind(evaluation),
+      labelName: (id: number) => {
+        const label = evaluation.LABELS[id];
+
+        if (label === undefined) throw new RangeError(`label id out of range: ${id}`);
+
+        return label;
+      },
+      decodeRaw: evaluation.decodeRaw.bind(evaluation),
+      dispose: async () => {
+        if (scratch !== null) await rm(scratch, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    if (temp !== null) await rm(temp, { recursive: true, force: true });
+    throw error;
   }
-
-  const artifactSha256 = sha256Hex(artifact.q);
-  const scratch = temp;
-
-  return {
-    artifactSha256,
-    parse: index.parse.bind(index),
-    compile: index.compile.bind(index),
-    tokenize: evaluation.tokenize.bind(evaluation),
-    inferTokens: evaluation.inferTokens.bind(evaluation),
-    labelName: (id: number) => {
-      const label = evaluation.LABELS[id];
-
-      if (label === undefined) throw new RangeError(`label id out of range: ${id}`);
-
-      return label;
-    },
-    decodeRaw: evaluation.decodeRaw.bind(evaluation),
-    dispose: async () => {
-      if (scratch !== null) await rm(scratch, { recursive: true, force: true });
-    },
-  };
 }
 
 interface Accumulator {

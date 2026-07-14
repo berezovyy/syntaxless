@@ -1,3 +1,6 @@
 bun.lock
 dist/
 coverage/
+# Generated model artifacts retain the exporter's byte-for-byte representation.
+packages/cron/src/model/weights.gen.ts
+training/cron/export-report.json

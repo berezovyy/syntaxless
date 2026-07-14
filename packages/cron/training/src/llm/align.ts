@@ -199,7 +199,12 @@ export function expectedValues(intent: ScheduleIntent): ExpectedValue[] {
     const { hour, minute } = intent.time;
 
     expected.push({ label: hourLabel(hour), value: hour, required: true });
-    expected.push({ label: minuteLabel(minute), value: minute, required: minute !== 0 });
+
+    expected.push({
+      label: minuteLabel(minute),
+      value: minute,
+      required: minute !== 0,
+    });
 
     expected.push({
       label: meridiemLabel(hour >= 12 ? "pm" : "am"),

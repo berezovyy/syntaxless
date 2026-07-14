@@ -36,6 +36,7 @@ import {
   readJsonl,
 } from "./corpus/merge.js";
 import type { CorpusRecord } from "./corpus/merge.js";
+import { classifyPopulation } from "./mix/quotas.js";
 
 /** Longest sequence the model will see; longer examples are skipped. */
 export const MAX_TOKENS = 128;
@@ -57,9 +58,16 @@ export const SHARD_FORMAT = {
   frames: { suffix: ".frames.bin", dtype: "uint32" },
   speech: { suffix: ".speech.bin", dtype: "uint8" },
   actionable: { suffix: ".actionable.bin", dtype: "uint8" },
+  populations: { suffix: ".populations.bin", dtype: "uint8" },
 } as const;
 
+/** Sequence-level corpus population. Must match training/cron/dataset.py. */
+export const POPULATION_IDS = { R: 0, H: 1, E: 2 } as const;
+
 export type ShardFormat = typeof SHARD_FORMAT;
+
+export type ManifestShardFormat = Omit<ShardFormat, "populations"> &
+  Partial<Pick<ShardFormat, "populations">>;
 
 /** The manifest layout contract, including sequence-level wording frames. */
 export interface FeaturizeManifest {
@@ -73,7 +81,9 @@ export interface FeaturizeManifest {
   speechActClasses: number;
   speechActNames: readonly SpeechAct[];
   actionableCounts: Record<0 | 1, number>;
-  format: ShardFormat;
+  /** Absent on legacy shards created before complete-corpus sampling support. */
+  populationCounts?: Record<"R" | "H" | "E", number>;
+  format: ManifestShardFormat;
 }
 
 export interface FeaturizeOptions {
@@ -100,7 +110,9 @@ export interface FeaturizedShard {
   frameCounts: number[];
   speech: Uint8Array;
   actionable: Uint8Array;
+  populations: Uint8Array;
   actionableCounts: Record<0 | 1, number>;
+  populationCounts: Record<"R" | "H" | "E", number>;
 }
 
 export interface FeaturizeSummary {
@@ -276,9 +288,17 @@ export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedSh
   const neighborChunks: Int16Array[] = [];
   const speechChunks: Uint8Array[] = [];
   const actionableChunks: Uint8Array[] = [];
+  const populations: number[] = [];
   const offsets: number[] = [0];
   const frames: number[] = [];
   const actionableCounts: Record<0 | 1, number> = { 0: 0, 1: 0 };
+
+  const populationCounts: Record<"R" | "H" | "E", number> = {
+    R: 0,
+    H: 0,
+    E: 0,
+  };
+
   const frameIds = new Map<string, number>();
   const frameNames: string[] = [];
   const frameCounts: number[] = [];
@@ -313,6 +333,15 @@ export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedSh
     neighborChunks.push(shard.neighbors);
     speechChunks.push(shard.speech);
     actionableChunks.push(shard.actionable);
+
+    const population = classifyPopulation({
+      intent: record.intent,
+      speechAct: speechActForRecord(record),
+      spans: record.spans,
+    });
+
+    populations.push(POPULATION_IDS[population]);
+    populationCounts[population]++;
 
     for (let index = 0; index < shard.tokenCount; index++) {
       if (shard.kinds[index] === 3) continue;
@@ -360,7 +389,9 @@ export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedSh
     frameCounts,
     speech: concatUint8(speechChunks),
     actionable: concatUint8(actionableChunks),
+    populations: Uint8Array.from(populations),
     actionableCounts,
+    populationCounts,
   };
 }
 
@@ -409,6 +440,7 @@ export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
     frames: shardPath(out, "frames"),
     speech: shardPath(out, "speech"),
     actionable: shardPath(out, "actionable"),
+    populations: shardPath(out, "populations"),
     manifest: `${out}.json`,
   };
 
@@ -421,6 +453,7 @@ export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
   writeBinary(files.frames, shard.frames);
   writeBinary(files.speech, shard.speech);
   writeBinary(files.actionable, shard.actionable);
+  writeBinary(files.populations, shard.populations);
 
   const manifest: FeaturizeManifest = {
     fingerprints: shard.fingerprints,
@@ -433,6 +466,7 @@ export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
     speechActClasses: SPEECH_ACT_COUNT,
     speechActNames: SPEECH_ACTS,
     actionableCounts: shard.actionableCounts,
+    populationCounts: shard.populationCounts,
     format: SHARD_FORMAT,
   };
 

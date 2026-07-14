@@ -1,23 +1,49 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
+import { LABEL_COUNT } from "../../src/model/labels";
+import { tokenize } from "../../src/model/tokenizer";
+import { loadTestEngine } from "../tests/helpers/candidate-engine";
 import { conformalThreshold, fitEnergyThreshold } from "./calibrate-energy";
-import { loadEngine } from "./evaluate";
 
 test("conformalThreshold is the FA quantile of negatives", () => {
   expect(conformalThreshold([])).toBeNull();
   expect(conformalThreshold([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.1)).toBe(2);
 });
 
+test("missing pooled states do not shift positive and negative calibration labels", async () => {
+  const states = [undefined, [3, 5], [7, 9]];
+  let index = 0;
+
+  const fit = await fitEnergyThreshold(
+    {
+      tokenize,
+      inferTokens: () => {
+        const state = states[index++];
+
+        return {
+          labels: new Uint8Array(),
+          ...(state === undefined ? {} : { pooled: Float32Array.from(state) }),
+        };
+      },
+    },
+    [
+      { text: "missing pooled state", negative: true },
+      { text: "positive example", negative: false },
+      { text: "negative example", negative: true },
+    ],
+  );
+
+  expect(fit.negatives).toBe(2);
+  expect(fit.positives).toBe(1);
+  expect(fit.mahalanobisMean).toEqual([3, 5]);
+  expect(fit.mahalanobisVariance).toEqual([1, 1]);
+  expect(fit.mahalanobisThreshold).toBeCloseTo(Math.sqrt(32), 6);
+});
+
 test(
-  "fitEnergyThreshold uses inferTokens logits on a real-negative and a request",
+  "calibration derives its threshold from the candidate logits",
   async () => {
-    const engine = await loadEngine(
-      "packages/cron/dist",
-      "packages/cron/training/data/synth/experiments/a1/weights-seed-20260913.gen.ts",
-    );
+    const engine = await loadTestEngine();
 
     try {
       const fit = await fitEnergyThreshold(engine, [
@@ -32,10 +58,9 @@ test(
       expect(fit.predictedRoles).toBe(true);
       expect(fit.mahalanobisMean.length).toBeGreaterThan(1);
       expect(fit.mahalanobisMean.every((value) => value === 0)).toBe(false);
-      expect(fit.energyThreshold).not.toBeNull();
-      const dir = mkdtempSync(join(tmpdir(), "cron-energy-"));
-
-      writeFileSync(join(dir, "fit.json"), JSON.stringify(fit));
+      // The fixture predicts one role with logit 10 and all other roles with
+      // logit 0. This independent formula detects a constant/incorrect energy.
+      expect(fit.energyThreshold).toBeCloseTo(-Math.log(Math.exp(10) + LABEL_COUNT - 1), 6);
     } finally {
       await engine.dispose();
     }

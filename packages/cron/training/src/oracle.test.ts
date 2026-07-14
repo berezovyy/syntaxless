@@ -1,26 +1,24 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 
-import { decodeIntent } from "../../src/parser/decode.js";
-import { resolveRepo } from "./evaluate";
+import { labelId } from "../../src/model/labels";
+import { tempDir } from "../tests/helpers/temp-dir";
 import {
   emptyOracleReport,
   groupedOracleFailures,
   labeledTokensFromGold,
   loadGoldOracleRecords,
   loadKindSeedOracleRecords,
-  oracleDecode,
   oracleMatches,
   type OracleRecord,
-  type OracleReport,
   parseOracleArgs,
   recordOracleOutcome,
   reservoirSampleJsonl,
   summarizeOracleReport,
 } from "./oracle";
 
-const RESULTS = resolveRepo("packages/cron/training/results/oracle-red-test.json");
+const workdir = tempDir("syntaxless-oracle-");
 
 const intervalGlue: OracleRecord = {
   id: "glue-drop",
@@ -70,15 +68,21 @@ const twelveHour: OracleRecord = {
   speechAct: "request",
 };
 
-describe("labeledTokensFromGold", () => {
-  test("feeds shipped decodeIntent rather than a copy", () => {
-    const labeled = labeledTokensFromGold(hourly.text, hourly.spans);
-    const shipped = decodeIntent(labeled, undefined, hourly.text, "off", "request");
-    const outcome = oracleDecode(hourly);
+test("gold alignment preserves labels, clause boundaries, and actionability while skipping spaces", () => {
+  const labeled = labeledTokensFromGold(intervalGlue.text, intervalGlue.spans);
 
-    expect(outcome.ok).toBe(true);
-    if (outcome.ok) expect(outcome.intent).toEqual(shipped.intent);
-  });
+  expect(
+    labeled.map(({ token, role, boundary, actionable }) => ({
+      text: token.text,
+      role,
+      boundary,
+      actionable,
+    })),
+  ).toEqual([
+    { text: "every", role: labelId.RECUR, boundary: false, actionable: false },
+    { text: "5", role: labelId.INTERVAL_5, boundary: true, actionable: true },
+    { text: "minutes", role: labelId.UNIT_MIN, boundary: false, actionable: true },
+  ]);
 });
 
 describe("oracle misses", () => {
@@ -103,11 +107,8 @@ describe("oracle misses", () => {
 });
 
 describe("reservoirSampleJsonl", () => {
-  test("streams a sample without loading the whole file as one string", async () => {
-    const dir = resolveRepo("packages/cron/training/results");
-
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, "oracle-sample-fixture.jsonl");
+  test("sampling returns unique original rows and is reproducible for a seed", async () => {
+    const path = join(workdir, "oracle-sample-fixture.jsonl");
     const lines = Array.from({ length: 40 }, (_, index) => JSON.stringify({ id: `row-${index}` }));
 
     writeFileSync(path, `${lines.join("\n")}\n`);
@@ -115,6 +116,9 @@ describe("reservoirSampleJsonl", () => {
 
     expect(sample).toHaveLength(7);
     expect(new Set(sample).size).toBe(7);
+    expect(sample.every((row) => lines.includes(row))).toBe(true);
+    expect(await reservoirSampleJsonl(path, 7, 1)).toEqual(sample);
+    expect(await reservoirSampleJsonl(path, 100, 1)).toEqual(lines);
   });
 });
 
@@ -138,34 +142,38 @@ describe("parseOracleArgs", () => {
   });
 });
 
-describe("oracle round-trip suite", () => {
-  let report: OracleReport;
+test("gold and seeded generator outputs round-trip without silently changing the schedule", async () => {
+  const report = emptyOracleReport();
 
-  beforeAll(async () => {
-    report = emptyOracleReport();
-    for (const record of await loadGoldOracleRecords()) recordOracleOutcome(report, record);
-    for (const record of loadKindSeedOracleRecords(3)) recordOracleOutcome(report, record);
-    mkdirSync(dirname(RESULTS), { recursive: true });
-    writeFileSync(RESULTS, `${JSON.stringify(summarizeOracleReport(report), null, 2)}\n`);
-  }, 120_000);
+  for (const record of await loadGoldOracleRecords()) recordOracleOutcome(report, record);
+  for (const record of loadKindSeedOracleRecords(3)) recordOracleOutcome(report, record);
+  expect(report.sources.gold.total).toBeGreaterThan(0);
+  expect(report.sources["kind-seed"].total).toBeGreaterThan(0);
+  expect(groupedOracleFailures(report)).toEqual({});
+  expect(report.failureCount).toBe(0);
+}, 120_000);
 
-  test("covers gold JSONL and KindDef template × 3 seeds", () => {
-    expect(report.sources.gold.total).toBeGreaterThan(0);
-    expect(report.sources["kind-seed"].total).toBeGreaterThan(0);
+test("oracle summaries count successes and mismatches by source and template", () => {
+  const report = emptyOracleReport();
+
+  for (const record of [hourly, intervalGlue, twelveHour]) recordOracleOutcome(report, record);
+
+  expect(summarizeOracleReport(report)).toMatchObject({
+    total: 3,
+    correct: 2,
+    failureCount: 1,
+    sources: {
+      gold: { total: 2, failures: 1 },
+      "kind-seed": { total: 1, failures: 0 },
+    },
+    byKind: {
+      "unit-interval": { total: 1, failures: 0 },
+      "n-interval": { total: 1, failures: 0 },
+      "time-of-day": { total: 1, failures: 1 },
+    },
+    byKindTemplate: {
+      "time-of-day\tdigits": { kind: "time-of-day", template: "digits", count: 1 },
+    },
+    examples: [expect.objectContaining({ id: "clock-130" })],
   });
-
-  test("writes a red-list summary even while the suite is not 100%", () => {
-    const summary = summarizeOracleReport(report);
-
-    expect(summary.total).toBe(report.total);
-    expect(summary.failureCount).toBe(report.failureCount);
-  });
-
-  test("oracle round-trip is 100% on gold JSONL and kind-seeds", () => {
-    expect(report.failureCount).toBe(0);
-  });
-});
-
-afterAll(() => {
-  // Keep RESULTS on disk for the Phase 0 scratch copy.
 });

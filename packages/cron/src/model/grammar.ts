@@ -82,9 +82,9 @@ const UNIT_FROM_TOKEN: Record<string, "minute" | "hour" | "day" | "week" | "mont
 };
 
 /** Closed-class deserialize. COPY after `every` is interval 1 (copy-head later). */
-export function intentFromGrammar(
-  tokens: readonly GrammarToken[],
-): { frequency: { unit: "minute" | "hour" | "day" | "week" | "month"; interval: number } } | null {
+export function intentFromGrammar(tokens: readonly GrammarToken[]): {
+  frequency: { unit: "minute" | "hour" | "day" | "week" | "month"; interval: number };
+} | null {
   if (tokens.includes("reject")) return null;
   let unit: "minute" | "hour" | "day" | "week" | "month" = "day";
   let interval = 1;

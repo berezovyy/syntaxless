@@ -75,24 +75,6 @@ test("a well-formed example yields the expected labelCounts", () => {
   expect([...shard.kinds]).toEqual([0, 3, 0]);
 });
 
-test("whitespace tokens carry no label and no boundary", () => {
-  const record = makeRecord({
-    id: "feat-2",
-    text: "every Monday",
-    spans: [
-      { start: 0, end: 5, label: "RECUR", clauseStart: false },
-      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
-    ],
-  });
-
-  const shard = featurizeRecords([record]);
-  const whitespace = [...shard.kinds].indexOf(3);
-
-  expect(whitespace).toBeGreaterThanOrEqual(0);
-  expect(shard.labels[whitespace]).toBe(PADDING_LABEL);
-  expect(shard.boundaries[whitespace]).toBe(0);
-});
-
 test("a fragment starting mid-token throws Unaligned supervision", () => {
   const record = makeRecord({
     id: "misaligned-1",
@@ -106,11 +88,12 @@ test("a fragment starting mid-token throws Unaligned supervision", () => {
   expect(() => featurizeRecords([record])).toThrow(/Unaligned supervision in misaligned-1/);
 });
 
-test("labels.bin length equals rows.bin bytes / 2 / rowsPerToken", () => {
+test("serialized shards preserve exact supervision and sequence boundaries", () => {
   const records = [
     makeRecord({
       id: "feat-3",
       text: "every Monday",
+      speechAct: "request",
       spans: [
         { start: 0, end: 5, label: "RECUR", clauseStart: false },
         { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
@@ -119,6 +102,9 @@ test("labels.bin length equals rows.bin bytes / 2 / rowsPerToken", () => {
     makeRecord({
       id: "feat-4",
       text: "every 2 hours",
+      intent: null,
+      family: "negative",
+      speechAct: "quoted",
       spans: [
         { start: 0, end: 5, label: "RECUR", clauseStart: false },
         { start: 6, end: 7, label: "INTERVAL_2", clauseStart: true },
@@ -159,11 +145,36 @@ test("labels.bin length equals rows.bin bytes / 2 / rowsPerToken", () => {
     offsetBuffer.byteLength / 4,
   );
 
-  expect(offsets.length - 1).toBe(summary.sequences);
-  expect(offsets.at(-1)).toBe(summary.tokens);
+  expect([...offsets]).toEqual([0, 3, 8]);
+  expect(summary.tokens).toBe(8);
   expect(summary.sequences).toBe(2);
-  expect(statSync(summary.files.speech).size).toBe(summary.sequences);
-  expect(statSync(summary.files.actionable).size).toBe(summary.tokens);
+  const bytes = (path: string) => [...readFileSync(path)];
+
+  expect(bytes(summary.files.labels)).toEqual([
+    labelId.RECUR,
+    PADDING_LABEL,
+    labelId.WEEKDAY_MON,
+    labelId.RECUR,
+    PADDING_LABEL,
+    labelId.INTERVAL_2,
+    PADDING_LABEL,
+    labelId.UNIT_HOUR,
+  ]);
+
+  expect(bytes(summary.files.boundaries)).toEqual([0, 0, 1, 0, 0, 1, 0, 0]);
+  expect(bytes(summary.files.kinds)).toEqual([0, 3, 0, 0, 3, 1, 3, 0]);
+  expect(bytes(summary.files.speech)).toEqual([speechActId.request, speechActId.quoted]);
+  expect(bytes(summary.files.actionable)).toEqual([1, 0, 1, 0, 0, 0, 0, 0]);
+  const neighborBuffer = readFileSync(summary.files.neighbors);
+
+  const neighbors = new Int16Array(
+    neighborBuffer.buffer,
+    neighborBuffer.byteOffset,
+    neighborBuffer.byteLength / 2,
+  );
+
+  // Neighbor indices restart at each sequence and skip whitespace.
+  expect([...neighbors]).toEqual([-1, 2, 0, 2, 0, -1, -1, 2, 0, 2, 0, 4, 2, 4, 2, -1]);
   expect(summary.manifest.speechActClasses).toBe(SPEECH_ACTS.length);
   expect(summary.manifest.speechActNames).toEqual([...SPEECH_ACTS]);
 
@@ -254,7 +265,13 @@ test("a correction sequence marks only B tokens actionable", () => {
       { start: 0, end: 7, label: "O", clauseStart: false, actionable: false },
       { start: 8, end: 14, label: "WEEKDAY_FRI", clauseStart: true, actionable: true },
       { start: 15, end: 26, label: "O", clauseStart: false, actionable: false },
-      { start: 27, end: 35, label: "WEEKDAY_THU", clauseStart: false, actionable: false },
+      {
+        start: 27,
+        end: 35,
+        label: "WEEKDAY_THU",
+        clauseStart: false,
+        actionable: false,
+      },
     ],
   });
 

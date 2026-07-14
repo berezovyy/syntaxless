@@ -1,165 +1,189 @@
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
-import { attributeMiss, goldViolatesSemantics } from "./attribution";
-import { oracleDecode, type OracleRecord } from "./oracle";
+import { tempDir } from "../tests/helpers/temp-dir";
+import {
+  addAttribution,
+  attributeMiss,
+  type AttributionBucket,
+  type AttributionInput,
+  emptyAttributionReport,
+  goldViolatesSemantics,
+  writeAttributionFile,
+} from "./attribution";
 
-const hourly: OracleRecord = {
-  id: "hourly",
-  source: "kind-seed",
-  family: "interval",
-  kind: "unit-interval",
-  template: "adverb",
+const hourly = { frequency: { unit: "hour" as const, interval: 1 } };
+
+const missed: AttributionInput = {
   text: "hourly",
-  spans: [{ start: 0, end: 6, label: "UNIT_HOUR", clauseStart: true, actionable: true }],
-  intent: { frequency: { unit: "hour", interval: 1 } },
-  speechAct: "request",
+  expectedIntent: hourly,
+  actualIntent: null,
+  accepted: false,
+  goldSpans: [{ start: 0, end: 6, label: "UNIT_HOUR", clauseStart: true, actionable: true }],
+  goldLabels: ["UNIT_HOUR"],
+  predictedLabels: ["UNIT_HOUR"],
+  goldSpeechAct: "request",
+  predictedSpeechAct: "request",
+  goldActionable: [true],
+  predictedActionable: [true],
+  goldOracle: { ok: true, intent: hourly },
+  predictedOracle: { ok: true, intent: hourly },
 };
 
-const unknownWeekday: OracleRecord = {
-  id: "unknown-weekday",
-  source: "gold",
-  family: "weekday-list",
-  kind: "single-weekday",
-  template: "bare",
-  text: "xyzzy",
-  spans: [{ start: 0, end: 5, label: "INTERVAL_LIT", clauseStart: true, actionable: true }],
-  intent: { frequency: { unit: "week", interval: 1 }, weekdays: ["monday"] },
-  speechAct: "request",
-};
-
-const twelveHour: OracleRecord = {
-  id: "clock-130",
-  source: "gold",
-  family: "time-of-day",
-  kind: "time-of-day",
-  template: "digits",
-  text: "1:30 daily",
-  spans: [
-    { start: 0, end: 1, label: "HOUR_13", clauseStart: true, actionable: true },
-    { start: 1, end: 2, label: "GLUE", clauseStart: false, actionable: false },
-    { start: 2, end: 4, label: "MINUTE_30", clauseStart: false, actionable: true },
-    { start: 5, end: 10, label: "UNIT_DAY", clauseStart: false, actionable: true },
-  ],
-  intent: {
-    frequency: { unit: "day", interval: 1 },
-    time: { hour: 13, minute: 30 },
+test.each([
+  {
+    name: "matching heads and decodable intent were rejected",
+    overrides: {},
+    bucket: "CONF",
   },
-  speechAct: "request",
-};
+  { name: "wrong role", overrides: { predictedLabels: ["O"] }, bucket: "ROLE" },
+  {
+    name: "missing token prediction",
+    overrides: { predictedLabels: [] },
+    bucket: "ROLE",
+  },
+  {
+    name: "wrong speech act",
+    overrides: { predictedSpeechAct: "descriptive" },
+    bucket: "ACT",
+  },
+  {
+    name: "wrong actionable bit",
+    overrides: { predictedActionable: [false] },
+    bucket: "ACT",
+  },
+  {
+    name: "missing actionable prediction",
+    overrides: { predictedActionable: [] },
+    bucket: "ACT",
+  },
+  {
+    name: "role disagreement takes priority over actionability",
+    overrides: { predictedLabels: ["O"], predictedActionable: [false] },
+    bucket: "ROLE",
+  },
+  {
+    name: "unusable gold decoding takes priority over wrong predictions",
+    overrides: {
+      goldOracle: { ok: false, error: "unrecognized value" },
+      predictedLabels: ["O"],
+    },
+    bucket: "DECODE",
+  },
+  {
+    name: "accepted output changed meaning despite matching heads",
+    overrides: {
+      accepted: true,
+      actualIntent: { frequency: { unit: "day", interval: 1 } },
+    },
+    bucket: "DECODE",
+  },
+] satisfies Array<{
+  name: string;
+  overrides: Partial<AttributionInput>;
+  bucket: AttributionBucket;
+}>)("attribution: $name", ({ overrides, bucket }) => {
+  expect(attributeMiss({ ...missed, ...overrides })).toBe(bucket);
+});
 
-describe("attributeMiss", () => {
-  test("GOLD: uninvertible 12h clock without meridiem", () => {
-    expect(
-      goldViolatesSemantics({
-        text: twelveHour.text,
-        expectedIntent: twelveHour.intent,
-        accepted: true,
-        actualIntent: { frequency: { unit: "day", interval: 1 }, time: { hour: 1, minute: 30 } },
-        goldSpans: twelveHour.spans,
-        goldOracle: oracleDecode(twelveHour),
-      }),
-    ).toBe(true);
+test("an unqualified 1:30 labeled as 13:30 is a gold error, not a model error", () => {
+  const input: AttributionInput = {
+    text: "1:30 daily",
+    expectedIntent: {
+      frequency: { unit: "day", interval: 1 },
+      time: { hour: 13, minute: 30 },
+    },
+    actualIntent: null,
+    accepted: false,
+    goldSpans: [
+      { start: 0, end: 1, label: "HOUR_LIT", clauseStart: true },
+      { start: 1, end: 2, label: "GLUE", clauseStart: false },
+      { start: 2, end: 4, label: "MINUTE_30", clauseStart: false },
+      { start: 5, end: 10, label: "UNIT_DAY", clauseStart: false },
+    ],
+    goldLabels: ["HOUR_LIT", "GLUE", "MINUTE_30", "UNIT_DAY"],
+    predictedLabels: ["O", "O", "O", "O"],
+  };
 
-    expect(
-      attributeMiss({
-        text: twelveHour.text,
-        expectedIntent: twelveHour.intent,
-        accepted: true,
-        actualIntent: { frequency: { unit: "day", interval: 1 }, time: { hour: 1, minute: 30 } },
-        goldSpans: twelveHour.spans,
-        goldOracle: oracleDecode(twelveHour),
-        goldLabels: ["HOUR_9", "GLUE", "MINUTE_30", "INTERVAL_5"],
-        predictedLabels: ["HOUR_9", "GLUE", "MINUTE_30", "INTERVAL_5"],
-      }),
-    ).toBe("GOLD");
-  });
+  expect(goldViolatesSemantics(input)).toBe(true);
+  expect(attributeMiss(input)).toBe("GOLD");
 
-  test("DECODE: gold labels do not round-trip through shipped decodeIntent", () => {
-    const goldOracle = oracleDecode(unknownWeekday);
+  expect(
+    goldViolatesSemantics({
+      ...input,
+      expectedIntent: {
+        frequency: { unit: "day", interval: 1 },
+        time: { hour: 1, minute: 30 },
+      },
+    }),
+  ).toBe(false);
+});
 
-    expect(goldOracle.ok).toBe(false);
+test.each([
+  {
+    name: "accepted non-schedule",
+    expectedIntent: null,
+    actualIntent: hourly,
+    accepted: true,
+    bucket: "ACT",
+  },
+  {
+    name: "refused request",
+    expectedIntent: hourly,
+    actualIntent: null,
+    accepted: false,
+    predictedSpeechAct: "question",
+    bucket: "ACT",
+  },
+  {
+    name: "decodable request rejected by confidence",
+    expectedIntent: hourly,
+    actualIntent: null,
+    accepted: false,
+    predictedOracle: { ok: true, intent: hourly },
+    bucket: "CONF",
+  },
+  {
+    name: "wrong schedule without gold token labels",
+    expectedIntent: hourly,
+    actualIntent: { frequency: { unit: "day", interval: 1 } },
+    accepted: true,
+    bucket: "ROLE",
+  },
+] satisfies Array<Omit<AttributionInput, "text"> & { name: string; bucket: AttributionBucket }>)(
+  "unlabeled evaluation: $name",
+  ({ name: _name, bucket, ...input }) => {
+    expect(attributeMiss({ text: "evaluation example", ...input })).toBe(bucket);
+  },
+);
 
-    expect(
-      attributeMiss({
-        text: unknownWeekday.text,
-        expectedIntent: unknownWeekday.intent,
-        accepted: false,
-        actualIntent: null,
-        goldSpans: unknownWeekday.spans,
-        goldOracle,
-        goldLabels: ["WEEKDAY_MON"],
-        predictedLabels: ["WEEKDAY_MON"],
-        goldSpeechAct: "request",
-        predictedSpeechAct: "request",
-      }),
-    ).toBe("DECODE");
-  });
+test("writing attribution replaces a rerun's source counts without losing other sources", async () => {
+  const path = join(tempDir("syntaxless-attribution-"), "nested", "report.json");
+  const first = emptyAttributionReport();
 
-  test("ROLE: predicted labels differ from gold on a round-trippable record", () => {
-    const goldOracle = oracleDecode(hourly);
+  addAttribution(first, { id: "a", source: "gold", bucket: "ROLE" });
+  addAttribution(first, { id: "b", source: "gold", bucket: "ROLE" });
+  await writeAttributionFile(path, "gold", first);
+  const other = emptyAttributionReport();
 
-    expect(goldOracle.ok).toBe(true);
+  addAttribution(other, { id: "c", source: "human", bucket: "ACT" });
+  await writeAttributionFile(path, "human", other);
+  const rerun = emptyAttributionReport();
 
-    expect(
-      attributeMiss({
-        text: hourly.text,
-        expectedIntent: hourly.intent,
-        accepted: false,
-        actualIntent: null,
-        goldSpans: hourly.spans,
-        goldOracle,
-        goldLabels: ["INTERVAL_5"],
-        predictedLabels: ["O"],
-        goldSpeechAct: "request",
-        predictedSpeechAct: "request",
-      }),
-    ).toBe("ROLE");
-  });
+  addAttribution(rerun, { id: "d", source: "gold", bucket: "CONF" });
+  await writeAttributionFile(path, "gold", rerun);
 
-  test("ACT: speech-act head disagrees on a round-trippable record", () => {
-    const goldOracle = oracleDecode(hourly);
-
-    expect(goldOracle.ok).toBe(true);
-
-    expect(
-      attributeMiss({
-        text: hourly.text,
-        expectedIntent: hourly.intent,
-        accepted: false,
-        actualIntent: null,
-        goldSpans: hourly.spans,
-        goldOracle,
-        goldLabels: ["INTERVAL_5"],
-        predictedLabels: ["INTERVAL_5"],
-        goldSpeechAct: "request",
-        predictedSpeechAct: "descriptive",
-        goldActionable: [true],
-        predictedActionable: [true],
-      }),
-    ).toBe("ACT");
-  });
-
-  test("CONF: gold and predicted oracles match, public parse rejected", () => {
-    const goldOracle = oracleDecode(hourly);
-
-    expect(goldOracle.ok).toBe(true);
-
-    expect(
-      attributeMiss({
-        text: hourly.text,
-        expectedIntent: hourly.intent,
-        accepted: false,
-        actualIntent: null,
-        goldSpans: hourly.spans,
-        goldOracle,
-        predictedOracle: goldOracle,
-        goldLabels: ["INTERVAL_5"],
-        predictedLabels: ["INTERVAL_5"],
-        goldSpeechAct: "request",
-        predictedSpeechAct: "request",
-        goldActionable: [true],
-        predictedActionable: [true],
-      }),
-    ).toBe("CONF");
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+    ROLE: 0,
+    ACT: 1,
+    DECODE: 0,
+    CONF: 1,
+    GOLD: 0,
+    sources: {
+      gold: { ROLE: 0, ACT: 0, DECODE: 0, CONF: 1, GOLD: 0 },
+      human: { ROLE: 0, ACT: 1, DECODE: 0, CONF: 0, GOLD: 0 },
+    },
+    records: [{ id: "d", source: "gold", bucket: "CONF" }],
   });
 });

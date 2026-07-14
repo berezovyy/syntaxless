@@ -294,7 +294,7 @@ export async function parseWithModel(
         {
           code: "stale-weights",
           severity: "error",
-          message: "typed labels require an A1 re-export; bundled 15-role weights are not used",
+          message: "bundled weights do not match the typed label vocabulary",
         },
       ],
       source: "model",

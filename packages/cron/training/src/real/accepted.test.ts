@@ -1,14 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { tempDir } from "../../tests/helpers/temp-dir";
 import { isAcceptedReal, loadAcceptedReal } from "./accepted";
 
 test("loadAcceptedReal keeps only agree:3 exec:true roundtrip:true rows", () => {
-  const dir = mkdtempSync(join(tmpdir(), "cron-real-"));
-
-  mkdirSync(dir, { recursive: true });
+  const dir = tempDir("cron-real-");
 
   writeFileSync(
     join(dir, "tatoeba.jsonl"),

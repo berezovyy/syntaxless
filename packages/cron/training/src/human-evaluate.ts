@@ -99,6 +99,12 @@ export interface HumanEvaluationReport {
   total: number;
   correct: number;
   accuracy: number;
+  /** H-pos: positives with the exact intent and expression (of positiveTotal). */
+  positiveTotal: number;
+  positiveCorrect: number;
+  /** H-negOK: negatives correctly rejected (of negativeTotal). */
+  negativeTotal: number;
+  negativeCorrect: number;
   byFamily: Record<string, Counts>;
   byCapability: Record<string, Counts>;
   failureCounts: Record<string, number>;
@@ -126,6 +132,10 @@ export interface HumanEvaluationReport {
     total: number;
     correct: number;
     accuracy: number;
+    positiveTotal: number;
+    positiveCorrect: number;
+    negativeTotal: number;
+    negativeCorrect: number;
     negativeFalseAccepts: number;
     negativeFalseAcceptanceRate: number;
     silentMeaningChanges: number;
@@ -690,6 +700,7 @@ interface HumanOverlayScore {
   negativeFalseAccepts: number;
   positiveTotal: number;
   positiveAccepted: number;
+  positiveCorrect: number;
   silentMeaningChanges: number;
   byFamily: Record<string, Counts>;
   byCapability: Record<string, Counts>;
@@ -726,6 +737,7 @@ async function scoreHumanOverlay(
   let negativeFalseAccepts = 0;
   let positiveTotal = 0;
   let positiveAccepted = 0;
+  let positiveCorrect = 0;
   let silentMeaningChanges = 0;
   let positiveSilentMeaningChanges = 0;
   const attribution = emptyAttributionReport();
@@ -792,6 +804,7 @@ async function scoreHumanOverlay(
     }
 
     correctTotal += Number(correct);
+    if (item.intent !== null && correct) positiveCorrect += 1;
 
     selectiveOutcomes.push({
       accepted: parsed.ok,
@@ -888,6 +901,7 @@ async function scoreHumanOverlay(
     negativeFalseAccepts,
     positiveTotal,
     positiveAccepted,
+    positiveCorrect,
     silentMeaningChanges,
     byFamily,
     byCapability,
@@ -1021,6 +1035,10 @@ export async function evaluateHumanCorpus(
     total,
     correct: overlayOn.correct,
     accuracy,
+    positiveTotal: overlayOn.positiveTotal,
+    positiveCorrect: overlayOn.positiveCorrect,
+    negativeTotal: overlayOn.negativeTotal,
+    negativeCorrect: overlayOn.negativeTotal - overlayOn.negativeFalseAccepts,
     byFamily: overlayOn.byFamily,
     byCapability: overlayOn.byCapability,
     failureCounts: overlayOn.failureCounts,
@@ -1044,6 +1062,10 @@ export async function evaluateHumanCorpus(
       total,
       correct: overlayOff.correct,
       accuracy: overlayOff.correct / total,
+      positiveTotal: overlayOff.positiveTotal,
+      positiveCorrect: overlayOff.positiveCorrect,
+      negativeTotal: overlayOff.negativeTotal,
+      negativeCorrect: overlayOff.negativeTotal - overlayOff.negativeFalseAccepts,
       negativeFalseAccepts: overlayOff.negativeFalseAccepts,
       negativeFalseAcceptanceRate:
         overlayOff.negativeFalseAccepts / Math.max(overlayOff.negativeTotal, 1),
@@ -1128,11 +1150,15 @@ if (import.meta.main) {
     report.attribution,
   );
 
+  const off = report.overlayOff;
+
   process.stdout.write(
-    `${report.partition}: overlay-on: ${report.correct}/${report.total} ` +
-      `(${report.accuracy.toFixed(3)}) overlay-off: ${report.overlayOff.correct}/` +
-      `${report.overlayOff.total} (${report.overlayOff.accuracy.toFixed(3)}), ` +
-      `silent=${report.silentMeaningChanges}, ` +
-      `negative-false-accept=${report.negativeFalseAccepts}\nreport -> ${out}\n`,
+    `${report.partition}: H-pos ${off.positiveCorrect}/${off.positiveTotal} ` +
+      `(${(off.positiveCorrect / Math.max(off.positiveTotal, 1)).toFixed(3)})  ` +
+      `H-negOK ${off.negativeCorrect}/${off.negativeTotal} ` +
+      `(${(off.negativeCorrect / Math.max(off.negativeTotal, 1)).toFixed(3)})  ` +
+      `H-silent ${report.positiveSilentMeaningChanges}  FA@cov ${off.faAtCov}\n` +
+      `  composite: ${off.correct}/${off.total} (${off.accuracy.toFixed(3)}) — ` +
+      `not a decision metric\nreport -> ${out}\n`,
   );
 }

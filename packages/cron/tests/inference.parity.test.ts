@@ -93,7 +93,7 @@ function predictSequence(sequence: number, padTo = 0): Predictions {
     boundaryLogits: result.boundaryLogits!.subarray(0, length),
     scheduleKindLogits: result.scheduleKindLogits ?? new Float32Array(),
     speechActLogits: result.speechActLogits ?? new Float32Array(),
-    actionableLogits: result.actionableLogits ?? new Float32Array(),
+    actionableLogits: result.actionableLogits?.subarray(0, length) ?? new Float32Array(),
   };
 }
 

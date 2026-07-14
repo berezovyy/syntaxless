@@ -41,3 +41,18 @@ Generated corpora live under `data/synth/` and are **untracked** (see the root
 and is untracked as well. Regenerate data from source rather than committing it;
 the pipeline is deterministic enough to reproduce a corpus from the committed
 code.
+
+## Production training
+
+After `production-complete-v1` has been published, run the complete optimized
+training workflow from this directory with one command:
+
+```sh
+bun run train:production
+```
+
+The command includes every unique training record, oversamples only the H/E
+minority populations to reach the configured 68/22/10 mix, tunes the batch size
+against the available CUDA memory, uses AMP, compiled model execution, and
+background pinned-memory prefetching, and reports throughput, CUDA peak memory,
+and ETA during every epoch.
