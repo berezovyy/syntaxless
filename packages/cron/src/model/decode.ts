@@ -27,6 +27,10 @@ export interface WeightsArtifact {
   readonly speechActClasses?: number;
   readonly speechActLabels?: readonly string[];
   readonly boundaryThreshold: number;
+  readonly energyThreshold?: number;
+  readonly mahalanobisMean?: readonly number[] | number;
+  readonly mahalanobisVariance?: readonly number[] | number;
+  readonly mahalanobisThreshold?: number;
   readonly labels: readonly string[];
   readonly q: string;
   readonly segments: readonly WeightSegment[];

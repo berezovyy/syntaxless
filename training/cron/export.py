@@ -575,6 +575,25 @@ def write_candidate_module(checkpoint_path: Path, candidate_path: Path) -> Path:
     segments, q = pack_state(state)
     artifact_sha = sha256_text(q)
     artifact = build_artifact(segments, q, labels, checkpoint, hidden, -0.3)
+    prefix = checkpoint.get("config", {}).get("data_prefix")
+    if prefix:
+        held_path = Path(f"{prefix}-heldout")
+        if not Path(f"{held_path}.json").exists():
+            held_path = Path(str(prefix))
+        if Path(f"{held_path}.json").exists():
+            from abstain import fit_abstention
+
+            heldout = Dataset(held_path)
+            decoded = build_decoded_model(artifact, "cpu")
+            energy_fit = fit_abstention(
+                decoded, heldout, batch_size=64, device="cpu", max_sequences=1024
+            )
+            if energy_fit["energyThreshold"] is not None:
+                artifact["energyThreshold"] = energy_fit["energyThreshold"]
+            artifact["mahalanobisMean"] = energy_fit["mahalanobisMean"]
+            artifact["mahalanobisVariance"] = energy_fit["mahalanobisVariance"]
+            if energy_fit["mahalanobisThreshold"] is not None:
+                artifact["mahalanobisThreshold"] = energy_fit["mahalanobisThreshold"]
     write_text_atomic(candidate_path, render_module(artifact, artifact_sha))
     return candidate_path
 
@@ -639,6 +658,17 @@ def export(
         decoded, [validation], batch_size=batch_size, device=device
     )
     artifact["boundaryThreshold"] = calibration.threshold
+    from abstain import fit_abstention
+
+    energy_fit = fit_abstention(
+        decoded, heldout, batch_size=batch_size, device=device, max_sequences=4096
+    )
+    if energy_fit["energyThreshold"] is not None:
+        artifact["energyThreshold"] = energy_fit["energyThreshold"]
+    artifact["mahalanobisMean"] = energy_fit["mahalanobisMean"]
+    artifact["mahalanobisVariance"] = energy_fit["mahalanobisVariance"]
+    if energy_fit["mahalanobisThreshold"] is not None:
+        artifact["mahalanobisThreshold"] = energy_fit["mahalanobisThreshold"]
 
     validation_metrics = evaluate(
         decoded, validation, calibration.threshold, batch_size, device
@@ -671,6 +701,10 @@ def export(
         "parameters": parameter_counts(decoded),
         "quantizationBits": QUANTIZATION_BITS,
         "boundaryThreshold": calibration.threshold,
+        "energyThreshold": energy_fit["energyThreshold"],
+        "mahalanobisMean": energy_fit["mahalanobisMean"],
+        "mahalanobisVariance": energy_fit["mahalanobisVariance"],
+        "mahalanobisThreshold": energy_fit["mahalanobisThreshold"],
         "storage": STORAGE,
         "hidden": hidden,
         "featureRows": int(checkpoint["featureRows"]),

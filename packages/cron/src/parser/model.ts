@@ -2,26 +2,21 @@
  * Model-backed parser: tokenize (Phase 07) -> infer (Phase 16) ->
  * `decodeIntent` (Phase 17) -> the additive {@link ParseResult}.
  *
- * The model predicts roles, speech-act, and the actionable span; TypeScript
- * resolves every fact from those labels. A role id outside the label
- * vocabulary is a hard {@link UnknownRoleError} and becomes `model-error`.
- * A decoded intent that cannot be recognized is also a `model-error`, never
- * a guessed intent. Nothing here calls the rule parser.
- *
- * Public parse is heads-only. Overlay-on is not a regex scaffold: a missing
- * speech-act head is `model-error`, never a discourse fallback. Parse options
- * are `{ source?: "model" | "rules", weights?: Uint8Array, overlay?: "on" | "off" }`.
- * `parseWithModel` resolves the engine through the lazy Phase 20 lifecycle.
+ * The model predicts roles, boundaries, and the actionable span. Track F
+ * drops pooled schedule-kind / speech-act heads: refuse is calibrated energy,
+ * not a 9-way classifier. A role id outside the label vocabulary is a hard
+ * {@link UnknownRoleError}. Overlay-on is not a regex scaffold.
  */
 import { getEngine } from "../model/engine.js";
 import type { EngineConfig } from "../model/engine.js";
 import type { Predictions } from "../model/inference.js";
-import { SCHEDULE_KINDS } from "../model/schedule-kinds.js";
+import { isStructural, labelFromId } from "../model/labels.js";
+import type { Label } from "../model/labels.js";
 import type { ScheduleKind } from "../model/schedule-kinds.js";
-import { speechActFromId } from "../model/speech-acts.js";
 import type { SpeechAct } from "../model/speech-acts.js";
 import { tokenize } from "../model/tokenizer.js";
 import type { RawToken } from "../model/tokenizer.js";
+import { mahalanobisDiag, rejectOnAbstainScore, sequenceEnergy } from "./abstain.js";
 import { classifyConfidence } from "./confidence.js";
 import { decodeIntent, UnknownRoleError, UnsafeScheduleContextError } from "./decode.js";
 import type { LabeledToken, OverlayMode } from "./decode.js";
@@ -40,6 +35,8 @@ export interface ModelParserOptions {
    * not a discourse/correction regex scaffold.
    */
   overlay?: OverlayMode;
+  /** Track F conformal energy threshold; reject when sequence energy exceeds it. */
+  energyThreshold?: number;
 }
 
 /**
@@ -68,6 +65,90 @@ export function labelTokensFromPredictions(
  * {@link parseWithModel} so the role-validation and confidence mapping are pure
  * and testable without running the engine.
  */
+/** Speech-act from span labels, not the pooled classifier (Track F.1). */
+export function speechActFromSpanLabels(labeled: readonly LabeledToken[]): SpeechAct {
+  for (const item of labeled) {
+    if (item.token.kind === 3) continue;
+    let label: Label;
+
+    try {
+      label = labelFromId(item.role);
+    } catch {
+      continue;
+    }
+
+    if (label === "O" || isStructural(label)) continue;
+    if (item.actionable !== false) return "request";
+  }
+
+  return "none";
+}
+
+export function energyFromPredictions(predictions: Predictions): number {
+  const logits = predictions.logits;
+
+  if (logits === undefined || predictions.labels.length === 0) return 0;
+  const width = predictions.labels.length;
+  const classes = Math.trunc(logits.length / width);
+
+  if (classes < 1) return 0;
+  const rows: number[][] = [];
+  const roles: number[] = [];
+
+  for (let index = 0; index < width; index++) {
+    rows.push(Array.from(logits.subarray(index * classes, (index + 1) * classes)));
+    roles.push(predictions.labels[index]!);
+  }
+
+  return sequenceEnergy(rows, roles);
+}
+
+export function mahalanobisFromPredictions(
+  predictions: Predictions,
+  mean: readonly number[] | undefined,
+  variance: readonly number[] | undefined,
+): number | undefined {
+  if (predictions.pooled === undefined || mean === undefined || variance === undefined) {
+    return undefined;
+  }
+
+  return mahalanobisDiag(predictions.pooled, mean, variance);
+}
+
+/** Shipped reject path for Track F: calibrated energy, not the speech-act head. */
+export function rejectWithCalibratedEnergy(
+  energy: number,
+  threshold: number | undefined,
+  mahalanobis?: number,
+  mahalanobisThreshold?: number,
+): ParseResult | undefined {
+  if (
+    !rejectOnAbstainScore({
+      energy,
+      energyThreshold: threshold,
+      ...(mahalanobis === undefined ? {} : { mahalanobis }),
+      ...(mahalanobisThreshold === undefined ? {} : { mahalanobisThreshold }),
+    })
+  ) {
+    return undefined;
+  }
+
+  return {
+    ok: false,
+    reason: `abstain energy ${energy.toFixed(4)} exceeds ${threshold}`,
+    code: "unsafe-context",
+    confidence: 0,
+    diagnostics: [
+      {
+        code: "calibrated-abstain",
+        severity: "warning",
+        message: "sequence energy exceeded the conformal threshold",
+      },
+    ],
+    source: "model",
+  };
+}
+
 export function resultFromLabeledTokens(
   labeled: readonly LabeledToken[],
   scheduleKind?: { kind: ScheduleKind; score: number },
@@ -184,86 +265,47 @@ export async function parseWithModel(
     options?.weights === undefined ? undefined : { weights: options.weights };
 
   const engine = await getEngine(config);
-
-  if (options?.weights === undefined) {
-    const { WEIGHTS_MATCH_LABELS } = await import("../model/inference.js");
-
-    if (!WEIGHTS_MATCH_LABELS) {
-      return {
-        ok: false,
-        reason: "bundled weights do not match the typed label vocabulary",
-        code: "model-error",
-        confidence: 0,
-        diagnostics: [
-          {
-            code: "stale-weights",
-            severity: "error",
-            message: "typed labels require an A1 re-export; bundled 15-role weights are not used",
-          },
-        ],
-        source: "model",
-      };
-    }
-  }
-
   const tokens = tokenize(normalized);
-  const predictions = engine.inferTokens(tokens);
+  const predictions = engine.inferTokens(tokens, true);
+  const labeled = labelTokensFromPredictions(tokens, predictions);
+  const inference = await import("../model/inference.js");
+  const threshold = options?.energyThreshold ?? inference.ENERGY_THRESHOLD;
 
-  if (predictions.speechAct === undefined) {
+  const abstain = rejectWithCalibratedEnergy(
+    energyFromPredictions(predictions),
+    threshold,
+    mahalanobisFromPredictions(
+      predictions,
+      inference.MAHALANOBIS_MEAN,
+      inference.MAHALANOBIS_VARIANCE,
+    ),
+    inference.MAHALANOBIS_THRESHOLD,
+  );
+
+  if (abstain !== undefined) return abstain;
+
+  if (options?.weights === undefined && !inference.WEIGHTS_MATCH_LABELS) {
     return {
       ok: false,
-      reason: "heads-only parse requires a speech-act head",
+      reason: "bundled weights do not match the typed label vocabulary",
       code: "model-error",
       confidence: 0,
       diagnostics: [
         {
-          code: "missing-speech-act-head",
+          code: "stale-weights",
           severity: "error",
-          message: "weights do not include a speech-act head; overlay regex is not a fallback",
+          message: "typed labels require an A1 re-export; bundled 15-role weights are not used",
         },
       ],
       source: "model",
     };
   }
 
-  let speechAct: SpeechAct;
-
-  try {
-    speechAct = speechActFromId(predictions.speechAct);
-  } catch (error) {
-    if (error instanceof RangeError) {
-      return {
-        ok: false,
-        reason: error.message,
-        code: "model-error",
-        confidence: 0,
-        diagnostics: [
-          {
-            code: "unknown-speech-act",
-            severity: "error",
-            message: error.message,
-          },
-        ],
-        source: "model",
-      };
-    }
-
-    throw error;
-  }
-
-  const scheduleKind =
-    predictions.scheduleKind === undefined || predictions.scheduleKindScore === undefined
-      ? undefined
-      : {
-          kind: SCHEDULE_KINDS[predictions.scheduleKind]!,
-          score: predictions.scheduleKindScore,
-        };
-
   return resultFromLabeledTokens(
-    labelTokensFromPredictions(tokens, predictions),
-    scheduleKind,
+    labeled,
+    undefined,
     text,
     overlay,
-    speechAct,
+    speechActFromSpanLabels(labeled),
   );
 }

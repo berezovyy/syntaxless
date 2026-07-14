@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
+from abstain import conformal_threshold as energy_conformal_threshold
+
 import numpy as np
 import torch
 

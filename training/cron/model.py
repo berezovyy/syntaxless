@@ -131,6 +131,7 @@ class Tagger(nn.Module):
         self.hidden = hidden
         self.kernel_size = kernel_size
         self.quantization_bits = quantization_bits
+        self.last_pooled: torch.Tensor | None = None
 
         self.embedding = nn.Embedding(feature_rows + 1, hidden, padding_idx=feature_rows)
         self.depthwise = nn.Conv1d(
@@ -216,6 +217,7 @@ class Tagger(nn.Module):
         gate = torch.sigmoid(self.head_gate(torch.cat([combined, pooled], dim=-1)))
         gated = gate * combined
 
+        self.last_pooled = pooled[:, 0, :]
         roles = self.role_head(gated)
         boundary = self.boundary_head(gated).squeeze(-1)
         schedule_kind = (

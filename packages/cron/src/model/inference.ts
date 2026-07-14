@@ -27,6 +27,23 @@ const SPEECH_ACT_CLASSES = ARTIFACT.speechActClasses ?? 0;
 const BOUNDARY_THRESHOLD = ARTIFACT.boundaryThreshold;
 const LAYER_NORM_EPSILON = 1e-5;
 
+/** Track F conformal energy threshold; absent until calibrate.py writes it. */
+export const ENERGY_THRESHOLD: number | undefined = ARTIFACT.energyThreshold;
+
+export const MAHALANOBIS_MEAN: readonly number[] | undefined = Array.isArray(
+  ARTIFACT.mahalanobisMean,
+)
+  ? ARTIFACT.mahalanobisMean
+  : undefined;
+
+export const MAHALANOBIS_VARIANCE: readonly number[] | undefined = Array.isArray(
+  ARTIFACT.mahalanobisVariance,
+)
+  ? ARTIFACT.mahalanobisVariance
+  : undefined;
+
+export const MAHALANOBIS_THRESHOLD: number | undefined = ARTIFACT.mahalanobisThreshold;
+
 /** False until an A1 export ships weights for the typed label set. */
 export const WEIGHTS_MATCH_LABELS =
   ROLE_CLASSES === LABEL_COUNT &&
@@ -112,6 +129,8 @@ export interface Predictions {
   /** Distance from the calibrated boundary decision in `[0, 1]`. */
   boundaryScores: Float32Array;
   logits?: Float32Array;
+  /** Mean-pooled context state (hidden,). */
+  pooled?: Float32Array;
   boundaryLogits?: Float32Array;
   scheduleKind?: number;
   scheduleKindScore?: number;
@@ -554,7 +573,9 @@ export function inferRows(
     ...(actionable === undefined || actionableScores === undefined
       ? {}
       : { actionable, actionableScores }),
-    ...(debug ? { logits, boundaryLogits } : {}),
+    logits,
+    pooled,
+    ...(debug ? { boundaryLogits } : {}),
     ...(debug && scheduleKindLogits !== undefined ? { scheduleKindLogits } : {}),
     ...(debug && speechActLogits !== undefined ? { speechActLogits } : {}),
     ...(debug && actionableLogits !== undefined ? { actionableLogits } : {}),
