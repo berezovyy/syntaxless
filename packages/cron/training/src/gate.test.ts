@@ -7,8 +7,52 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import { assertSameArtifact, decide, decidePromotion, familyGuards, proportionGuard } from "./gate";
+import {
+  assertSameArtifact,
+  decide,
+  decidePromotion,
+  familyGuards,
+  g2OnlyImprovementIsNotPass,
+  parseArgs,
+  proportionGuard,
+  refuseIncompletePromotion,
+} from "./gate";
 import type { GateScores } from "./gate";
+
+describe("promotion metrics", () => {
+  test("refuses a candidate without EXEC/FA@cov/H/O", () => {
+    expect(() => refuseIncompletePromotion({ H: "1/2" })).toThrow(/missing/);
+
+    expect(() =>
+      refuseIncompletePromotion({
+        H: "1/2",
+        EXEC: "1/1",
+        "FA@cov": "0@1",
+        O: "1/1",
+      }),
+    ).not.toThrow();
+  });
+
+  test("G2-only improvement is not a pass", () => {
+    expect(
+      g2OnlyImprovementIsNotPass({
+        g2Improved: true,
+        hImproved: false,
+        execImproved: false,
+        faAtCovOk: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      g2OnlyImprovementIsNotPass({
+        g2Improved: true,
+        hImproved: true,
+        execImproved: true,
+        faAtCovOk: true,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("proportionGuard", () => {
   test("accepts a regression inside the tolerance band", () => {
@@ -137,6 +181,76 @@ describe("decide", () => {
     expect(decision.failures).toContain("silent meaning-change rate above 0.005");
     expect(decision.failures).toContain("negative false-acceptance rate above 0.01");
     expect(decision.failures).toContain("typo invariance below 0.95");
+  });
+});
+
+describe("decidePromotion ledger", () => {
+  test("refuses promotion when H/EXEC/FA@cov/O are missing", () => {
+    const scores = {
+      overlayOn: passingScores(98),
+      overlayOff: passingScores(98),
+    };
+
+    const decision = decidePromotion(scores, scores, { H: "1/2" });
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.failures.some((item) => item.includes("missing"))).toBe(true);
+  });
+
+  test("runGate path: empty ledger is not an implied pass", () => {
+    const scores = {
+      overlayOn: passingScores(98),
+      overlayOff: passingScores(98),
+    };
+
+    const decision = decidePromotion(scores, scores, {});
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.failures.some((item) => item.includes("missing"))).toBe(true);
+  });
+
+  test("G2-only reserved-carrier lift is not a promotion pass", () => {
+    const decision = decidePromotion(
+      {
+        overlayOn: passingScores(98),
+        overlayOff: passingScores(98),
+      },
+      {
+        overlayOn: passingScores(96),
+        overlayOff: passingScores(96),
+      },
+      {
+        H: "1/1646",
+        EXEC: "1/360",
+        "FA@cov": "0.5@0.4",
+        O: "360/360",
+      },
+    );
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.failures).toContain("G2-only improvement is not a promotion pass");
+  });
+});
+
+describe("parseArgs promotion metrics", () => {
+  test("reads H/EXEC/FA@cov/O from the gate CLI", () => {
+    const options = parseArgs([
+      "--h",
+      "10/20",
+      "--exec",
+      "3/10",
+      "--fa-at-cov",
+      "0.01@0.9",
+      "--o",
+      "10/10",
+    ]);
+
+    expect(options.metrics).toEqual({
+      H: "10/20",
+      EXEC: "3/10",
+      "FA@cov": "0.01@0.9",
+      O: "10/10",
+    });
   });
 });
 

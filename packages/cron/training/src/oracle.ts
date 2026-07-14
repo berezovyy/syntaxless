@@ -396,8 +396,9 @@ export async function loadKindsSampleOracleRecords(count = KINDS_SAMPLE): Promis
 export async function scoreKindsJsonlSample(
   report: OracleReport,
   count = KINDS_SAMPLE,
+  kindsJsonl = "packages/cron/training/data/synth/kinds.jsonl",
 ): Promise<void> {
-  const path = resolveRepo("packages/cron/training/data/synth/kinds.jsonl");
+  const path = resolveRepo(kindsJsonl);
   const chosen = await reservoirSampleLineNumbers(path, count);
   const stream = createReadStream(path, { encoding: "utf8" });
   const rl = createInterface({ input: stream, crlfDelay: Infinity });
@@ -442,6 +443,7 @@ export function loadKindSeedOracleRecords(seedsPerTemplate = KIND_SEED_COUNT): O
 export async function runOracleSuite(options?: {
   kindsSample?: number;
   seedsPerTemplate?: number;
+  kindsJsonl?: string;
 }): Promise<OracleReport> {
   const report = emptyOracleReport();
 
@@ -453,7 +455,13 @@ export async function runOracleSuite(options?: {
 
   const kindsSample = options?.kindsSample ?? 0;
 
-  if (kindsSample > 0) await scoreKindsJsonlSample(report, kindsSample);
+  if (kindsSample > 0) {
+    await scoreKindsJsonlSample(
+      report,
+      kindsSample,
+      options?.kindsJsonl ?? "packages/cron/training/data/synth/kinds.jsonl",
+    );
+  }
 
   return report;
 }
@@ -503,6 +511,7 @@ export interface OracleCliOptions {
   kindsSample: number;
   out: string;
   gate: boolean;
+  kindsJsonl?: string;
 }
 
 export function parseOracleArgs(argv: readonly string[]): OracleCliOptions {
@@ -536,6 +545,11 @@ export function parseOracleArgs(argv: readonly string[]): OracleCliOptions {
       options.out = value;
     } else if (arg === "--gate") {
       options.gate = true;
+    } else if (arg === "--kinds-jsonl") {
+      const value = argv[++index];
+
+      if (value === undefined) throw new RangeError("missing value for --kinds-jsonl");
+      options.kindsJsonl = value;
     } else {
       throw new RangeError(`unknown flag: ${arg}`);
     }
@@ -584,6 +598,7 @@ if (import.meta.main) {
   const report = await runOracleSuite({
     seedsPerTemplate: args.seeds,
     kindsSample: args.kindsSample,
+    ...(args.kindsJsonl === undefined ? {} : { kindsJsonl: args.kindsJsonl }),
   });
 
   const summary = summarizeOracleReport(report);

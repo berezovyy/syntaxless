@@ -28,6 +28,7 @@ import {
   sha256Hex,
 } from "./evaluate";
 import type { ContractReport, Counts, Engine, EvaluationResult, Metric } from "./evaluate";
+import { faAtCovMeetsTarget } from "./fa-at-cov";
 import { coarseText } from "./fingerprint";
 
 /** Two-proportion guard constants, fixed by the plan. */
@@ -42,6 +43,8 @@ export const MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE = 0.01;
 
 /** The overall promotion criterion and the terse-family bare guard. */
 export const CRITERION = "reserved-carrier-exact-intent";
+/** STACK-PLAN v3: G2 is a floor; promotion quotes H, EXEC, FA@cov, O. */
+export const PROMOTION_REQUIRED = ["H", "EXEC", "FA@cov", "O"] as const;
 export const BARE_FAMILY = "terse";
 
 export const CRITERION_DESCRIPTION =
@@ -182,6 +185,46 @@ export interface GateDecision {
  * Overlay-on scores cannot rescue a failing overlay-off candidate; see
  * {@link decidePromotion}.
  */
+export type PromotionMetrics = {
+  H: string;
+  EXEC: string;
+  "FA@cov": string;
+  O: string;
+  G2?: string;
+};
+
+export function refuseIncompletePromotion(metrics: Partial<PromotionMetrics>): void {
+  const missing = PROMOTION_REQUIRED.filter(
+    (key) => metrics[key] === undefined || String(metrics[key]).trim() === "",
+  );
+
+  if (missing.length > 0) throw new RangeError(`gate refused: missing ${missing.join(", ")}`);
+}
+
+function fractionRate(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const match = /^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)/.exec(value.trim());
+
+  if (match === null) return undefined;
+  const den = Number(match[2]);
+
+  if (den <= 0) return undefined;
+
+  return Number(match[1]) / den;
+}
+
+/** G2-only lift is a floor, never a promotion pass. */
+export function g2OnlyImprovementIsNotPass(input: {
+  g2Improved: boolean;
+  hImproved: boolean;
+  execImproved: boolean;
+  faAtCovOk: boolean;
+}): boolean {
+  if (input.g2Improved && !input.hImproved && !input.execImproved) return true;
+
+  return false;
+}
+
 export function decide(candidate: GateScores, baseline: GateScores): GateDecision {
   const failures: string[] = [];
   let improvement = 0;
@@ -268,7 +311,11 @@ export interface OverlayScores {
  * comparison (overlay-off must not worsen silent-change or false-accept).
  * Missing overlay-off is a failed run, not an implied pass.
  */
-export function decidePromotion(candidate: OverlayScores, baseline: OverlayScores): GateDecision {
+export function decidePromotion(
+  candidate: OverlayScores,
+  baseline: OverlayScores,
+  ledger?: Partial<PromotionMetrics>,
+): GateDecision {
   if (candidate.overlayOff === undefined) {
     const bare = proportionGuard({ total: 0, correct: 0 }, { total: 0, correct: 0 });
 
@@ -283,12 +330,47 @@ export function decidePromotion(candidate: OverlayScores, baseline: OverlayScore
     };
   }
 
+  if (ledger !== undefined) {
+    try {
+      refuseIncompletePromotion(ledger);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const bare = proportionGuard({ total: 0, correct: 0 }, { total: 0, correct: 0 });
+
+      return {
+        criterion: CRITERION,
+        description: CRITERION_DESCRIPTION,
+        improvement: 0,
+        guards: [],
+        bare: { family: BARE_FAMILY, guard: bare },
+        failures: [message],
+        accepted: false,
+      };
+    }
+  }
+
   const baselineOff = baseline.overlayOff ?? candidate.overlayOn;
   const decision = decide(candidate.overlayOff, baselineOff);
 
   const failures = decision.failures.map((failure) =>
     failure.startsWith("overlay-off ") ? failure : `overlay-off ${failure}`,
   );
+
+  if (ledger !== undefined) {
+    const hRate = fractionRate(ledger.H);
+    const execRate = fractionRate(ledger.EXEC);
+
+    if (
+      g2OnlyImprovementIsNotPass({
+        g2Improved: decision.improvement > 0,
+        hImproved: hRate !== undefined && hRate >= MIN_OVERALL_ACCURACY,
+        execImproved: execRate !== undefined && execRate >= MIN_OVERALL_ACCURACY,
+        faAtCovOk: faAtCovMeetsTarget(String(ledger["FA@cov"] ?? "")),
+      })
+    ) {
+      failures.push("G2-only improvement is not a promotion pass");
+    }
+  }
 
   const overlayOnSafety = candidate.overlayOn.selective;
   const overlayOffSafety = candidate.overlayOff.selective;
@@ -478,6 +560,7 @@ export interface GateOptions {
   corpus: string;
   trainSplit: string;
   out: string;
+  metrics?: Partial<PromotionMetrics>;
 }
 
 export interface GateReport extends GateDecision {
@@ -559,6 +642,7 @@ export async function runGate(options: GateOptions): Promise<GateReport> {
     const decision = decidePromotion(
       { overlayOn: candidateOn, overlayOff: candidateOff },
       { overlayOn: baselineOn, overlayOff: baselineOff },
+      options.metrics ?? {},
     );
 
     if (!leak.checked) {
@@ -639,6 +723,7 @@ function readOption(argv: readonly string[], index: number): string {
 
 export function parseArgs(argv: readonly string[]): GateOptions {
   const options: GateOptions = { ...DEFAULTS };
+  const metrics: Partial<PromotionMetrics> = {};
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -668,10 +753,39 @@ export function parseArgs(argv: readonly string[]): GateOptions {
         options.out = readOption(argv, index);
         index += 1;
         break;
+      case "--h":
+        metrics.H = readOption(argv, index);
+        index += 1;
+        break;
+      case "--exec":
+        metrics.EXEC = readOption(argv, index);
+        index += 1;
+        break;
+      case "--fa-at-cov":
+        metrics["FA@cov"] = readOption(argv, index);
+        index += 1;
+        break;
+      case "--o":
+        metrics.O = readOption(argv, index);
+        index += 1;
+        break;
+
+      case "--metrics": {
+        const path = resolveRepo(readOption(argv, index));
+
+        index += 1;
+        const loaded = JSON.parse(readFileSync(path, "utf8")) as Partial<PromotionMetrics>;
+
+        Object.assign(metrics, loaded);
+        break;
+      }
+
       default:
         throw new RangeError(`unknown flag: ${arg}`);
     }
   }
+
+  if (Object.keys(metrics).length > 0) options.metrics = metrics;
 
   return options;
 }

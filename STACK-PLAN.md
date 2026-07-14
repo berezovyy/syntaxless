@@ -297,29 +297,29 @@ Decision gates:
 
 - [x] S.1 loader: bucket-contiguous tensors, single gather, `uint16` rows / `int32` neighbors, batch 1024, validation cap 20 k; exit check vs E1b
 - [x] S.4 `experiment.ts` one-command run with hash-keyed steps and mandatory ledger row
-- [ ] S.3 H per epoch in `train.py`; early stop on H; epoch-1 vs final correlation check over `runs/`
-- [ ] S.2 pool render + `--fresh-each-epoch`; per-kind hashed regen + per-kind shards; `Bun.spawn` workers
-- [ ] S.5 3-seed runs + sweep list in `experiment.ts`
+- [x] S.3 H per epoch in `train.py`; early stop on H; epoch-1 vs final correlation check over `runs/`
+- [x] S.2 pool render + `--fresh-each-epoch`; per-kind hashed regen + per-kind shards; `Bun.spawn` workers
+- [x] S.5 3-seed runs + sweep list in `experiment.ts`
 - [x] A.1 `labels.ts` typed label list + `valueOf`
 - [x] A.2 renderer/kinds/sentence emit typed labels
 - [x] A.3 delete lexicon lookups from `parser/decode.ts`; `_LIT` via `parseInt` only
 - [x] A.4 `schedule-semantics.ts` arithmetic-only
 - [x] A.5 model/inference `role_classes` from `LABEL_COUNT`
-- [ ] A.6 oracle 100 % on gold + kind-seeds + `--kinds-sample 200000`; CI gate includes kinds-sample
+- [x] A.6 oracle 100 % on gold + kind-seeds + `--kinds-sample 200000`; CI gate includes kinds-sample
 - [x] A.7 `noise.ts` allowlist = all non-`_LIT` labels
-- [ ] A1 train (E1 recipe) + ledger row
-- [ ] A2 train (`--fresh-each-epoch`, batch 1024, `--init` A1) + ledger row
-- [ ] C.1 sources + `manifest.json` + `collect.ts`
-- [ ] C.2 `label.ts` k=3 constrained
-- [ ] C.3 `agree.ts`, C.4 `execute.ts`, C.5 `roundtrip.ts`, C.6 `project.ts`
-- [ ] C.7 `data/real/*.jsonl` + `rejected.jsonl` coverage report
+- [x] A1 train (E1 recipe) + ledger row
+- [x] A2 train (`--fresh-each-epoch`, batch 1024, `--init` A1) + ledger row
+- [x] C.1 sources + `manifest.json` + `collect.ts`
+- [x] C.2 `label.ts` k=3 constrained
+- [x] C.3 `agree.ts`, C.4 `execute.ts`, C.5 `roundtrip.ts`, C.6 `project.ts`
+- [ ] C.7 `data/real/*.jsonl` + `rejected.jsonl` coverage report (pipeline writes `yield.json` with 0 accepted; no LLM)
 - [ ] C1 (RT 10 %), C2 (RT 30 %) trains + rows
-- [ ] F.1 remove kind/speech-act heads, F.2 energy + Mahalanobis, F.3 conformal calibration, F.4 `model.ts` abstention
-- [ ] E.1 CRF training on best tagger
-- [ ] D.1 pretrain encoder, D.2 fine-tune
-- [ ] B.1 `grammar.ts` + mask export, B.2 `seq2seq.py`, B.3 `featurize-seq2seq.ts`, B.4 `inference-seq2seq.ts`
-- [ ] B1, B2 trains; head-to-head decision
+- [x] F.1 remove kind/speech-act heads, F.2 energy + Mahalanobis, F.3 conformal calibration, F.4 `model.ts` abstention
+- [x] E.1 CRF training on best tagger
+- [x] D.1 pretrain encoder, D.2 fine-tune
+- [x] B.1 `grammar.ts` + mask export, B.2 `seq2seq.py`, B.3 `featurize-seq2seq.ts`, B.4 `inference-seq2seq.ts`
+- [x] B1 train; seq2seq lost to tagger-typed (B2 needs C2 mix)
 - [ ] C3 (real only) if C2 ≥ C1
-- [ ] E.2 executable-reward MRT on the chosen stack
-- [ ] `gate.ts` reads H, EXEC, FA@cov, O
+- [x] E.2 executable-reward MRT on the chosen stack
+- [x] `gate.ts` reads H, EXEC, FA@cov, O
 - [ ] Promotion (Phase 5 + EXEC + FA@cov)

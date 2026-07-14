@@ -55,6 +55,16 @@ Contracts are never summed. `exactAst` is the keep/revert headline; still record
 - Promoting because gate floors (0.95 / 0.5% SMC) passed but reserved contracts are not 100%.
 - Any train while `oracle:gate` is red.
 
+## v3 stack (typed labels)
+
+Protocol: `STACK-PLAN.md`. EXEC is `execEqual` (compiled expressions match). FA@cov is overlay-off false-accepts @ positive coverage. RT is `n_real/(n_real+n_gen)`. A1/A2 are **REVERT-not-promote** (H below E1 748/1646). B1 seq2seq lost to the tagger. Do not promote. C1/C2 have no accepted real jsonl.
+
+| id  | when       | what                                     | seeds   | H        | H-neg | H-silent | O       | EXEC   | FA@cov                                   | RT  | stack        |
+| --- | ---------- | ---------------------------------------- | ------- | -------- | ----- | -------- | ------- | ------ | ---------------------------------------- | --- | ------------ |
+| a1  | 2026-09-16 | A1 typed-label train on 200k kinds       | seeds=1 | 735/1646 | 37    | 70       | 360/360 | 9/360  | 0.04868421052631579@0.050790067720090294 | 0   | tagger-typed |
+| a2  | 2026-09-16 | A2 fresh-each-epoch init A1              | seeds=1 | 675/1646 | 103   | 208      | 360/360 | 54/360 | 0.1355263157894737@0.13882618510158012   | 0   | tagger-typed |
+| b1  | 2026-09-16 | B1 seq2seq vs A1 tagger on generator mix | seeds=1 | 0/1646   | 760   | 886      | 360/360 | 0/360  | 1.0@1.0                                  | 0   | seq2seq      |
+
 ## Next (not yet a row)
 
-E1b reverted. Working candidate is E1 (`2d5b0712…`). Next: mix more descriptive/quoted/question/negative examples into the full corpus (one change), regen, train **E3**. Do not same-mix train. Do not bump hidden.
+E1b reverted. Working candidate is E1 (`2d5b0712…`). Next: mix more descriptive/quoted/question/negative examples into the full corpus (one change), regen, train **E3**. Do not same-mix train. Do not bump hidden. C1/C2 blocked until accepted real jsonl exists.

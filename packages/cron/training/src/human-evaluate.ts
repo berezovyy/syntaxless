@@ -36,6 +36,7 @@ import {
   sha256Hex,
 } from "./evaluate";
 import type { Engine, RiskCoveragePoint, SelectiveOutcome } from "./evaluate";
+import { faAtCoverage } from "./fa-at-cov";
 
 export const HUMAN_CORPUS_VERSION = 1;
 export const MIN_OVERALL_ACCURACY = 0.95;
@@ -131,6 +132,8 @@ export interface HumanEvaluationReport {
     silentMeaningChangeRate: number;
     failureCounts: Record<string, number>;
     failures: HumanFailure[];
+    /** FA on H-neg at coverage on H-pos after F abstention. */
+    faAtCov: string;
   };
   /**
    * Calibration-only signal for phase 10. Never true for development.
@@ -685,6 +688,8 @@ interface HumanOverlayScore {
   correct: number;
   negativeTotal: number;
   negativeFalseAccepts: number;
+  positiveTotal: number;
+  positiveAccepted: number;
   silentMeaningChanges: number;
   byFamily: Record<string, Counts>;
   byCapability: Record<string, Counts>;
@@ -719,6 +724,8 @@ async function scoreHumanOverlay(
   let correctTotal = 0;
   let negativeTotal = 0;
   let negativeFalseAccepts = 0;
+  let positiveTotal = 0;
+  let positiveAccepted = 0;
   let silentMeaningChanges = 0;
   let positiveSilentMeaningChanges = 0;
   const attribution = emptyAttributionReport();
@@ -754,8 +761,11 @@ async function scoreHumanOverlay(
         silentMeaningChanges += 1;
       }
     } else if (!parsed.ok) {
+      positiveTotal += 1;
       category = `parse:${parsed.code}`;
     } else {
+      positiveTotal += 1;
+      positiveAccepted += 1;
       const expectedIntent = canonicalizeIntent(item.intent);
       const actualIntent = canonicalizeIntent(parsed.intent);
 
@@ -876,6 +886,8 @@ async function scoreHumanOverlay(
     correct: correctTotal,
     negativeTotal,
     negativeFalseAccepts,
+    positiveTotal,
+    positiveAccepted,
     silentMeaningChanges,
     byFamily,
     byCapability,
@@ -1039,6 +1051,12 @@ export async function evaluateHumanCorpus(
       silentMeaningChangeRate: overlayOff.silentMeaningChanges / total,
       failureCounts: overlayOff.failureCounts,
       failures: overlayOff.failures,
+      faAtCov: faAtCoverage({
+        negativeTotal: overlayOff.negativeTotal,
+        negativeAccepted: overlayOff.negativeFalseAccepts,
+        positiveTotal: overlayOff.positiveTotal,
+        positiveAccepted: overlayOff.positiveAccepted,
+      }).formatted,
     },
     overlayOffEligibleForDefault: promotion.overlayOffEligibleForDefault,
     positiveSilentMeaningChanges: overlayOff.positiveSilentMeaningChanges,

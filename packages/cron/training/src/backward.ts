@@ -58,6 +58,10 @@ export interface BackwardOptions {
   split?: Split;
   out: string;
   kinds?: readonly KindId[];
+  /** Stop after this many examples per kind (tiny fixtures / pool draw). */
+  cap?: number;
+  /** Stop after this many records total. */
+  limit?: number;
 }
 
 export interface BackwardResult {
@@ -134,6 +138,8 @@ export function parseArgs(argv: readonly string[]): BackwardOptions {
   let split: Split | undefined;
   let out: string | undefined;
   let kinds: KindId[] | undefined;
+  let cap: number | undefined;
+  let limit: number | undefined;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
@@ -156,6 +162,14 @@ export function parseArgs(argv: readonly string[]): BackwardOptions {
         if (kinds.length === 0) throw new RangeError("--kinds is empty");
         index++;
         break;
+      case "--cap":
+        cap = Number(readOption(argv, index));
+        index++;
+        break;
+      case "--limit":
+        limit = Number(readOption(argv, index));
+        index++;
+        break;
       default:
         throw new RangeError(`unknown flag: ${arg}`);
     }
@@ -165,6 +179,8 @@ export function parseArgs(argv: readonly string[]): BackwardOptions {
     out: out ?? join("data", "synth", "kinds.jsonl"),
     ...(split === undefined ? {} : { split }),
     ...(kinds === undefined ? {} : { kinds }),
+    ...(cap === undefined ? {} : { cap }),
+    ...(limit === undefined ? {} : { limit }),
   };
 }
 
@@ -448,14 +464,31 @@ export function writeBackward(options: BackwardOptions): BackwardSummary {
   let chunk = "";
   // Only compact frame keys are retained. The catalog itself remains streamed,
   // so millions of rendered rows are never held in memory at once.
-  const plan = splitPlan(iterateKinds(wanted));
+  const plan = options.cap === undefined ? splitPlan(iterateKinds(wanted)) : undefined;
+  const perKind = new Map<string, number>();
   const fingerprintSplit = new Map<string, Split>();
 
   try {
     for (const expanded of iterateKinds(wanted)) {
-      const example = assignSplit(expanded, plan);
+      if (options.cap !== undefined) {
+        const taken = perKind.get(expanded.kind) ?? 0;
+
+        if (taken >= options.cap) continue;
+        perKind.set(expanded.kind, taken + 1);
+      }
+
+      let example = assignSplit(expanded, plan);
+
+      if (options.cap !== undefined) {
+        const taken = (perKind.get(expanded.kind) ?? 1) - 1;
+
+        if (taken === 0) example = { ...example, split: "train" };
+        else if (taken === 1) example = { ...example, split: "validation" };
+        else if (taken === 2) example = { ...example, split: "heldout" };
+      }
 
       if (options.split !== undefined && example.split !== options.split) continue;
+      if (options.limit !== undefined && index >= options.limit) break;
       const record = toRecord(example, index);
       const prior = fingerprintSplit.get(record.fingerprint);
 

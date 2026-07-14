@@ -11,6 +11,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { runIncrementalKinds } from "./incremental-kinds";
+import type { KindId } from "./kinds";
+import { loadAcceptedReal } from "./real/accepted";
+import { mixAcceptedIntoTrain } from "./real/mix";
+import type { MixResult } from "./real/mix";
+
 export const LEDGER_REQUIRED = ["EXEC", "FA@cov", "RT", "stack"] as const;
 
 export type LedgerMetrics = {
@@ -28,6 +34,7 @@ export interface ExperimentOptions {
   name: string;
   change: string;
   seeds?: number;
+  seed?: number;
   freshEachEpoch?: boolean;
   samples?: number;
   evalSamples?: number;
@@ -40,7 +47,21 @@ export interface ExperimentOptions {
   ledger?: string;
   storage?: string;
   stack?: string;
+  kinds?: readonly KindId[];
+  kindCap?: number;
+  sweep?: boolean;
+  earlyStoppingPatience?: number;
+  init?: string;
+  dataPrefix?: string;
+  rt?: number;
+  real?: string;
 }
+
+/** A/B grid over train.py flags (STACK-PLAN S.5). */
+export const SWEEP: readonly { id: string; extra: readonly string[] }[] = [
+  { id: "base", extra: [] },
+  { id: "fresh", extra: ["--fresh-each-epoch"] },
+];
 
 export interface StepRecord {
   step: string;
@@ -56,6 +77,9 @@ export interface ExperimentResult {
   steps: StepRecord[];
   ledgerPath: string;
   work: string;
+  renderedKinds: string[];
+  skippedKinds: string[];
+  seedRuns: number;
 }
 
 const INPUT_FILES = [
@@ -102,6 +126,50 @@ export function formatLedgerRow(options: ExperimentOptions, metrics: LedgerMetri
   return `| ${options.name} | ${new Date().toISOString().slice(0, 10)} | ${options.change} | seeds=${seeds} | ${metrics.H ?? "—"} | ${metrics["H-neg"] ?? "—"} | ${metrics["H-silent"] ?? "—"} | ${metrics.O ?? "—"} | ${metrics.EXEC} | ${metrics["FA@cov"]} | ${metrics.RT} | ${metrics.stack} |\n`;
 }
 
+function parseFraction(value: string | undefined): { num: number; den: number } | undefined {
+  if (value === undefined) return undefined;
+  const match = /^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)/.exec(value);
+
+  if (match === null) return undefined;
+
+  return { num: Number(match[1]), den: Number(match[2]) };
+}
+
+export function formatMeanRange(values: readonly string[]): string {
+  const parsed = values
+    .map(parseFraction)
+    .filter((item): item is { num: number; den: number } => item !== undefined);
+
+  if (parsed.length === 0) return values.find((item) => item.trim() !== "") ?? "n/a";
+  const dens = parsed.map((item) => item.den);
+  const den = dens[0]!;
+  const nums = parsed.map((item) => item.num);
+  const mean = nums.reduce((sum, n) => sum + n, 0) / nums.length;
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+
+  if (min === max) return `${min}/${den}`;
+
+  return `${mean.toFixed(1)}/${den} (${min}-${max})`;
+}
+
+export function aggregateSeedMetrics(rows: readonly LedgerMetrics[], stack: string): LedgerMetrics {
+  if (rows.length === 0) throw new RangeError("aggregateSeedMetrics: no seed rows");
+
+  return {
+    EXEC: formatMeanRange(rows.map((row) => row.EXEC)),
+    "FA@cov": rows.every((row) => row["FA@cov"] === rows[0]!["FA@cov"])
+      ? rows[0]!["FA@cov"]
+      : rows.map((row) => row["FA@cov"]).join(","),
+    RT: rows[0]!.RT,
+    stack,
+    H: formatMeanRange(rows.map((row) => row.H ?? "")),
+    "H-neg": formatMeanRange(rows.map((row) => row["H-neg"] ?? "")),
+    "H-silent": formatMeanRange(rows.map((row) => row["H-silent"] ?? "")),
+    O: formatMeanRange(rows.map((row) => row.O ?? "")),
+  };
+}
+
 export function appendLedgerRow(
   ledgerPath: string,
   options: ExperimentOptions,
@@ -111,13 +179,25 @@ export function appendLedgerRow(
   if (!existsSync(ledgerPath)) throw new RangeError(`ledger file missing: ${ledgerPath}`);
   const row = formatLedgerRow(options, metrics);
   const existing = readFileSync(ledgerPath, "utf8");
+  const marker = `| ${options.name} |`;
 
-  if (existing.includes(`| ${options.name} |`)) return;
+  if (existing.includes(marker)) {
+    const updated = existing
+      .split("\n")
+      .map((line) => (line.includes(marker) ? row.trimEnd() : line))
+      .join("\n");
+
+    writeFileSync(ledgerPath, updated.endsWith("\n") ? updated : `${updated}\n`);
+
+    return;
+  }
+
   writeFileSync(ledgerPath, `${existing.trimEnd()}\n${row}`);
 }
 
 interface CacheFile {
   inputHash: string;
+  rt?: number;
 }
 
 function loadCache(path: string): CacheFile | undefined {
@@ -193,49 +273,123 @@ function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
 
-function metricsFromReports(
+function writeMix(work: string, mix: MixResult): void {
+  writeFileSync(join(work, "mix.json"), `${JSON.stringify(mix, null, 2)}\n`);
+}
+
+function readMixFraction(work: string): string | undefined {
+  const path = join(work, "mix.json");
+
+  if (!existsSync(path)) return undefined;
+  const mix = readJson(path);
+
+  return typeof mix.fraction === "string" ? mix.fraction : undefined;
+}
+
+function writeInputCache(path: string, inputHash: string, rt: number): void {
+  writeFileSync(path, `${JSON.stringify({ inputHash, rt }, null, 2)}\n`);
+}
+
+export function metricsFromReports(
   oraclePath: string,
   evalPath: string | undefined,
   humanPath: string | undefined,
   stack: string,
+  rt: string,
 ): LedgerMetrics {
   const oracle = existsSync(oraclePath) ? readJson(oraclePath) : {};
-  const correct = Number(oracle.correct ?? 0);
-  const total = Number(oracle.total ?? 0);
-  const o = total > 0 ? `${correct}/${total}` : "";
-  const exec = total > 0 ? `${correct}/${total}` : "";
+  const oCorrect = Number(oracle.correct ?? 0);
+  const oTotal = Number(oracle.total ?? 0);
+  const o = oTotal > 0 ? `${oCorrect}/${oTotal}` : "";
+  let exec = "";
   let fa = "";
+
+  if (evalPath !== undefined && existsSync(evalPath)) {
+    const evaluated = readJson(evalPath);
+    const execBlock = evaluated.exec as { correct?: unknown; total?: unknown } | undefined;
+    const execTotal = Number(execBlock?.total ?? 0);
+
+    if (execTotal > 0) exec = `${Number(execBlock?.correct ?? 0)}/${execTotal}`;
+
+    if (typeof evaluated.faAtCov === "string" && evaluated.faAtCov.trim() !== "") {
+      fa = evaluated.faAtCov;
+    }
+  }
+
+  let h: string | undefined;
+  let hNeg: string | undefined;
+  let hSilent: string | undefined;
 
   if (humanPath !== undefined && existsSync(humanPath)) {
     const human = readJson(humanPath);
     const overlay = human.overlayOff as Record<string, unknown> | undefined;
-    const faRate = overlay?.negativeFalseAcceptanceRate;
-    const coverage = overlay?.coverage;
+    const hCorrect = Number(overlay?.correct ?? human.correct ?? 0);
+    const hTotal = Number(overlay?.total ?? human.total ?? 0);
 
-    if (faRate !== undefined) fa = `${faRate}@${coverage ?? "?"}`;
+    if (hTotal > 0) h = `${hCorrect}/${hTotal}`;
+    const humanFa = overlay?.faAtCov ?? human.faAtCov;
+
+    if (typeof humanFa === "string" && humanFa.trim() !== "") fa = humanFa;
+    const neg = overlay?.negativeFalseAccepts ?? human.negativeFalseAccepts;
+
+    if (neg !== undefined) hNeg = String(neg);
+    const silent = overlay?.silentMeaningChanges ?? human.silentMeaningChanges;
+
+    if (silent !== undefined) hSilent = String(silent);
   }
 
-  if (fa === "" && evalPath !== undefined && existsSync(evalPath)) {
-    const evaluated = readJson(evalPath);
-    const selective = evaluated.selectivePrediction as unknown[] | undefined;
-
-    fa = Array.isArray(selective) ? `eval:${selective.length}` : "eval";
-  }
-
+  if (exec === "") exec = "n/a";
   if (fa === "") fa = "n/a";
 
   return {
     EXEC: exec,
     "FA@cov": fa,
-    RT: "0",
+    RT: rt,
     stack,
     ...(o === "" ? {} : { O: o }),
+    ...(h === undefined ? {} : { H: h }),
+    ...(hNeg === undefined ? {} : { "H-neg": hNeg }),
+    ...(hSilent === undefined ? {} : { "H-silent": hSilent }),
   };
 }
 
-export function runExperiment(options: ExperimentOptions): ExperimentResult {
+export async function runExperiment(options: ExperimentOptions): Promise<ExperimentResult> {
   if (options.name.trim() === "") throw new RangeError("--name is required");
   if (options.change.trim() === "") throw new RangeError("--change is required");
+  const rt = options.rt ?? 0;
+
+  if (rt < 0 || rt >= 1) throw new RangeError("--rt must be in [0, 1)");
+  const realDir = resolveRepo(options.real ?? "packages/cron/training/data/real");
+  const accepted = rt > 0 ? loadAcceptedReal(realDir) : [];
+
+  if (rt > 0 && accepted.length === 0) {
+    throw new RangeError(
+      `C1/C2 refused: no accepted real jsonl in ${realDir} (need agree:3, exec:true, roundtrip:true)`,
+    );
+  }
+
+  if (rt > 0 && (options.dataPrefix !== undefined || options.kinds !== undefined)) {
+    throw new RangeError("--rt mix requires generate path (no --data-prefix/--kinds)");
+  }
+
+  if (options.sweep) {
+    let last: ExperimentResult | undefined;
+
+    for (const entry of SWEEP) {
+      last = await runExperiment({
+        ...options,
+        sweep: false,
+        name: `${options.name}-${entry.id}`,
+        freshEachEpoch:
+          options.freshEachEpoch === true || entry.extra.includes("--fresh-each-epoch"),
+      });
+    }
+
+    if (last === undefined) throw new RangeError("sweep list is empty");
+
+    return last;
+  }
+
   const root = repoRoot();
 
   const work = resolveRepo(
@@ -250,8 +404,10 @@ export function runExperiment(options: ExperimentOptions): ExperimentResult {
   const trainPrefix = join(work, "kinds-train.json");
   const valPrefix = join(work, "kinds-validation.json");
   const heldPrefix = join(work, "kinds-heldout.json");
-  const shardsReady = existsSync(trainPrefix) && existsSync(valPrefix) && existsSync(heldPrefix);
-  const skippedRegen = previous?.inputHash === inputHash && shardsReady;
+
+  const shardsReadyOnDisk =
+    existsSync(trainPrefix) && existsSync(valPrefix) && existsSync(heldPrefix);
+
   const steps: StepRecord[] = [];
   const samples = options.samples ?? 2000;
   const evalSamples = options.evalSamples ?? 500;
@@ -261,6 +417,8 @@ export function runExperiment(options: ExperimentOptions): ExperimentResult {
   const kindsSample = options.kindsSample ?? 0;
   const device = options.device ?? "cpu";
   const stack = options.stack ?? "tagger-typed";
+  const seedCount = Math.max(1, options.seeds ?? 1);
+  const baseSeed = options.seed ?? 20260913;
 
   const bun = process.execPath;
   const generate = join(root, "packages/cron/training/src/generate.ts");
@@ -269,7 +427,30 @@ export function runExperiment(options: ExperimentOptions): ExperimentResult {
   const evaluate = join(root, "packages/cron/training/src/evaluate.ts");
   const humanEvaluate = join(root, "packages/cron/training/src/human-evaluate.ts");
 
-  if (!skippedRegen) {
+  let skippedRegen = previous?.inputHash === inputHash && previous?.rt === rt && shardsReadyOnDisk;
+  let renderedKinds: string[] = [];
+  let skippedKinds: string[] = [];
+  let rtLedger = "0";
+
+  const dataPrefix =
+    options.dataPrefix === undefined ? join(work, "kinds") : resolveRepo(options.dataPrefix);
+
+  if (options.dataPrefix !== undefined) {
+    skippedRegen = true;
+    skipStep(steps, "regen-data-prefix", [dataPrefix]);
+  } else if (options.kinds !== undefined || options.kindCap !== undefined) {
+    const incremental = await runIncrementalKinds({
+      dir: work,
+      ...(options.kinds === undefined ? {} : { kinds: options.kinds }),
+      ...(options.kindCap === undefined ? {} : { cap: options.kindCap }),
+      steps,
+    });
+
+    skippedRegen = incremental.rendered.length === 0;
+    renderedKinds = incremental.rendered;
+    skippedKinds = incremental.skipped;
+    writeInputCache(cachePath, inputHash, rt);
+  } else if (!skippedRegen) {
     const heldoutJsonl = join(work, "heldout.jsonl");
     const validationJsonl = join(work, "validation.jsonl");
     const trainJsonl = join(work, "train.jsonl");
@@ -339,6 +520,21 @@ export function runExperiment(options: ExperimentOptions): ExperimentResult {
 
     for (const jsonl of [heldoutJsonl, validationJsonl, trainJsonl]) normalizeGenerated(jsonl);
 
+    if (rt > 0) {
+      const mix = mixAcceptedIntoTrain(trainJsonl, accepted, rt);
+
+      writeMix(work, mix);
+      rtLedger = mix.fraction;
+
+      steps.push({
+        step: "mix-real",
+        skipped: false,
+        argv: ["mix", "--rt", String(rt), "--n-real", String(mix.nReal)],
+      });
+    } else {
+      skipStep(steps, "mix-real", []);
+    }
+
     spawnTool(
       [bun, featurize, heldoutJsonl, join(work, "kinds-heldout")],
       root,
@@ -360,14 +556,16 @@ export function runExperiment(options: ExperimentOptions): ExperimentResult {
       "featurize-train",
     );
 
-    writeFileSync(cachePath, `${JSON.stringify({ inputHash }, null, 2)}\n`);
+    writeInputCache(cachePath, inputHash, rt);
   } else {
     skipStep(steps, "regen-heldout", []);
     skipStep(steps, "regen-validation", []);
     skipStep(steps, "regen-train", []);
+    skipStep(steps, "mix-real", []);
     skipStep(steps, "featurize-heldout", []);
     skipStep(steps, "featurize-validation", []);
     skipStep(steps, "featurize-train", []);
+    if (rt > 0) rtLedger = readMixFraction(work) ?? String(rt);
   }
 
   const oracleOut = join(work, "oracle.json");
@@ -388,97 +586,197 @@ export function runExperiment(options: ExperimentOptions): ExperimentResult {
     "oracle",
   );
 
-  const storage = resolveRepo(options.storage ?? join(work, "runs"));
+  if (stack === "seq2seq") {
+    const jsonl = existsSync(join(work, "train.jsonl"))
+      ? join(work, "train.jsonl")
+      : resolveRepo("packages/cron/training/data/synth/kinds-typed.jsonl");
 
-  spawnTool(
-    [
-      "uv",
-      "run",
-      "--project",
-      join(root, "training/cron"),
-      "python",
-      join(root, "training/cron/train.py"),
-      "--run",
-      options.name,
-      "--storage",
-      storage,
-      "--data-prefix",
-      join(work, "kinds"),
-      "--samples",
-      String(samples),
-      "--eval-samples",
-      String(evalSamples),
-      "--epochs",
-      String(epochs),
-      "--batch",
-      String(batch),
-      "--device",
-      device,
-      "--val-max-sequences",
-      String(evalSamples),
-      "--h-per-epoch",
-      ...(options.freshEachEpoch ? ["--fresh-each-epoch"] : []),
-    ],
-    root,
-    steps,
-    "train",
-  );
+    const b1Out = join(work, "b1.json");
 
-  const checkpoint = join(storage, options.name, "best.pt");
-  const candidate = join(work, "weights.gen.ts");
-
-  spawnTool(
-    [
-      "uv",
-      "run",
-      "--project",
-      join(root, "training/cron"),
-      "python",
-      join(root, "training/cron/export.py"),
-      "--checkpoint",
-      checkpoint,
-      "--candidate",
-      candidate,
-      "--candidate-only",
-    ],
-    root,
-    steps,
-    "export",
-  );
-
-  const evalOut = join(work, "eval.json");
-
-  try {
-    spawnTool([bun, evaluate, "--weights", candidate, "--out", evalOut], root, steps, "evaluate");
-  } catch {
-    steps[steps.length - 1]!.skipped = false;
-  }
-
-  const humanOut = join(work, "h.json");
-
-  try {
     spawnTool(
-      [bun, humanEvaluate, "--partition", "regression", "--weights", candidate, "--out", humanOut],
+      [
+        "uv",
+        "run",
+        "--project",
+        join(root, "training/cron"),
+        "python",
+        join(root, "training/cron/seq2seq.py"),
+        "--b1",
+        "--jsonl",
+        jsonl,
+        "--proxy",
+        String(samples),
+        "--epochs",
+        String(epochs),
+        "--device",
+        device,
+        "--gold",
+        resolveRepo("packages/cron/training/data/gold/reserved-carriers.jsonl"),
+        "--human-dir",
+        resolveRepo("packages/cron/evaluation"),
+        "--out",
+        b1Out,
+      ],
       root,
       steps,
-      "human-evaluate",
+      "seq2seq-b1",
     );
-  } catch {
-    steps[steps.length - 1]!.skipped = false;
+
+    const b1 = existsSync(b1Out) ? readJson(b1Out) : {};
+    const oracle = existsSync(oracleOut) ? readJson(oracleOut) : {};
+    const oTotal = Number(oracle.total ?? 0);
+    const oCorrect = Number(oracle.correct ?? 0);
+
+    const metrics: LedgerMetrics = {
+      EXEC: String(b1.EXEC ?? "n/a"),
+      "FA@cov": String(b1["FA@cov"] ?? "n/a"),
+      RT: rtLedger,
+      stack: "seq2seq",
+      H: String(b1.H ?? "n/a"),
+      "H-neg": String(b1["H-neg"] ?? "n/a"),
+      "H-silent": String(b1["H-silent"] ?? "n/a"),
+      ...(oTotal > 0 ? { O: `${oCorrect}/${oTotal}` } : {}),
+    };
+
+    writeFileSync(join(work, "steps.json"), `${JSON.stringify(steps, null, 2)}\n`);
+    const ledgerPath = resolveRepo(options.ledger ?? "EXPERIMENTS.md");
+
+    appendLedgerRow(ledgerPath, { ...options, seeds: seedCount }, metrics);
+
+    return {
+      name: options.name,
+      inputHash,
+      skippedRegen,
+      skippedFeaturize: skippedRegen,
+      steps,
+      ledgerPath,
+      work,
+      renderedKinds,
+      skippedKinds,
+      seedRuns: seedCount,
+    };
+  }
+
+  const storage = resolveRepo(options.storage ?? join(work, "runs"));
+  const seedMetrics: LedgerMetrics[] = [];
+
+  for (let seedIndex = 0; seedIndex < seedCount; seedIndex++) {
+    const seed = baseSeed + seedIndex;
+    const runName = seedCount === 1 ? options.name : `${options.name}-seed-${seed}`;
+
+    spawnTool(
+      [
+        "uv",
+        "run",
+        "--project",
+        join(root, "training/cron"),
+        "python",
+        join(root, "training/cron/train.py"),
+        "--run",
+        runName,
+        "--seed",
+        String(seed),
+        "--storage",
+        storage,
+        "--data-prefix",
+        dataPrefix,
+        "--samples",
+        String(samples),
+        "--eval-samples",
+        String(evalSamples),
+        "--epochs",
+        String(epochs),
+        "--batch",
+        String(batch),
+        "--device",
+        device,
+        "--val-max-sequences",
+        String(evalSamples),
+        "--h-per-epoch",
+        "--early-stopping-patience",
+        String(options.earlyStoppingPatience ?? 2),
+        ...(options.freshEachEpoch ? ["--fresh-each-epoch"] : []),
+        ...(options.init === undefined ? [] : ["--init", options.init]),
+      ],
+      root,
+      steps,
+      `train-seed-${seed}`,
+    );
+
+    const checkpoint = join(storage, runName, "best.pt");
+    const candidate = join(work, `weights-seed-${seed}.gen.ts`);
+
+    spawnTool(
+      [
+        "uv",
+        "run",
+        "--project",
+        join(root, "training/cron"),
+        "python",
+        join(root, "training/cron/export.py"),
+        "--checkpoint",
+        checkpoint,
+        "--candidate",
+        candidate,
+        "--candidate-only",
+      ],
+      root,
+      steps,
+      `export-seed-${seed}`,
+    );
+
+    const evalOut = join(work, `eval-seed-${seed}.json`);
+
+    try {
+      spawnTool(
+        [bun, evaluate, "--weights", candidate, "--out", evalOut],
+        root,
+        steps,
+        `evaluate-seed-${seed}`,
+      );
+    } catch {
+      steps[steps.length - 1]!.skipped = false;
+    }
+
+    const humanOut = join(work, `h-seed-${seed}.json`);
+
+    try {
+      spawnTool(
+        [
+          bun,
+          humanEvaluate,
+          "--partition",
+          "regression",
+          "--weights",
+          candidate,
+          "--out",
+          humanOut,
+        ],
+        root,
+        steps,
+        `human-evaluate-seed-${seed}`,
+      );
+    } catch {
+      steps[steps.length - 1]!.skipped = false;
+    }
+
+    seedMetrics.push(
+      metricsFromReports(
+        oracleOut,
+        existsSync(evalOut) ? evalOut : undefined,
+        existsSync(humanOut) ? humanOut : undefined,
+        stack,
+        rtLedger,
+      ),
+    );
   }
 
   writeFileSync(stepsPath, `${JSON.stringify(steps, null, 2)}\n`);
 
-  const metrics = metricsFromReports(
-    oracleOut,
-    existsSync(evalOut) ? evalOut : undefined,
-    existsSync(humanOut) ? humanOut : undefined,
-    stack,
-  );
-
+  const metrics = aggregateSeedMetrics(seedMetrics, stack);
   const ledgerPath = resolveRepo(options.ledger ?? "EXPERIMENTS.md");
 
-  appendLedgerRow(ledgerPath, options, metrics);
+  appendLedgerRow(ledgerPath, { ...options, seeds: seedCount }, metrics);
 
   return {
     name: options.name,
@@ -488,6 +786,9 @@ export function runExperiment(options: ExperimentOptions): ExperimentResult {
     steps,
     ledgerPath,
     work,
+    renderedKinds,
+    skippedKinds,
+    seedRuns: seedCount,
   };
 }
 
@@ -513,6 +814,37 @@ function parseArgs(argv: string[]): ExperimentOptions {
         break;
       case "--seeds":
         options.seeds = Number(take());
+        break;
+      case "--seed":
+        options.seed = Number(take());
+        break;
+      case "--kinds":
+        options.kinds = take()
+          .split(",")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0) as KindId[];
+
+        break;
+      case "--kind-cap":
+        options.kindCap = Number(take());
+        break;
+      case "--sweep":
+        options.sweep = true;
+        break;
+      case "--early-stopping-patience":
+        options.earlyStoppingPatience = Number(take());
+        break;
+      case "--init":
+        options.init = take();
+        break;
+      case "--data-prefix":
+        options.dataPrefix = take();
+        break;
+      case "--rt":
+        options.rt = Number(take());
+        break;
+      case "--real":
+        options.real = take();
         break;
       case "--fresh-each-epoch":
         options.freshEachEpoch = true;
@@ -558,16 +890,16 @@ function parseArgs(argv: string[]): ExperimentOptions {
   return options;
 }
 
-export function main(argv = process.argv.slice(2)): ExperimentResult {
+export async function main(argv = process.argv.slice(2)): Promise<ExperimentResult> {
   const options = parseArgs(argv);
-  const result = runExperiment(options);
+  const result = await runExperiment(options);
   const skip = result.skippedRegen ? "skip regen/featurize" : "inputs changed";
 
   process.stdout.write(
-    `${result.name}: ${skip} hash=${result.inputHash.slice(0, 12)} ledger=${result.ledgerPath}\n`,
+    `${result.name}: ${skip} hash=${result.inputHash.slice(0, 12)} seeds=${result.seedRuns} ledger=${result.ledgerPath}\n`,
   );
 
   return result;
 }
 
-if (import.meta.main) main();
+if (import.meta.main) await main();

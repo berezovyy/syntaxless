@@ -246,21 +246,24 @@ def evaluate(
         roles, boundary, schedule_kind, speech_act, actionable = model(
             batch["rows"], batch["valid"], batch["neighbors"]
         )
-        schedule_kind_correct += int(
-            (schedule_kind.argmax(dim=-1) == batch["schedule_kinds"]).sum()
-        )
-        schedule_predictions = schedule_kind.argmax(dim=-1)
-        schedule_targets = batch["schedule_kinds"]
-        target_numpy = schedule_targets.detach().cpu().numpy()
-        correct_numpy = (schedule_predictions == schedule_targets).detach().cpu().numpy()
-        schedule_kind_totals += np.bincount(
-            target_numpy, minlength=len(SCHEDULE_KIND_NAMES)
-        )
-        schedule_kind_correct_by_class += np.bincount(
-            target_numpy,
-            weights=correct_numpy.astype(np.int64),
-            minlength=len(SCHEDULE_KIND_NAMES),
-        ).astype(np.int64)
+        if schedule_kind.shape[-1] > 0:
+            schedule_kind_correct += int(
+                (schedule_kind.argmax(dim=-1) == batch["schedule_kinds"]).sum()
+            )
+            schedule_predictions = schedule_kind.argmax(dim=-1)
+            schedule_targets = batch["schedule_kinds"]
+            target_numpy = schedule_targets.detach().cpu().numpy()
+            correct_numpy = (
+                schedule_predictions == schedule_targets
+            ).detach().cpu().numpy()
+            schedule_kind_totals += np.bincount(
+                target_numpy, minlength=len(SCHEDULE_KIND_NAMES)
+            )
+            schedule_kind_correct_by_class += np.bincount(
+                target_numpy,
+                weights=correct_numpy.astype(np.int64),
+                minlength=len(SCHEDULE_KIND_NAMES),
+            ).astype(np.int64)
         if speech_act.shape[-1] > 0:
             speech_act_correct += int(
                 (speech_act.argmax(dim=-1) == batch["speech_acts"]).sum()
@@ -330,14 +333,13 @@ def evaluate(
         }
         for index, name in enumerate(SCHEDULE_KIND_NAMES)
     }
-    macro_schedule_kind_accuracy = float(
-        np.mean(
-            [
-                entry["accuracy"]
-                for entry in by_schedule_kind.values()
-                if entry["sequences"] > 0
-            ]
-        )
+    schedule_kind_rates = [
+        entry["accuracy"]
+        for entry in by_schedule_kind.values()
+        if entry["sequences"] > 0
+    ]
+    macro_schedule_kind_accuracy = (
+        float(np.mean(schedule_kind_rates)) if schedule_kind_rates else 0.0
     )
     actionable_precision = actionable_true_positive / max(
         actionable_true_positive + actionable_false_positive, 1
@@ -369,6 +371,19 @@ def evaluate(
         "boundaryFalsePositive": false_positive,
         "boundaryFalseNegative": false_negative,
     }
+
+
+def h_selection_score(h_metrics: dict[str, object] | None) -> float | None:
+    """H rate for checkpoint/early-stop; None when H was not scored."""
+    if not h_metrics or not h_metrics.get("ok"):
+        return None
+    total = h_metrics.get("total")
+    correct = h_metrics.get("correct")
+    if not isinstance(total, (int, float)) or total <= 0:
+        return None
+    if not isinstance(correct, (int, float)):
+        return None
+    return float(correct) / float(total)
 
 
 def score_h_if_requested(
@@ -533,10 +548,9 @@ def main(argv: list[str] | None = None) -> int:
         feature_rows=validation.feature_rows,
         rows_per_token=validation.rows_per_token,
         role_classes=validation.role_classes,
-        schedule_kind_classes=len(SCHEDULE_KIND_NAMES),
-        speech_act_classes=int(validation.manifest.speech_act_classes),
-        actionable_head="actionable" in validation.manifest.format
-        or int(validation.manifest.speech_act_classes) > 0,
+        schedule_kind_classes=0,
+        speech_act_classes=0,
+        actionable_head="actionable" in validation.manifest.format,
         hidden=config.hidden,
         quantization_bits=config.quantization_bits,
     ).to(config.device)
@@ -638,6 +652,11 @@ def main(argv: list[str] | None = None) -> int:
             + 0.25 * float(metrics["macroScheduleKindAccuracy"])
         )
 
+        h_metrics = score_h_if_requested(config, run_dir, model, epoch)
+        h_score = h_selection_score(h_metrics)
+        if h_score is not None:
+            criterion = h_score
+
         save_checkpoint(run_dir / "last.pt", model, config, epoch, criterion, metrics)
         improved = best_criterion is None or criterion > best_criterion
         if improved:
@@ -647,8 +666,6 @@ def main(argv: list[str] | None = None) -> int:
             save_checkpoint(run_dir / "best.pt", model, config, epoch, criterion, metrics)
         else:
             non_improving_epochs += 1
-
-        h_metrics = score_h_if_requested(config, run_dir, model, epoch)
         entry = {
             "epoch": epoch,
             "qat": qat,

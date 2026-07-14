@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
+import { LABEL_COUNT, LABELS } from "../../src/model/labels";
 import { tokenize } from "../../src/model/tokenizer";
 import type { EvaluationResult, GoldRecord } from "./evaluate";
-import { canonicalizeIntent, lintGoldRecords, parseCorpus, riskCoverage } from "./evaluate";
+import {
+  canonicalizeIntent,
+  lintGoldRecords,
+  loadEngine,
+  parseCorpus,
+  riskCoverage,
+} from "./evaluate";
 
 describe("canonicalizeIntent", () => {
   test("normalizes semantic sets without mutating the input", () => {
@@ -196,9 +203,29 @@ describe("overlay-off report column", () => {
         GOLD: 0,
         records: [],
       },
+      exec: { correct: 0, total: 0 },
+      faAtCov: "0@0",
     };
 
     expect(result.contracts).toEqual([]);
     expect(result.overlayOff).toBe(overlayOff);
+  });
+});
+
+describe("loadEngine candidate uses src labels", () => {
+  test("a candidate is scored against typed LABELS, not the 15-class dist bundle", async () => {
+    const engine = await loadEngine(
+      "packages/cron/dist",
+      "packages/cron/training/data/synth/experiments/a1/weights-seed-20260913.gen.ts",
+    );
+
+    try {
+      expect(engine.labelName(0)).toBe("O");
+      expect(engine.labelName(5)).toBe("WEEKDAY_MON");
+      expect(LABELS[5]).toBe("WEEKDAY_MON");
+      expect(engine.labelName(LABEL_COUNT - 1)).toBe(LABELS[LABEL_COUNT - 1]!);
+    } finally {
+      await engine.dispose();
+    }
   });
 });

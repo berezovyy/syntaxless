@@ -1,12 +1,11 @@
 /**
  * Candidate/baseline evaluation over a gold corpus.
  *
- * Every number this module reports comes from the *built* `packages/cron/dist/`
- * runtime, never from `src/`. The bundled `dist` is scored directly. When a
- * weight module path is supplied (a candidate artifact), the built tree is
- * copied to a scratch directory and only its `model/weights.gen.js` is
- * replaced, so the exact shipped engine runs on the candidate parameters in
- * this same process. The crate is what will ship, not a re-implementation.
+ * Baseline numbers come from the *built* `packages/cron/dist/` runtime. When a
+ * candidate weight module is supplied, the engine is loaded from a scratch
+ * copy of **current `src/`** (typed labels) with that candidate as
+ * `weights.gen.ts`. Dist is a 15-class bundle; swapping only `weights.gen.js`
+ * into it cannot score a 77-role tagger.
  *
  * The corpus is gold data with rendered spans, an expected AST, and an expected
  * compiled expression. The four contracts (`tokenRoles`, `rawDecode`,
@@ -26,7 +25,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import type { CompileResult } from "../../src/compiler/cron";
-import { isStructural } from "../../src/model/labels";
+import { isStructural, LABEL_COUNT } from "../../src/model/labels";
 import type { Label } from "../../src/model/labels";
 import { SPEECH_ACTS } from "../../src/model/speech-acts";
 import type { SpeechAct } from "../../src/model/speech-acts";
@@ -41,6 +40,8 @@ import {
 } from "./attribution";
 import type { AttributionReport } from "./attribution";
 import { canonicalizeIntent } from "./canonical-intent";
+import { execEqual } from "./exec-score";
+import { faAtCoverage } from "./fa-at-cov";
 import { spellingVariant } from "./noise";
 import type { SpellingNoise } from "./noise";
 import { oracleDecode } from "./oracle";
@@ -153,6 +154,10 @@ export interface EvaluationResult {
   actionableAccuracy?: number;
   /** Per-miss ROLE/ACT/DECODE/CONF/GOLD histogram (overlay-off exactAst). */
   attribution: AttributionReport;
+  /** Overlay-off EXEC: execEqual(prediction, gold), not oracle correct/total. */
+  exec: { correct: number; total: number };
+  /** Overlay-off FA@cov from parse accepts after the F abstention threshold. */
+  faAtCov: string;
 }
 
 export interface TypoInvarianceReport {
@@ -248,6 +253,8 @@ export function assertSameArtifact(reports: readonly { artifactSha256: string }[
 
 interface WeightsArtifact {
   q: string;
+  roleClasses?: number;
+  labels?: readonly string[];
 }
 
 interface DistIndex {
@@ -263,6 +270,8 @@ interface DistPredictions {
   labels: Uint8Array;
   speechAct?: number;
   actionable?: Uint8Array;
+  logits?: Float32Array;
+  pooled?: Float32Array;
 }
 
 interface DistInference {
@@ -313,25 +322,26 @@ async function importModule<T>(path: string): Promise<T> {
 }
 
 /**
- * Load the built runtime from `distDir`. With no `weightsModulePath` the built
- * module runs as shipped. With one, a scratch copy of `dist/` is written with
- * the supplied artifact so the built engine can be scored on it.
+ * Load a scoring engine. With no `weightsModulePath` the built `dist/` module
+ * runs as shipped. With a candidate, a scratch copy of current `src/` is
+ * loaded so labels/decode match the candidate's roleClasses.
  */
 export async function loadEngine(distDir: string, weightsModulePath?: string): Promise<Engine> {
-  const built = resolveRepo(distDir);
-
-  if (!existsSync(join(built, "index.js"))) {
-    throw new Error(`built runtime missing: ${built}/index.js (run the build)`);
-  }
-
-  let root = built;
   let artifact: WeightsArtifact;
   let temp: string | null = null;
+  let index: DistIndex;
+  let evaluation: DistEvaluation;
 
   if (weightsModulePath === undefined) {
-    const evaluation = await importModule<DistEvaluation>(join(built, "evaluation.js"));
+    const built = resolveRepo(distDir);
 
+    if (!existsSync(join(built, "index.js"))) {
+      throw new Error(`built runtime missing: ${built}/index.js (run the build)`);
+    }
+
+    evaluation = await importModule<DistEvaluation>(join(built, "evaluation.js"));
     artifact = evaluation.weights;
+    index = await importModule<DistIndex>(join(built, "index.js"));
   } else {
     const modulePath = resolveRepo(weightsModulePath);
 
@@ -342,18 +352,39 @@ export async function loadEngine(distDir: string, weightsModulePath?: string): P
     const supplied = await importModule<{ weights: WeightsArtifact }>(modulePath);
 
     artifact = supplied.weights;
+    const typedCandidate = (artifact.roleClasses ?? artifact.labels?.length) === LABEL_COUNT;
+
     temp = await mkdtemp(join(tmpdir(), "syntaxless-evaluate-"));
-    root = join(temp, "dist");
-    await cp(built, root, { recursive: true });
 
-    await writeFile(
-      join(root, "model", "weights.gen.js"),
-      `export const weights = ${JSON.stringify(artifact)};\n`,
-    );
+    if (typedCandidate) {
+      const srcRoot = join(temp, "src");
+
+      await cp(resolveRepo("packages/cron/src"), srcRoot, { recursive: true });
+      const candidate = await readFile(modulePath, "utf8");
+
+      await writeFile(join(srcRoot, "model", "weights.gen.ts"), candidate);
+      evaluation = await importModule<DistEvaluation>(join(srcRoot, "model", "evaluation.ts"));
+      index = await importModule<DistIndex>(join(srcRoot, "index.ts"));
+    } else {
+      const built = resolveRepo(distDir);
+
+      if (!existsSync(join(built, "index.js"))) {
+        throw new Error(`built runtime missing: ${built}/index.js (run the build)`);
+      }
+
+      const root = join(temp, "dist");
+
+      await cp(built, root, { recursive: true });
+
+      await writeFile(
+        join(root, "model", "weights.gen.js"),
+        `export const weights = ${JSON.stringify(artifact)};\n`,
+      );
+
+      evaluation = await importModule<DistEvaluation>(join(root, "evaluation.js"));
+      index = await importModule<DistIndex>(join(root, "index.js"));
+    }
   }
-
-  const index = await importModule<DistIndex>(join(root, "index.js"));
-  const evaluation = await importModule<DistEvaluation>(join(root, "evaluation.js"));
 
   const artifactSha256 = sha256Hex(artifact.q);
   const scratch = temp;
@@ -790,6 +821,12 @@ export async function evaluateCorpus(
   let speechActCorrect = 0;
   let actionableTotal = 0;
   let actionableCorrect = 0;
+  let execCorrect = 0;
+  let execTotal = 0;
+  let negativeTotal = 0;
+  let negativeAccepted = 0;
+  let positiveTotal = 0;
+  let positiveAccepted = 0;
 
   for (const item of records) {
     const tokens = engine.tokenize(item.text);
@@ -875,6 +912,17 @@ export async function evaluateCorpus(
       rawOffError,
       overlayOff,
     );
+
+    execTotal += 1;
+    if (execEqual(parsedOff.ok ? parsedOff.intent : null, item.intent)) execCorrect += 1;
+
+    if (item.intent === null) {
+      negativeTotal += 1;
+      if (parsedOff.ok) negativeAccepted += 1;
+    } else {
+      positiveTotal += 1;
+      if (parsedOff.ok) positiveAccepted += 1;
+    }
 
     const exactMiss = item.intent === null ? parsedOff.ok : !astCorrectOff;
 
@@ -997,6 +1045,13 @@ export async function evaluateCorpus(
     ...(speechActTotal === 0 ? {} : { speechActAccuracy: speechActCorrect / speechActTotal }),
     ...(actionableTotal === 0 ? {} : { actionableAccuracy: actionableCorrect / actionableTotal }),
     attribution,
+    exec: { correct: execCorrect, total: execTotal },
+    faAtCov: faAtCoverage({
+      negativeTotal,
+      negativeAccepted,
+      positiveTotal,
+      positiveAccepted,
+    }).formatted,
   };
 }
 
