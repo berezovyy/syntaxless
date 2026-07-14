@@ -1,3 +1,4 @@
+import type { IntentFailure } from "../types/errors.js";
 import type { CompileFailureCode, CompileResult } from "./cron.js";
 
 export type Failure = Extract<CompileResult, { supported: false }>;
@@ -14,7 +15,10 @@ const WEEKDAY_NAMES = new Set<string>([
 
 const ORDINAL_NAMES = new Set<string>(["first", "second", "third", "fourth", "last"]);
 
-export function unsupported(code: CompileFailureCode, reason: string): Failure {
+export function unsupported<Code extends CompileFailureCode>(
+  code: Code,
+  reason: string,
+): { supported: false; code: Code; reason: string } {
   return { supported: false, reason, code };
 }
 
@@ -22,23 +26,15 @@ function isInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value);
 }
 
-export function validateInterval(unit: unknown, interval: unknown): Failure | null {
-  if (!isInteger(interval) || interval < 1) {
-    return unsupported("invalid-interval", "frequency.interval must be an integer >= 1");
-  }
-
-  if (unit === "minute" && interval > 59) {
-    return unsupported("invalid-interval", "minute interval must be at most 59");
-  }
-
-  if (unit === "hour" && interval > 23) {
-    return unsupported("invalid-interval", "hour interval must be at most 23");
+export function validateInterval(interval: unknown): IntentFailure | null {
+  if (!Number.isSafeInteger(interval) || (interval as number) < 1) {
+    return unsupported("invalid-interval", "frequency.interval must be a positive safe integer");
   }
 
   return null;
 }
 
-export function validateTime(time: unknown): Failure | null {
+export function validateTime(time: unknown): IntentFailure | null {
   if (time === undefined) return null;
 
   if (typeof time !== "object" || time === null) {
@@ -58,7 +54,7 @@ export function validateTime(time: unknown): Failure | null {
   return null;
 }
 
-export function validateWeekdays(weekdays: unknown): Failure | null {
+export function validateWeekdays(weekdays: unknown): IntentFailure | null {
   if (weekdays === undefined) return null;
 
   if (!Array.isArray(weekdays)) {
@@ -90,7 +86,7 @@ export function validateWeekdays(weekdays: unknown): Failure | null {
   return null;
 }
 
-export function validateDayOfMonth(dayOfMonth: unknown): Failure | null {
+export function validateDayOfMonth(dayOfMonth: unknown): IntentFailure | null {
   if (dayOfMonth === undefined) return null;
 
   if (!isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
@@ -100,7 +96,7 @@ export function validateDayOfMonth(dayOfMonth: unknown): Failure | null {
   return null;
 }
 
-export function validateOrdinalWeekday(ordinalWeekday: unknown): Failure | null {
+export function validateOrdinalWeekday(ordinalWeekday: unknown): IntentFailure | null {
   if (ordinalWeekday === undefined) return null;
 
   if (typeof ordinalWeekday !== "object" || ordinalWeekday === null) {

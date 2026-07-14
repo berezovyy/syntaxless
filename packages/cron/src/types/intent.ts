@@ -14,6 +14,12 @@ export interface TimeOfDay {
   minute: number; // 0-59
 }
 
+/** A minute within each selected hour, without a daily hour anchor. */
+export interface MinuteOfHour {
+  hour?: never;
+  minute: number; // 0-59
+}
+
 /** e.g. "first Monday of every month". */
 export interface OrdinalWeekday {
   ordinal: Ordinal;
@@ -48,7 +54,7 @@ export interface ScheduleIntent {
     unit: FrequencyUnit;
     interval: number; // >= 1; "every other" is interval 2
   };
-  time?: TimeOfDay;
+  time?: TimeOfDay | MinuteOfHour;
   weekdays?: Weekday[];
   dayOfMonth?: number; // 1-31
   ordinalWeekday?: OrdinalWeekday;

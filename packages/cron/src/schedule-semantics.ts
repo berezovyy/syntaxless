@@ -6,10 +6,20 @@
  * user text to assign labels.
  */
 export function shiftIsoDate(iso: string, days: number): string | undefined {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  const valid = parseDateLiteral(iso);
 
-  if (match === null) return undefined;
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days));
+  if (valid === undefined || !Number.isSafeInteger(days)) return undefined;
+  const date = new Date(`${valid}T00:00:00.000Z`);
+
+  date.setUTCDate(date.getUTCDate() + days);
+
+  if (
+    !Number.isFinite(date.getTime()) ||
+    date.getUTCFullYear() < 1 ||
+    date.getUTCFullYear() > 9999
+  ) {
+    return undefined;
+  }
 
   return `${String(date.getUTCFullYear()).padStart(4, "0")}-${String(
     date.getUTCMonth() + 1,
@@ -57,7 +67,9 @@ export function parseDateLiteral(text: string): string | undefined {
   const year = Number(iso[1]);
   const month = Number(iso[2]);
   const day = Number(iso[3]);
-  const candidate = new Date(Date.UTC(year, month - 1, day));
+  const candidate = new Date(0);
+
+  candidate.setUTCFullYear(year, month - 1, day);
 
   if (
     year < 1 ||
