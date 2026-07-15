@@ -1,33 +1,22 @@
-import type { FrequencyUnit, ScheduleIntent, Weekday } from "../types/intent.js";
-import {
-  unsupported,
-  validateDayOfMonth,
-  validateInterval,
-  validateOrdinalWeekday,
-  validateTime,
-  validateWeekdays,
-} from "./validate.js";
+import type { IntentFailureCode } from "../types/errors.js";
+import { IntentError } from "../types/errors.js";
+import type { ScheduleIntent, Weekday } from "../types/intent.js";
+import { intentFailure } from "../validate.js";
+import { unsupported, validateWeekdays } from "./validate.js";
 
 export type CompileResult =
   | { supported: true; expression: string }
   | { supported: false; reason: string; code: CompileFailureCode };
 
 export type CompileFailureCode =
-  | "invalid-interval"
-  | "invalid-time"
-  | "invalid-weekday"
-  | "invalid-day-of-month"
-  | "invalid-ordinal"
-  | "conflicting-selectors"
-  | "conflicting-time"
-  | "missing-anchor"
+  | IntentFailureCode
   | "non-unit-interval"
   | "ordinal-weekday"
   | "day-spec"
   | "bounds"
   | "exceptions";
 
-export const WEEKDAY_NUMBER: Record<Weekday, number> = {
+export const WEEKDAY_NUMBER: Readonly<Record<Weekday, number>> = Object.freeze({
   sunday: 0,
   monday: 1,
   tuesday: 2,
@@ -35,7 +24,7 @@ export const WEEKDAY_NUMBER: Record<Weekday, number> = {
   thursday: 4,
   friday: 5,
   saturday: 6,
-};
+});
 
 function weekOrder(value: number): number {
   return (value + 6) % 7;
@@ -50,6 +39,10 @@ function renderRun(run: number[]): string {
 }
 
 export function compileWeekdays(days: Weekday[]): string {
+  if (!Array.isArray(days)) throw new IntentError("invalid-weekday", "weekdays must be an array");
+  const failure = validateWeekdays(days);
+
+  if (failure !== null) throw new IntentError(failure.code, failure.reason);
   const numbers = Array.from(new Set(days.map((day) => WEEKDAY_NUMBER[day])));
 
   numbers.sort((a, b) => weekOrder(a) - weekOrder(b));
@@ -78,6 +71,10 @@ export function compile(intent: ScheduleIntent): CompileResult {
     throw new TypeError("compile() expects a ScheduleIntent object");
   }
 
+  const failure = intentFailure(intent);
+
+  if (failure !== null) return failure;
+
   if (intent.day !== undefined) {
     return unsupported("day-spec", "cron cannot represent an explicit day rule");
   }
@@ -90,88 +87,39 @@ export function compile(intent: ScheduleIntent): CompileResult {
     return unsupported("exceptions", "cron cannot represent exceptions");
   }
 
-  const frequency = (intent as { frequency?: unknown }).frequency;
-
-  if (typeof frequency !== "object" || frequency === null) {
-    return unsupported("missing-anchor", "a frequency is required");
-  }
-
-  const { unit, interval } = frequency as { unit: FrequencyUnit; interval: number };
-
-  const intervalFailure = validateInterval(unit, interval);
-
-  if (intervalFailure) return intervalFailure;
-
-  const timeFailure = validateTime(intent.time);
-
-  if (timeFailure) return timeFailure;
-
-  const weekdaysFailure = validateWeekdays(intent.weekdays);
-
-  if (weekdaysFailure) return weekdaysFailure;
-
-  const dayOfMonthFailure = validateDayOfMonth(intent.dayOfMonth);
-
-  if (dayOfMonthFailure) return dayOfMonthFailure;
-
-  const ordinalFailure = validateOrdinalWeekday(intent.ordinalWeekday);
-
-  if (ordinalFailure) return ordinalFailure;
-
-  const selectorCount =
-    Number(intent.weekdays !== undefined) +
-    Number(intent.dayOfMonth !== undefined) +
-    Number(intent.ordinalWeekday !== undefined) +
-    Number(intent.day !== undefined);
-
-  if (selectorCount > 1) {
-    return unsupported(
-      "conflicting-selectors",
-      "multiple day selectors cannot be combined in cron",
-    );
-  }
-
-  if (intent.weekdays !== undefined && unit !== "week") {
-    return unsupported("conflicting-selectors", "weekdays require a weekly frequency");
-  }
-
-  if (
-    (intent.dayOfMonth !== undefined || intent.ordinalWeekday !== undefined) &&
-    unit !== "month"
-  ) {
-    return unsupported(
-      "conflicting-selectors",
-      "monthly day selectors require a monthly frequency",
-    );
-  }
-
-  const time = intent.time;
-  const hasHour = time !== undefined && (time as { hour?: unknown }).hour !== undefined;
-
-  if (unit === "minute" && time !== undefined) {
-    return unsupported("conflicting-time", "a minute frequency cannot carry a time");
-  }
-
-  if (unit === "hour" && hasHour) {
-    return unsupported("conflicting-time", "an hour frequency cannot carry an hour anchor");
-  }
+  const { unit, interval } = intent.frequency;
 
   if (intent.ordinalWeekday !== undefined) {
     return unsupported("ordinal-weekday", "cron cannot represent an ordinal weekday");
   }
 
+  const time = intent.time;
   const minute = time?.minute ?? 0;
-  const hour = (time as { hour?: number } | undefined)?.hour ?? 0;
+  const hour = time?.hour ?? 0;
 
   switch (unit) {
     case "minute": {
-      const minuteField = interval === 1 ? "*" : `*/${interval}`;
+      if (60 % interval !== 0) {
+        return unsupported(
+          "non-unit-interval",
+          "cron minute steps would change the interval at hour boundaries",
+        );
+      }
+
+      const minuteField = interval === 60 ? "0" : interval === 1 ? "*" : `*/${interval}`;
 
       return supported(`${minuteField} * * * *`);
     }
 
     case "hour": {
-      const hourField = interval === 1 ? "*" : `*/${interval}`;
+      if (24 % interval !== 0) {
+        return unsupported(
+          "non-unit-interval",
+          "cron hour steps would change the interval at day boundaries",
+        );
+      }
+
+      const hourField = interval === 24 ? "0" : interval === 1 ? "*" : `*/${interval}`;
 
       return supported(`${minute} ${hourField} * * *`);
     }
