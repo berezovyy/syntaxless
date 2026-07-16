@@ -1,58 +1,63 @@
-/** Internal build entry used by the artifact promotion gate.
- *
- * This file is not part of the package export map. It exposes the exact
- * code-split tokenizer and inference functions used by the public parser so a
- * candidate weights module can be evaluated without a second implementation.
- */
-export { inferTokens } from "./inference.js";
-export { LABELS } from "./labels.js";
-export { tokenize } from "./tokenizer.js";
-export { weights } from "./weights.gen.js";
-
+/** Internal build entry for scoring artifacts with the shipped parser and compiler. */
+import { compile } from "../compiler/cron.js";
 import { decodeIntent } from "../parser/decode.js";
 import type { OverlayMode } from "../parser/decode.js";
+import { labelTokensFromPredictions, parsePrediction } from "../parser/model.js";
 import { normalize } from "../parser/normalize.js";
-import { inferTokens } from "./inference.js";
+import type { WeightsArtifact } from "./decode.js";
+import { createInference } from "./inference.js";
+import { LABELS } from "./labels.js";
 import { SCHEDULE_KINDS } from "./schedule-kinds.js";
-import { speechActFromId } from "./speech-acts.js";
 import { tokenize } from "./tokenizer.js";
+import { weights } from "./weights.gen.js";
 
-/** Decode before the public confidence floor. Internal evaluation only: this
- * exposes whether a rejection hid a correct proposal without weakening the
- * public parser's fail-closed contract. Public decode is heads-only: a missing
- * speech-act head fails closed rather than falling back to overlay regex. */
-export function decodeRaw(text: string, overlay: OverlayMode = "off") {
-  const tokens = tokenize(normalize(text));
-  const predictions = inferTokens(tokens);
+export { compile, LABELS, tokenize, weights };
 
-  const scheduleKind =
-    predictions.scheduleKind === undefined || predictions.scheduleKindScore === undefined
-      ? undefined
-      : {
-          kind: SCHEDULE_KINDS[predictions.scheduleKind]!,
-          score: predictions.scheduleKindScore,
-        };
+/** One artifact supplies inference, calibrated parsing, and raw proposal decoding. */
+export function createEvaluation(artifact: WeightsArtifact) {
+  const engine = createInference(artifact);
 
-  if (predictions.speechAct === undefined) {
-    throw new RangeError("decodeRaw: heads-only requires a speech-act head");
-  }
+  return {
+    weights: artifact,
+    LABELS,
+    tokenize,
+    compile,
+    inferTokens: engine.inferTokens,
+    predict(text: string) {
+      const normalized = normalize(text);
+      const tokens = tokenize(normalized);
+      const predictions = engine.inferTokens(tokens, true);
+      const labeled = labelTokensFromPredictions(tokens, predictions);
 
-  const speechAct = speechActFromId(predictions.speechAct);
+      const scheduleKind =
+        predictions.scheduleKind === undefined || predictions.scheduleKindScore === undefined
+          ? undefined
+          : {
+              kind: SCHEDULE_KINDS[predictions.scheduleKind]!,
+              score: predictions.scheduleKindScore,
+            };
 
-  return decodeIntent(
-    tokens.map((token, index) => ({
-      token,
-      role: predictions.labels[index]!,
-      boundary: predictions.boundaries[index]! === 1,
-      score: predictions.scores[index]!,
-      boundaryScore: predictions.boundaryScores[index]!,
-      ...(predictions.actionable === undefined
-        ? {}
-        : { actionable: predictions.actionable[index] === 1 }),
-    })),
-    scheduleKind,
-    text,
-    overlay,
-    speechAct,
-  );
+      return {
+        normalized,
+        tokens,
+        predictions,
+        parse: (options?: { overlay?: OverlayMode }) =>
+          parsePrediction(normalized, engine, predictions, labeled, options),
+        // Raw inspection uses the full speech head and original text, before calibration.
+        decodeRaw(overlay: OverlayMode = "off") {
+          if (predictions.speechAct === undefined) {
+            throw new RangeError("decodeRaw: heads-only requires a speech-act head");
+          }
+
+          return decodeIntent(
+            labeled,
+            scheduleKind,
+            text,
+            overlay,
+            engine.predictedSpeechAct(predictions.speechAct),
+          );
+        },
+      };
+    },
+  };
 }
