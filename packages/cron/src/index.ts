@@ -1,6 +1,7 @@
 export type {
   DaySpec,
   FrequencyUnit,
+  MinuteOfHour,
   Ordinal,
   OrdinalWeekday,
   RecurrenceBounds,
@@ -9,6 +10,30 @@ export type {
   TimeOfDay,
   Weekday,
 } from "./types/intent.js";
+
+export { validate } from "./validate.js";
+export { explain } from "./explain.js";
+export { clarify, resolveClarification } from "./clarify.js";
+export type { ScheduleClarification, ClarificationAnswer } from "./clarify.js";
+export { IntentError } from "./types/errors.js";
+export type { IntentFailureCode } from "./types/errors.js";
+
+export { recurrences } from "./recurrence/index.js";
+
+export type {
+  Occurrence,
+  RecurrenceOptions,
+  RecurrencePolicies,
+  RecurrenceResult,
+} from "./recurrence/index.js";
+
+export { RecurrenceError } from "./recurrence/calendar.js";
+
+export type {
+  LocalDateTime,
+  RecurrenceCalendar,
+  RecurrenceFailureCode,
+} from "./recurrence/calendar.js";
 
 export { compile, compileWeekdays, WEEKDAY_NUMBER } from "./compiler/index.js";
 export type { CompileFailureCode, CompileResult } from "./compiler/index.js";
@@ -27,6 +52,8 @@ export type {
 export { getEngine, preload, dispose } from "./model/engine.js";
 export type { EngineConfig, InferenceEngine } from "./model/engine.js";
 
+import { clarify } from "./clarify.js";
+import type { ScheduleClarification } from "./clarify.js";
 import { compile } from "./compiler/index.js";
 import type { CompileFailureCode } from "./compiler/index.js";
 import type { ParseFailureCode } from "./parser/index.js";
@@ -42,6 +69,7 @@ export type CronResult =
       reason: string;
       code: CronFailureCode;
       intent: ScheduleIntent | null;
+      clarification?: ScheduleClarification;
     };
 
 export async function cron(text: string): Promise<CronResult> {
@@ -52,6 +80,7 @@ export async function cron(text: string): Promise<CronResult> {
   }
 
   const result = compile(parsed.intent);
+  const clarification = result.supported ? null : clarify(parsed.intent);
 
   return result.supported
     ? { supported: true, expression: result.expression, intent: parsed.intent }
@@ -60,5 +89,6 @@ export async function cron(text: string): Promise<CronResult> {
         reason: result.reason,
         code: result.code,
         intent: parsed.intent,
+        ...(clarification ? { clarification } : {}),
       };
 }

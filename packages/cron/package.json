@@ -22,6 +22,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./temporal": {
+      "types": "./dist/temporal.d.ts",
+      "import": "./dist/temporal.js",
+      "default": "./dist/temporal.js"
     }
   },
   "scripts": {
@@ -34,6 +39,7 @@
     "test:browser": "bun run build && bun tests/browser.ts"
   },
   "devDependencies": {
+    "@js-temporal/polyfill": "0.5.1",
     "@types/bun": "latest",
     "esbuild": "^0.28.2",
     "playwright": "1.62.0",
