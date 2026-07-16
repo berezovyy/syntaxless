@@ -1,24 +1,17 @@
 import { compile } from "../compiler/cron.js";
-import {
-  validateDayOfMonth,
-  validateInterval,
-  validateOrdinalWeekday,
-  validateTime,
-  validateWeekdays,
-} from "../compiler/validate.js";
 /**
  * Deterministic decoder: predicted token roles -> validated {@link ScheduleIntent}.
  *
- * The label is the value for every closed class. Token text is read only for
- * `*_LIT` labels, and only via `parseInt` (ISO `YYYY-MM-DD` for `DOM_LIT`).
+ * The label supplies every closed-class value. Only `*_LIT` roles read token
+ * digits (ISO `YYYY-MM-DD` for `DOM_LIT`).
  * Out-of-range role ids are a hard {@link UnknownRoleError}.
  */
 import {
   isLiteralLabel,
+  isScheduleLabel,
   isStructural,
   LABEL_COUNT,
   labelFromId,
-  parseLiteralDigits,
   valueOf,
 } from "../model/labels.js";
 import type { BoundKind, DayGroupKind, Label } from "../model/labels.js";
@@ -33,6 +26,7 @@ import {
 import type {
   DaySpec,
   FrequencyUnit,
+  MinuteOfHour,
   Ordinal,
   RecurrenceBounds,
   ScheduleExceptions,
@@ -40,6 +34,7 @@ import type {
   TimeOfDay,
   Weekday,
 } from "../types/intent.js";
+import { intentFailure } from "../validate.js";
 import { WEEKDAY_SEQUENCE } from "./lexicon.js";
 
 /** One token with its predicted role, clause boundary, and margin score. */
@@ -54,7 +49,7 @@ export interface LabeledToken {
   actionable?: boolean;
 }
 
-/** A validated intent plus the weakest margin among its content tokens. */
+/** A validated intent plus the weakest margin of schedule facts and context claims. */
 export interface DecodedIntent {
   intent: ScheduleIntent;
   confidence: number;
@@ -146,20 +141,20 @@ interface Group {
   tokens: RawToken[];
 }
 
-interface ClauseFacts {
+type WeekdaySelector = Weekday | DayGroupKind;
+
+interface ScheduleFacts {
   interval?: number;
   unit?: FrequencyUnit;
-  other: boolean;
-  weekdays: Weekday[];
+  weekdaySelectors: WeekdaySelector[];
   ordinal?: Ordinal;
   dayOfMonth?: number;
   bounds: RecurrenceBounds;
-  hour?: number;
+  hour24?: number;
+  hour12?: number;
   minute?: number;
   meridiem?: "am" | "pm";
-  hourIs24: boolean;
   day?: DaySpec;
-  dayGroup?: DayGroupKind;
   exceptions: ScheduleExceptions;
 }
 
@@ -235,8 +230,12 @@ function weekdayRange(start: Weekday, end: Weekday): Weekday[] {
   return result;
 }
 
-function normalizeWeekdays(days: readonly Weekday[]): Weekday[] {
+function normalizeWeekdays(days: readonly WeekdaySelector[]): Weekday[] {
   const selected = new Set(days);
+
+  for (const group of ["weekday", "weekend", "day"] as const) {
+    if (selected.delete(group)) for (const day of DAYGROUP_WEEKDAYS[group]) selected.add(day);
+  }
 
   return WEEKDAY_SEQUENCE.filter((day) => selected.has(day));
 }
@@ -295,81 +294,114 @@ const DAYGROUP_WEEKDAYS: Record<DayGroupKind, Weekday[]> = {
   day: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
 };
 
+function readLiteralDigits(text: string, label: Label): number {
+  if (!/^\d+$/.test(text)) throw new RangeError(`decodeIntent: invalid ${label} literal`);
+
+  return Number(text);
+}
+
+type ClauseOperator = BoundKind | "except-empty" | "except";
+
+/** Selected scalar facts may repeat, but cannot disagree. */
+function agreeFact<T extends number | string>(previous: T | undefined, value: T, name: string): T {
+  if (previous !== undefined && previous !== value) {
+    throw new RangeError(`decodeIntent: conflicting ${name}`);
+  }
+
+  return value;
+}
+
 function applyDomLiteral(
-  facts: ClauseFacts,
+  facts: ScheduleFacts,
   text: string,
-  pending: BoundKind | null,
-  excluding: boolean,
-): BoundKind | null {
+  operator: ClauseOperator | null,
+): ClauseOperator | null {
   const calendarDate = parseDateLiteral(text);
-  const day = parseLiteralDigits(text);
 
-  if (pending === "start" || pending === "between") {
-    if (calendarDate !== undefined) facts.bounds.start = calendarDate;
+  if (calendarDate === undefined) {
+    if (operator !== null) {
+      throw new RangeError("decodeIntent: bound or exception requires an ISO date");
+    }
 
-    return pending === "between" ? "end-excl" : null;
-  }
-
-  if (pending === "end-excl") {
-    if (calendarDate !== undefined) facts.bounds.end = calendarDate;
-
-    return null;
-  }
-
-  if (pending === "end-incl") {
-    const exclusiveEnd =
-      calendarDate === undefined ? undefined : exclusiveEndFromInclusiveShown(calendarDate);
-
-    if (exclusiveEnd !== undefined) facts.bounds.end = exclusiveEnd;
+    facts.dayOfMonth = agreeFact(
+      facts.dayOfMonth,
+      readLiteralDigits(text, "DOM_LIT"),
+      "dayOfMonth",
+    );
 
     return null;
   }
 
-  if (excluding && calendarDate !== undefined) {
+  if (operator === "start" || operator === "between") {
+    facts.bounds.start = agreeFact(facts.bounds.start, calendarDate, "start");
+
+    return operator === "between" ? "end-excl" : null;
+  }
+
+  if (operator === "end-excl") {
+    facts.bounds.end = agreeFact(facts.bounds.end, calendarDate, "end");
+
+    return null;
+  }
+
+  if (operator === "end-incl") {
+    const exclusiveEnd = exclusiveEndFromInclusiveShown(calendarDate);
+
+    if (exclusiveEnd === undefined) throw new RangeError("decodeIntent: invalid inclusive bound");
+    facts.bounds.end = agreeFact(facts.bounds.end, exclusiveEnd, "end");
+
+    return null;
+  }
+
+  if (operator === "except-empty" || operator === "except") {
     (facts.exceptions.dates ??= []).push(calendarDate);
 
-    return null;
+    return "except";
   }
 
-  if (calendarDate !== undefined) {
-    if (facts.bounds.start === undefined) facts.bounds.start = calendarDate;
-    else facts.bounds.end = calendarDate;
+  if (facts.bounds.start === undefined) facts.bounds.start = calendarDate;
+  else facts.bounds.end = agreeFact(facts.bounds.end, calendarDate, "end");
 
-    return null;
-  }
-
-  if (day !== undefined) facts.dayOfMonth = day;
-
-  return pending;
+  return null;
 }
 
 /**
  * Read one clause's groups into partial facts. Closed labels are the values;
  * `*_LIT` reads digits (and ISO dates for `DOM_LIT`).
  */
-function decodeClause(groups: readonly Group[]): ClauseFacts {
-  const facts: ClauseFacts = {
-    other: false,
-    weekdays: [],
+function decodeClause(groups: readonly Group[]): ScheduleFacts {
+  const facts: ScheduleFacts = {
+    weekdaySelectors: [],
     bounds: {},
     exceptions: {},
-    hourIs24: false,
   };
 
-  let pending: BoundKind | null = null;
-  let excluding = false;
-  let rangeNext = false;
+  // Bounds end after their operands; exceptions retain ownership of their list.
+  let operator: ClauseOperator | null = null;
+  let hourForm: "absolute" | "literal" | undefined;
 
-  const addWeekdays = (days: readonly Weekday[]): void => {
-    if (excluding) (facts.exceptions.weekdays ??= []).push(...days);
-    else facts.weekdays.push(...days);
+  const addWeekdays = (days: readonly WeekdaySelector[]): void => {
+    if (operator === "except-empty" || operator === "except") {
+      (facts.exceptions.weekdays ??= []).push(...normalizeWeekdays(days));
+      operator = "except";
+    } else {
+      facts.weekdaySelectors.push(...days);
+    }
   };
 
   for (let index = 0; index < groups.length; index++) {
     const group = groups[index]!;
     const label = group.label;
-    const text = joinTokens(group.tokens);
     const closed = valueOf(label);
+
+    if (isBoundLabel(label) || label === "EXCEPT") {
+      if (operator !== null && operator !== "except") {
+        throw new RangeError("decodeIntent: incomplete schedule operator");
+      }
+
+      operator = label === "EXCEPT" ? "except-empty" : (closed as BoundKind);
+      continue;
+    }
 
     if (isWeekdayLabel(label)) {
       const start = closed as Weekday | undefined;
@@ -383,130 +415,162 @@ function decodeClause(groups: readonly Group[]): ClauseFacts {
           ? (valueOf(endGroup.label) as Weekday | undefined)
           : undefined;
 
-      const ranged =
-        rangeNext ||
-        (connector !== undefined &&
-          isBoundLabel(connector.label) &&
-          connector.label !== "BOUND_START");
+      const rangeConnector =
+        connector !== undefined &&
+        isBoundLabel(connector.label) &&
+        connector.label !== "BOUND_START";
 
-      if (ranged && end !== undefined) {
+      const bound = operator !== null && operator !== "except-empty" && operator !== "except";
+      const ranged = rangeConnector || (bound && operator !== "start");
+
+      if (ranged) {
+        if (end === undefined || (!rangeConnector && connector?.label !== "GLUE")) {
+          throw new RangeError("decodeIntent: incomplete weekday range");
+        }
+
         addWeekdays(weekdayRange(start, end));
         index += 2;
-        rangeNext = false;
+        if (bound) operator = null;
       } else {
+        if (bound) throw new RangeError("decodeIntent: incomplete schedule operator");
         addWeekdays([start]);
-        rangeNext = false;
       }
 
       continue;
     }
 
     if (label.startsWith("DAYGROUP_")) {
-      const kind = closed as DayGroupKind | undefined;
-
-      if (kind !== undefined) {
-        facts.dayGroup = kind;
-        addWeekdays(DAYGROUP_WEEKDAYS[kind]);
+      if (operator !== null && operator !== "except-empty" && operator !== "except") {
+        throw new RangeError("decodeIntent: incomplete schedule operator");
       }
 
+      const kind = closed as DayGroupKind | undefined;
+
+      if (kind !== undefined) addWeekdays([kind]);
       continue;
     }
 
     if (label.startsWith("ORDINAL_")) {
-      if (closed === "last" || typeof closed === "string") facts.ordinal = closed as Ordinal;
+      if (typeof closed !== "string") throw new RangeError("decodeIntent: unsupported ordinal");
+      facts.ordinal = agreeFact(facts.ordinal, closed as Ordinal, "ordinal");
       continue;
     }
 
     if (label === "DOM_LIT") {
-      pending = applyDomLiteral(facts, text, pending, excluding);
-      continue;
-    }
-
-    if (isBoundLabel(label)) {
-      pending = closed as BoundKind;
-
-      rangeNext =
-        label === "BOUND_BETWEEN" || label === "BOUND_END_INCL" || label === "BOUND_END_EXCL";
-
-      excluding = false;
-      continue;
-    }
-
-    if (label === "EXCEPT") {
-      excluding = true;
+      operator = applyDomLiteral(facts, joinTokens(group.tokens), operator);
       continue;
     }
 
     if (label.startsWith("INTERVAL_")) {
-      const value = isLiteralLabel(label) ? parseLiteralDigits(text) : (closed as number);
+      facts.interval = agreeFact(
+        facts.interval,
+        isLiteralLabel(label)
+          ? readLiteralDigits(joinTokens(group.tokens), label)
+          : (closed as number),
+        "interval",
+      );
 
-      if (value !== undefined) facts.interval = value;
       continue;
     }
 
     if (label.startsWith("HOUR_")) {
       if (isLiteralLabel(label)) {
-        const digits = parseLiteralDigits(text);
-
-        if (digits === undefined) continue;
+        const text = joinTokens(group.tokens);
+        const digits = readLiteralDigits(text, label);
 
         if (text.length >= 3) {
-          facts.hour = Number(text.slice(0, text.length - 2));
-          facts.minute = Number(text.slice(-2));
-          facts.hourIs24 = true;
+          hourForm = "absolute";
+          facts.hour24 = agreeFact(facts.hour24, Number(text.slice(0, text.length - 2)), "hour24");
+          facts.minute = agreeFact(facts.minute, Number(text.slice(-2)), "minute");
         } else {
-          facts.hour = digits;
-          facts.hourIs24 = digits > 12;
+          hourForm = digits > 12 ? "absolute" : "literal";
+          if (digits > 12) facts.hour24 = agreeFact(facts.hour24, digits, "hour24");
+          else facts.hour12 = agreeFact(facts.hour12, digits, "hour12");
         }
       } else if (typeof closed === "number") {
-        facts.hour = closed;
-        facts.hourIs24 = true;
+        hourForm = "absolute";
+        facts.hour24 = agreeFact(facts.hour24, closed, "hour24");
       }
 
       continue;
     }
 
     if (label.startsWith("MINUTE_")) {
-      const value = isLiteralLabel(label) ? parseLiteralDigits(text) : (closed as number);
+      facts.minute = agreeFact(
+        facts.minute,
+        isLiteralLabel(label)
+          ? readLiteralDigits(joinTokens(group.tokens), label)
+          : (closed as number),
+        "minute",
+      );
 
-      if (value !== undefined) facts.minute = value;
       continue;
     }
 
     if (label.startsWith("MERIDIEM_")) {
-      if (closed === "am" || closed === "pm") facts.meridiem = closed;
+      // Closed hours already include clock arithmetic, including midnight carry.
+      if (hourForm !== "absolute" && (closed === "am" || closed === "pm")) {
+        facts.meridiem = agreeFact(facts.meridiem, closed, "meridiem");
+      }
+
       continue;
     }
 
     if (label.startsWith("UNIT_")) {
-      if (typeof closed === "string") facts.unit = closed as FrequencyUnit;
+      if (typeof closed === "string") {
+        facts.unit = agreeFact(facts.unit, closed as FrequencyUnit, "unit");
+      }
+
       continue;
     }
   }
 
-  if (facts.ordinal === "last" && facts.day === undefined) {
-    if (facts.dayGroup === "weekday") {
-      facts.day = { type: "last_business_day" };
+  if (operator !== null && operator !== "except") {
+    throw new RangeError("decodeIntent: incomplete schedule operator");
+  }
+
+  if (facts.hour24 !== undefined && facts.hour12 === undefined) delete facts.meridiem;
+
+  if (facts.ordinal === "last") {
+    const group = facts.weekdaySelectors[0] ?? "day";
+
+    if (
+      (group === "weekday" || group === "day") &&
+      facts.weekdaySelectors.every((selector) => selector === group)
+    ) {
+      facts.day = {
+        type: group === "weekday" ? "last_business_day" : "last_day_of_month",
+      };
+
       delete facts.ordinal;
-      facts.weekdays = [];
-    } else if (facts.weekdays.length === 0) {
-      facts.day = { type: "last_day_of_month" };
-      delete facts.ordinal;
+      facts.weekdaySelectors = [];
     }
   }
 
   return facts;
 }
 
-function resolveTime(
-  hour: number | undefined,
-  minute: number | undefined,
-  meridiem: "am" | "pm" | undefined,
-  hourIs24: boolean,
-): TimeOfDay {
-  if (hourIs24 || meridiem === undefined) return { hour: hour ?? 0, minute: minute ?? 0 };
+function resolveTime(facts: ScheduleFacts, unit: FrequencyUnit): TimeOfDay | MinuteOfHour {
+  const { hour24, hour12, minute, meridiem } = facts;
 
-  return { hour: hour24From12(hour ?? 0, meridiem), minute: minute ?? 0 };
+  if (unit === "hour" && hour24 === undefined && hour12 === undefined && meridiem === undefined) {
+    return { minute: minute ?? 0 };
+  }
+
+  const literalHour =
+    hour12 === undefined
+      ? undefined
+      : meridiem === undefined
+        ? hour12
+        : hour24From12(hour12, meridiem);
+
+  if (hour24 !== undefined && literalHour !== undefined && hour24 !== literalHour) {
+    throw new RangeError("decodeIntent: conflicting hour");
+  }
+
+  const hour = hour24 ?? literalHour ?? (meridiem === undefined ? 0 : hour24From12(0, meridiem));
+
+  return { hour, minute: minute ?? 0 };
 }
 
 function entriesFromLabeled(labeled: readonly LabeledToken[]): Entry[] {
@@ -536,31 +600,48 @@ function clauseIsActionable(clause: readonly Entry[]): boolean {
   let hasContent = false;
 
   for (const entry of clause) {
-    if (entry.label === "O" || isStructural(entry.label)) continue;
+    if (!isScheduleLabel(entry.label) || isStructural(entry.label)) continue;
     hasContent = true;
     if (entry.actionable === true) return true;
   }
 
   if (hasContent) return false;
 
-  return clause.some((entry) => entry.label !== "O" && entry.actionable === true);
+  return clause.some((entry) => isScheduleLabel(entry.label) && entry.actionable === true);
 }
 
-/** Keep structural tokens of a clause whose content is actionable. Never drop glue alone. */
-function selectActionableEntries(entries: readonly Entry[]): Entry[] {
-  if (!entries.some((entry) => entry.actionable !== undefined)) return [...entries];
+/**
+ * Select executable content and retain quantity evidence before filtering.
+ * Missing actionability metadata keeps every entry; otherwise structural tokens
+ * follow active content. Discarded clauses contribute neither facts nor quantities.
+ */
+function selectActionableEntries(entries: readonly Entry[]): {
+  entries: Entry[];
+  unresolvedCount: boolean;
+  unknownDigit: boolean;
+} {
+  const hasActionability = entries.some((entry) => entry.actionable !== undefined);
   const kept: Entry[] = [];
+  let unresolvedCount = false;
+  let unknownDigit = false;
 
   for (const clause of splitClauses(entries)) {
-    if (!clauseIsActionable(clause)) continue;
+    if (hasActionability && !clauseIsActionable(clause)) continue;
 
     for (const entry of clause) {
-      if (entry.label === "O") continue;
-      if (isStructural(entry.label) || entry.actionable === true) kept.push(entry);
+      unresolvedCount ||= entry.label === "COUNT";
+      unknownDigit ||= entry.token.kind === 1 && entry.label === "O";
+
+      if (
+        !hasActionability ||
+        (isScheduleLabel(entry.label) && (isStructural(entry.label) || entry.actionable === true))
+      ) {
+        kept.push(entry);
+      }
     }
   }
 
-  return kept;
+  return { entries: kept, unresolvedCount, unknownDigit };
 }
 
 /**
@@ -588,53 +669,99 @@ export function decodeIntent(
     throw new UnsafeScheduleContextError(speechAct as UnsafeScheduleContextReason);
   }
 
-  const entries = selectActionableEntries(entriesFromLabeled(labeled));
+  const labeledEntries = entriesFromLabeled(labeled);
+  let contextMargin = 1;
+
+  for (const entry of labeledEntries) {
+    if (entry.label !== "CONTEXT_NUMBER") continue;
+
+    if (entry.token.kind !== 1 || entry.actionable === true || entry.boundary) {
+      throw new RangeError("decodeIntent: invalid context-number claim");
+    }
+
+    contextMargin = Math.min(contextMargin, entry.score);
+  }
+
+  const { entries, unresolvedCount, unknownDigit } = selectActionableEntries(labeledEntries);
 
   if (entries.length === 0) throw new UnsafeScheduleContextError("no-actionable-span");
 
-  let interval: number | undefined;
-  let unit: FrequencyUnit | undefined;
-  let other = false;
-  let ordinal: Ordinal | undefined;
-  let dayOfMonth: number | undefined;
-  let hour: number | undefined;
-  let minute: number | undefined;
-  let meridiem: "am" | "pm" | undefined;
-  let hourIs24 = false;
-  let day: DaySpec | undefined;
-  const weekdays: Weekday[] = [];
-  const bounds: RecurrenceBounds = {};
-  const exceptions: ScheduleExceptions = {};
+  const facts: ScheduleFacts = { weekdaySelectors: [], bounds: {}, exceptions: {} };
 
   for (const clause of splitClauses(entries)) {
-    const facts = decodeClause(groupClause(clause));
+    const current = decodeClause(groupClause(clause));
 
-    interval ??= facts.interval;
-    unit ??= facts.unit;
-    other ||= facts.other;
-    weekdays.push(...facts.weekdays);
-    ordinal ??= facts.ordinal;
-    dayOfMonth ??= facts.dayOfMonth;
-
-    if (bounds.start === undefined && facts.bounds.start !== undefined) {
-      bounds.start = facts.bounds.start;
+    if (current.interval !== undefined) {
+      facts.interval = agreeFact(facts.interval, current.interval, "interval");
     }
 
-    if (bounds.end === undefined && facts.bounds.end !== undefined) bounds.end = facts.bounds.end;
-    hour ??= facts.hour;
-    minute ??= facts.minute;
-    meridiem ??= facts.meridiem;
-    hourIs24 = hourIs24 || facts.hourIs24;
-    day ??= facts.day;
+    if (current.unit !== undefined) facts.unit = agreeFact(facts.unit, current.unit, "unit");
 
-    if (facts.exceptions.weekdays !== undefined) {
-      (exceptions.weekdays ??= []).push(...facts.exceptions.weekdays);
+    if (current.ordinal !== undefined) {
+      facts.ordinal = agreeFact(facts.ordinal, current.ordinal, "ordinal");
     }
 
-    if (facts.exceptions.dates !== undefined) {
-      (exceptions.dates ??= []).push(...facts.exceptions.dates);
+    if (current.dayOfMonth !== undefined) {
+      facts.dayOfMonth = agreeFact(facts.dayOfMonth, current.dayOfMonth, "dayOfMonth");
+    }
+
+    if (current.bounds.start !== undefined) {
+      facts.bounds.start = agreeFact(facts.bounds.start, current.bounds.start, "start");
+    }
+
+    if (current.bounds.end !== undefined) {
+      facts.bounds.end = agreeFact(facts.bounds.end, current.bounds.end, "end");
+    }
+
+    if (current.hour24 !== undefined) {
+      facts.hour24 = agreeFact(facts.hour24, current.hour24, "hour24");
+    }
+
+    if (current.hour12 !== undefined) {
+      facts.hour12 = agreeFact(facts.hour12, current.hour12, "hour12");
+    }
+
+    if (current.minute !== undefined) {
+      facts.minute = agreeFact(facts.minute, current.minute, "minute");
+    }
+
+    if (current.meridiem !== undefined) {
+      facts.meridiem = agreeFact(facts.meridiem, current.meridiem, "meridiem");
+    }
+
+    if (current.day !== undefined) {
+      if (facts.day !== undefined && facts.day.type !== current.day.type) {
+        throw new RangeError("decodeIntent: conflicting day");
+      }
+
+      facts.day = current.day;
+    }
+
+    facts.weekdaySelectors.push(...current.weekdaySelectors);
+
+    if (current.exceptions.weekdays !== undefined) {
+      (facts.exceptions.weekdays ??= []).push(...current.exceptions.weekdays);
+    }
+
+    if (current.exceptions.dates !== undefined) {
+      (facts.exceptions.dates ??= []).push(...current.exceptions.dates);
     }
   }
+
+  const {
+    interval,
+    unit,
+    ordinal,
+    dayOfMonth,
+    hour24,
+    hour12,
+    minute,
+    meridiem,
+    day,
+    weekdaySelectors,
+    bounds,
+    exceptions,
+  } = facts;
 
   const text = joinEntries(entries);
 
@@ -645,30 +772,40 @@ export function decodeIntent(
       resolvedUnit = "month";
     } else if (dayOfMonth !== undefined) {
       resolvedUnit = "month";
-    } else if (weekdays.length > 0) {
+    } else if (weekdaySelectors.length > 0) {
       resolvedUnit = "week";
     } else if (bounds.start !== undefined || bounds.end !== undefined) {
       resolvedUnit = "day";
-    } else if (hour !== undefined || minute !== undefined || meridiem !== undefined) {
+    } else if (
+      hour24 !== undefined ||
+      hour12 !== undefined ||
+      minute !== undefined ||
+      meridiem !== undefined
+    ) {
       resolvedUnit = "day";
     }
   }
 
   if (resolvedUnit === undefined) throw new RangeError("decodeIntent: no recognizable schedule");
 
-  const resolvedInterval = other ? 2 : (interval ?? 1);
+  if (unresolvedCount || (unknownDigit && interval === undefined)) {
+    throw new RangeError("decodeIntent: uncounted quantity");
+  }
 
   const intent: ScheduleIntent = {
-    frequency: { unit: resolvedUnit, interval: resolvedInterval },
+    frequency: { unit: resolvedUnit, interval: interval ?? 1 },
   };
 
   if (ordinal !== undefined) {
-    const weekday = normalizeWeekdays(weekdays)[0];
+    const weekdays = normalizeWeekdays(weekdaySelectors);
 
-    if (weekday === undefined) throw new RangeError("decodeIntent: ordinal without a weekday");
-    intent.ordinalWeekday = { ordinal, weekday };
-  } else if (weekdays.length > 0) {
-    intent.weekdays = normalizeWeekdays(weekdays);
+    if (weekdays.length !== 1) {
+      throw new RangeError("decodeIntent: ordinal requires exactly one weekday");
+    }
+
+    intent.ordinalWeekday = { ordinal, weekday: weekdays[0]! };
+  } else if (weekdaySelectors.length > 0) {
+    intent.weekdays = normalizeWeekdays(weekdaySelectors);
   }
 
   if (dayOfMonth !== undefined) intent.dayOfMonth = dayOfMonth;
@@ -683,8 +820,13 @@ export function decodeIntent(
     intent.exceptions = exceptions;
   }
 
-  if (hour !== undefined || minute !== undefined || meridiem !== undefined) {
-    intent.time = resolveTime(hour, minute, meridiem, hourIs24);
+  if (
+    hour24 !== undefined ||
+    hour12 !== undefined ||
+    minute !== undefined ||
+    meridiem !== undefined
+  ) {
+    intent.time = resolveTime(facts, resolvedUnit);
   }
 
   const monthlySelectors =
@@ -720,20 +862,15 @@ export function decodeIntent(
       (scheduleKind.kind === "bounded" && intent.bounds !== undefined) ||
       (scheduleKind.kind === "exception" && intent.exceptions !== undefined));
 
-  const failure =
-    validateInterval(intent.frequency.unit, intent.frequency.interval) ??
-    validateTime(intent.time) ??
-    validateWeekdays(intent.weekdays) ??
-    validateDayOfMonth(intent.dayOfMonth) ??
-    validateOrdinalWeekday(intent.ordinalWeekday);
+  const failure = intentFailure(intent);
 
   if (failure !== null) throw new RangeError(failure.reason);
 
-  let tokenMargin = 1;
+  let tokenMargin = contextMargin;
   let boundaryMargin = 1;
 
   for (const entry of entries) {
-    if (entry.label === "O" || isStructural(entry.label)) continue;
+    if (!isScheduleLabel(entry.label) || isStructural(entry.label)) continue;
     tokenMargin = Math.min(tokenMargin, entry.score);
     boundaryMargin = Math.min(boundaryMargin, entry.boundaryScore);
   }

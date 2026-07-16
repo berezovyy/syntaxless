@@ -5,6 +5,7 @@ import type {
   TimeOfDay,
   Weekday,
 } from "../types/intent.js";
+import { intentFailure } from "../validate.js";
 import {
   ADVERB_FREQUENCIES,
   NUMBER_WORDS,
@@ -293,7 +294,7 @@ async function parseWithRules(text: string): Promise<ParseResult> {
       continue;
     }
 
-    const numeric = NUMBER_WORDS[next] ?? (/^\d{1,3}$/.test(next) ? Number(next) : undefined);
+    const numeric = NUMBER_WORDS[next] ?? (/^\d+$/.test(next) ? Number(next) : undefined);
 
     if (numeric !== undefined) {
       const intervalUnit = tokens[i + 2] === undefined ? undefined : UNIT_ALIASES[tokens[i + 2]!];
@@ -340,8 +341,8 @@ async function parseWithRules(text: string): Promise<ParseResult> {
       continue;
     }
 
-    if (frequency.unit !== candidate.unit) {
-      return fail("conflicting-selectors", "multiple frequency units were specified");
+    if (frequency.unit !== candidate.unit || frequency.interval !== candidate.interval) {
+      return fail("conflicting-selectors", "conflicting recurrence frequencies were specified");
     }
   }
 
@@ -386,6 +387,17 @@ async function parseWithRules(text: string): Promise<ParseResult> {
   if (foundWeekdays.length > 0) intent.weekdays = normalizeWeekdayList(foundWeekdays);
   if (dayOfMonth !== null) intent.dayOfMonth = dayOfMonth;
   if (ordinalWeekday !== null) intent.ordinalWeekday = ordinalWeekday;
+
+  const failure = intentFailure(intent);
+
+  if (failure !== null) {
+    return fail(
+      failure.code === "invalid-interval" ? "unrecognized-interval" : "conflicting-selectors",
+      failure.reason,
+      "rules",
+      [{ code: failure.code, severity: "error", message: failure.reason }],
+    );
+  }
 
   return { ok: true, intent, confidence: 1, diagnostics: [], source: "rules" };
 }

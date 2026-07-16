@@ -1,22 +1,14 @@
-/**
- * Model-backed parser: tokenize (Phase 07) -> infer (Phase 16) ->
- * `decodeIntent` (Phase 17) -> the additive {@link ParseResult}.
- *
- * The model predicts roles, boundaries, and the actionable span. Track F
- * drops pooled schedule-kind / speech-act heads: refuse is calibrated energy,
- * not a 9-way classifier. A role id outside the label vocabulary is a hard
- * {@link UnknownRoleError}. Overlay-on is not a regex scaffold.
- */
+/** Model-backed parsing: tokenize, infer, apply calibration, decode the intent. */
 import { getEngine } from "../model/engine.js";
-import type { EngineConfig } from "../model/engine.js";
+import type { EngineConfig, InferenceEngine } from "../model/engine.js";
 import type { Predictions } from "../model/inference.js";
-import { isStructural, labelFromId } from "../model/labels.js";
+import { isScheduleLabel, isStructural, labelFromId } from "../model/labels.js";
 import type { Label } from "../model/labels.js";
 import type { ScheduleKind } from "../model/schedule-kinds.js";
 import type { SpeechAct } from "../model/speech-acts.js";
 import { tokenize } from "../model/tokenizer.js";
 import type { RawToken } from "../model/tokenizer.js";
-import { mahalanobisDiag, rejectOnAbstainScore, sequenceEnergy } from "./abstain.js";
+import { mahalanobisDiag, sequenceEnergy } from "./abstain.js";
 import { classifyConfidence } from "./confidence.js";
 import { decodeIntent, UnknownRoleError, UnsafeScheduleContextError } from "./decode.js";
 import type { LabeledToken, OverlayMode } from "./decode.js";
@@ -41,8 +33,8 @@ export interface ModelParserOptions {
 
 /**
  * Build the decoder's input from tokens and one forward pass. Pure: the
- * predictions are supplied by the caller, so this module never imports the
- * inference engine.
+ * predictions are supplied by the caller; this operation never initializes or
+ * runs the inference engine.
  */
 export function labelTokensFromPredictions(
   tokens: readonly RawToken[],
@@ -60,12 +52,7 @@ export function labelTokensFromPredictions(
   }));
 }
 
-/**
- * Map labeled tokens onto the extended result. Split out from
- * {@link parseWithModel} so the role-validation and confidence mapping are pure
- * and testable without running the engine.
- */
-/** Speech-act from span labels, not the pooled classifier (Track F.1). */
+/** Legacy artifacts derive request/refusal from actionable content labels. */
 export function speechActFromSpanLabels(labeled: readonly LabeledToken[]): SpeechAct {
   for (const item of labeled) {
     if (item.token.kind === 3) continue;
@@ -77,7 +64,7 @@ export function speechActFromSpanLabels(labeled: readonly LabeledToken[]): Speec
       continue;
     }
 
-    if (label === "O" || isStructural(label)) continue;
+    if (!isScheduleLabel(label) || isStructural(label)) continue;
     if (item.actionable !== false) return "request";
   }
 
@@ -92,15 +79,8 @@ export function energyFromPredictions(predictions: Predictions): number {
   const classes = Math.trunc(logits.length / width);
 
   if (classes < 1) return 0;
-  const rows: number[][] = [];
-  const roles: number[] = [];
 
-  for (let index = 0; index < width; index++) {
-    rows.push(Array.from(logits.subarray(index * classes, (index + 1) * classes)));
-    roles.push(predictions.labels[index]!);
-  }
-
-  return sequenceEnergy(rows, roles);
+  return sequenceEnergy(logits, predictions.labels, classes);
 }
 
 export function mahalanobisFromPredictions(
@@ -115,40 +95,48 @@ export function mahalanobisFromPredictions(
   return mahalanobisDiag(predictions.pooled, mean, variance);
 }
 
-/** Shipped reject path for Track F: calibrated energy, not the speech-act head. */
-export function rejectWithCalibratedEnergy(
+/** Apply artifact-owned energy and Mahalanobis rejection thresholds. */
+export function calibratedRejection(
   energy: number,
   threshold: number | undefined,
   mahalanobis?: number,
   mahalanobisThreshold?: number,
 ): ParseResult | undefined {
-  if (
-    !rejectOnAbstainScore({
-      energy,
-      energyThreshold: threshold,
-      ...(mahalanobis === undefined ? {} : { mahalanobis }),
-      ...(mahalanobisThreshold === undefined ? {} : { mahalanobisThreshold }),
-    })
-  ) {
-    return undefined;
+  let metric = "energy";
+  let value = energy;
+  let cutoff = threshold;
+
+  if (cutoff === undefined || !(value > cutoff)) {
+    if (
+      mahalanobis === undefined ||
+      mahalanobisThreshold === undefined ||
+      !(mahalanobis > mahalanobisThreshold)
+    ) {
+      return undefined;
+    }
+
+    metric = "Mahalanobis distance";
+    value = mahalanobis;
+    cutoff = mahalanobisThreshold;
   }
 
   return {
     ok: false,
-    reason: `abstain energy ${energy.toFixed(4)} exceeds ${threshold}`,
+    reason: `abstain ${metric} ${value.toFixed(4)} exceeds ${cutoff}`,
     code: "unsafe-context",
     confidence: 0,
     diagnostics: [
       {
         code: "calibrated-abstain",
         severity: "warning",
-        message: "sequence energy exceeded the conformal threshold",
+        message: `${metric === "energy" ? "sequence energy" : metric} exceeded the conformal threshold`,
       },
     ],
     source: "model",
   };
 }
 
+/** Resolve labeled tokens without initializing or running an inference engine. */
 export function resultFromLabeledTokens(
   labeled: readonly LabeledToken[],
   scheduleKind?: { kind: ScheduleKind; score: number },
@@ -247,7 +235,6 @@ export async function parseWithModel(
   text: string,
   options?: ModelParserOptions,
 ): Promise<ParseResult> {
-  const overlay = options?.overlay ?? "off";
   const normalized = normalize(text);
 
   if (normalized.length === 0) {
@@ -268,44 +255,68 @@ export async function parseWithModel(
   const tokens = tokenize(normalized);
   const predictions = engine.inferTokens(tokens, true);
   const labeled = labelTokensFromPredictions(tokens, predictions);
-  const inference = await import("../model/inference.js");
-  const threshold = options?.energyThreshold ?? inference.ENERGY_THRESHOLD;
 
-  const abstain = rejectWithCalibratedEnergy(
+  return parsePrediction(normalized, engine, predictions, labeled, options);
+}
+
+/** Interpret one prediction using the owning engine's calibration and speech policy. */
+export function parsePrediction(
+  normalized: string,
+  engine: InferenceEngine,
+  predictions: Predictions,
+  labeled: readonly LabeledToken[],
+  options?: Pick<ModelParserOptions, "overlay" | "energyThreshold">,
+): ParseResult {
+  if (normalized.length === 0) {
+    return {
+      ok: false,
+      reason: "empty input",
+      code: "empty",
+      confidence: 0,
+      diagnostics: [],
+      source: "model",
+    };
+  }
+
+  const overlay = options?.overlay ?? "off";
+
+  const speechAct =
+    engine.decisionHead && predictions.speechAct !== undefined
+      ? engine.predictedSpeechAct(predictions.speechAct)
+      : speechActFromSpanLabels(labeled);
+
+  const calibration = engine.calibration;
+  const threshold = options?.energyThreshold ?? calibration.energyThreshold;
+
+  const abstain = calibratedRejection(
     energyFromPredictions(predictions),
     threshold,
     mahalanobisFromPredictions(
       predictions,
-      inference.MAHALANOBIS_MEAN,
-      inference.MAHALANOBIS_VARIANCE,
+      calibration.mahalanobisMean,
+      calibration.mahalanobisVariance,
     ),
-    inference.MAHALANOBIS_THRESHOLD,
+    calibration.mahalanobisThreshold,
   );
 
   if (abstain !== undefined) return abstain;
 
-  if (options?.weights === undefined && !inference.WEIGHTS_MATCH_LABELS) {
+  if (!engine.weightsMatchLabels) {
     return {
       ok: false,
-      reason: "bundled weights do not match the typed label vocabulary",
+      reason: "weights do not match the typed label vocabulary",
       code: "model-error",
       confidence: 0,
       diagnostics: [
         {
           code: "stale-weights",
           severity: "error",
-          message: "bundled weights do not match the typed label vocabulary",
+          message: "weights do not match the typed label vocabulary",
         },
       ],
       source: "model",
     };
   }
 
-  return resultFromLabeledTokens(
-    labeled,
-    undefined,
-    text,
-    overlay,
-    speechActFromSpanLabels(labeled),
-  );
+  return resultFromLabeledTokens(labeled, undefined, normalized, overlay, speechAct);
 }
