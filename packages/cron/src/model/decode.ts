@@ -1,5 +1,5 @@
 /**
- * Typed-array decoder for the hash-verified int6 weight artifact.
+ * Typed-array decoder for the int6 weight artifact.
  *
  * The generated `weights.gen.ts` module is a pure data literal. This decoder
  * validates its layout and turns the packed symbol string into one
@@ -56,7 +56,8 @@ function shapeSize(shape: readonly number[]): number {
  *
  * Every segment must be a unique, in-bounds, non-overlapping range whose shape
  * product equals its declared length, and every symbol must belong to the
- * alphabet. Any violation is an error.
+ * alphabet. Decoded values must remain finite in Float32 storage. Any violation
+ * is an error.
  */
 export function decodeWeights(weights: WeightsArtifact): Map<string, Float32Array> {
   if (weights.version !== EXPECTED_VERSION) {
@@ -126,6 +127,11 @@ export function decodeWeights(weights: WeightsArtifact): Map<string, Float32Arra
 
       used[offset + index] = 1;
       values[index] = (symbolIndex - SYMBOL_BIAS) * scale;
+
+      if (!Number.isFinite(values[index])) {
+        throw new RangeError(`segment ${name}: value ${index} overflows Float32`);
+      }
+
       index += 1;
     }
 

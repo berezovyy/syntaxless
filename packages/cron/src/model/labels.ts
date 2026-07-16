@@ -1,6 +1,6 @@
 /**
  * Typed-value label vocabulary. The label *is* the value for every closed
- * class; the decoder never reads token text except `parseInt` on `*_LIT`.
+ * class; only `*_LIT` values come from token digits or ISO dates.
  *
  * Never reorder `LABELS`. There are no reserved slots: every id is in
  * `[0, LABEL_COUNT)`. An out-of-range predicted id is a hard error.
@@ -97,11 +97,22 @@ export const LABELS = [
   "INTERVAL_12",
   "INTERVAL_LIT",
   "DOM_LIT",
+  // An explicitly irrelevant number, not an unknown/missing schedule operand.
+  "CONTEXT_NUMBER",
 ] as const;
 
 export type Label = (typeof LABELS)[number];
 
 export const LABEL_COUNT = LABELS.length;
+
+/** Exact typed vocabularies: shipped 77-class artifacts and the appended context role. */
+export function isTypedVocabulary(labels: readonly string[], classes: number): boolean {
+  return (
+    (classes === LABEL_COUNT || classes === 77) &&
+    labels.length === classes &&
+    labels.every((label, id) => label === LABELS[id])
+  );
+}
 
 export const labelId = Object.fromEntries(LABELS.map((name, id) => [name, id])) as Record<
   Label,
@@ -125,19 +136,24 @@ export const STRUCTURAL_LABELS = [
 export type StructuralLabel = (typeof STRUCTURAL_LABELS)[number];
 
 export const CONTENT_LABELS = LABELS.filter(
-  (label) => label !== "O" && !(STRUCTURAL_LABELS as readonly string[]).includes(label),
+  (label) => isScheduleLabel(label) && !(STRUCTURAL_LABELS as readonly string[]).includes(label),
 ) as readonly Label[];
 
 export type ContentLabel = (typeof CONTENT_LABELS)[number];
 
 const STRUCTURAL_SET: ReadonlySet<string> = new Set(STRUCTURAL_LABELS);
 
+/** A role belonging to a mentioned schedule, including its structural tokens. */
+export function isScheduleLabel(label: string): boolean {
+  return label !== "O" && label !== "CONTEXT_NUMBER";
+}
+
 /** True when `label` is literal filler rather than a value slot. */
 export function isStructural(label: Label): boolean {
   return STRUCTURAL_SET.has(label);
 }
 
-/** True when the value is the token's digits (`parseInt` only). */
+/** True when the value comes from the token's digits or ISO date. */
 export function isLiteralLabel(label: Label): boolean {
   return label.endsWith("_LIT");
 }
@@ -250,8 +266,8 @@ for (let interval = 2; interval <= 12; interval++) {
 
 /**
  * Closed-class value for `label`. `*_LIT`, `O`, `RECUR`, `GLUE`, `EDGE`,
- * `COUNT`, and `EXCEPT` have no closed value — literals are `parseInt` of
- * the token digits.
+ * `COUNT`, and `EXCEPT` have no closed value. Literal values come from token
+ * digits or an ISO date.
  */
 export function valueOf(label: Label): LabelValue | undefined {
   return CLOSED_VALUES[label];
@@ -316,11 +332,4 @@ export function boundLabel(kind: BoundKind): Label {
 
 export function dayGroupLabel(kind: DayGroupKind): Label {
   return DAYGROUP_TO_LABEL[kind];
-}
-
-/** Digits-only parse used by `*_LIT` labels. No alias tables. */
-export function parseLiteralDigits(text: string): number | undefined {
-  if (!/^\d+$/.test(text)) return undefined;
-
-  return Number(text);
 }

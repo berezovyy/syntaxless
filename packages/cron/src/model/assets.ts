@@ -1,17 +1,5 @@
+/** Decode caller-provided artifact bytes without loading the bundled model. */
 import type { WeightsArtifact } from "./decode.js";
-/**
- * Model asset policy.
- *
- * The default bytes are the bundled Phase 15 `weights.gen.ts` artifact, so the
- * package works offline with no third-party CDN. A caller that self-hosts the
- * weights can override the default with `config.weights`, a `Uint8Array` that
- * decodes to a {@link WeightsArtifact}. Every resolved artifact is checked
- * against {@link WEIGHTS_FORMAT_VERSION}; a mismatch is a hard error and never
- * a silent mis-decode.
- *
- * Data only: no session, no fetch, no browser globals, no top-level await.
- */
-import { weights as bundledWeights } from "./weights.gen.js";
 
 /** Version of the weight artifact this runtime understands. */
 export const WEIGHTS_FORMAT_VERSION = 1;
@@ -69,17 +57,4 @@ export function decodeWeightsBytes(bytes: Uint8Array): WeightsArtifact {
   }
 
   return artifact as WeightsArtifact;
-}
-
-/**
- * Resolve the artifact to load: the bundled default, or the caller's bytes.
- * The format version is validated here so a mismatch fails before any decode
- * work happens.
- */
-export function resolveWeights(override?: Uint8Array): WeightsArtifact {
-  const artifact = override === undefined ? bundledWeights : decodeWeightsBytes(override);
-
-  assertFormatVersion(artifact);
-
-  return artifact;
 }

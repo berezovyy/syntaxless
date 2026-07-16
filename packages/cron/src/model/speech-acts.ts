@@ -22,6 +22,15 @@ export type SpeechAct = (typeof SPEECH_ACTS)[number];
 
 export const SPEECH_ACT_COUNT = SPEECH_ACTS.length;
 
+/** Decision head. `other` refuses. Corpus speech acts collapse into these three. */
+export const DECISION_ACTS = ["request", "correction", "other"] as const;
+
+export function isDecisionVocabulary(labels: readonly string[]): boolean {
+  return (
+    labels.length === DECISION_ACTS.length && DECISION_ACTS.every((name, id) => labels[id] === name)
+  );
+}
+
 export const speechActId = Object.fromEntries(SPEECH_ACTS.map((name, id) => [name, id])) as Record<
   SpeechAct,
   number
