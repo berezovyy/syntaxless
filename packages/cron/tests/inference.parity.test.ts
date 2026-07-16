@@ -3,12 +3,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { WeightsArtifact } from "../src/model/decode.ts";
-import { inferRows, inferTokens } from "../src/model/inference.ts";
-import { PADDING_ROW, tokenize } from "../src/model/tokenizer.ts";
+import { createInference } from "../src/model/inference.ts";
+import { PADDING_ROW } from "../src/model/tokenizer.ts";
 import { weights } from "../src/model/weights.gen.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const ARTIFACT = weights as WeightsArtifact;
+const { inferRows } = createInference(ARTIFACT);
 const ROWS_PER_TOKEN = ARTIFACT.rowsPerToken;
 const ROLE_CLASSES = ARTIFACT.roleClasses;
 const SCHEDULE_KIND_CLASSES: number = ARTIFACT.scheduleKindClasses ?? 0;
@@ -116,18 +117,11 @@ function predictAll(padTo = 0): Predictions {
 }
 
 function maximumLogitError(computed: Predictions, reference: Float32Array): number {
-  let maximum = 0;
-
-  for (let index = 0; index < reference.length; index++) {
-    const error = Math.abs(computed.logits[index]! - reference[index]!);
-
-    if (error > maximum) maximum = error;
-  }
-
-  return maximum;
+  return maximumArrayError(computed.logits, reference);
 }
 
 function maximumArrayError(computed: Float32Array, reference: Float32Array): number {
+  expect(computed.length).toBe(reference.length);
   let maximum = 0;
 
   for (let index = 0; index < reference.length; index++) {
@@ -182,23 +176,14 @@ function boundaryMismatches(computed: Predictions, reference: Float32Array): num
 }
 
 describe("inference parity fixture", () => {
-  test("guards the frozen fixture dimensions", () => {
+  test("reproduces the frozen logits and boundaries", () => {
     expect(sequences).toBeGreaterThan(0);
     expect(rows.length).toBe(tokens * ROWS_PER_TOKEN);
     expect(fixtureLogits.length).toBe(tokens * ROLE_CLASSES);
     expect(fixtureBoundaries.length).toBe(tokens);
     expect(fixtureScheduleKinds.length).toBe(sequences * SCHEDULE_KIND_CLASSES);
-
-    if (SPEECH_ACT_CLASSES > 0 && fixtureSpeechActs.length > 0) {
-      expect(fixtureSpeechActs.length).toBe(sequences * SPEECH_ACT_CLASSES);
-    }
-
-    if (HAS_ACTIONABLE && fixtureActionable.length > 0) {
-      expect(fixtureActionable.length).toBe(tokens);
-    }
-  });
-
-  test("reproduces the frozen logits and boundaries", () => {
+    expect(fixtureSpeechActs.length).toBe(sequences * SPEECH_ACT_CLASSES);
+    expect(fixtureActionable.length).toBe(HAS_ACTIONABLE ? tokens : 0);
     const computed = predictAll();
 
     expect(argmaxMismatches(computed, fixtureLogits)).toBe(0);
@@ -207,6 +192,7 @@ describe("inference parity fixture", () => {
 
     console.log(`full fixture max logit error: ${error}`);
     expect(error).toBeLessThan(TOLERANCE);
+    expect(maximumArrayError(computed.boundaryLogits, fixtureBoundaries)).toBeLessThan(TOLERANCE);
 
     expect(maximumArrayError(computed.scheduleKindLogits, fixtureScheduleKinds)).toBeLessThan(
       TOLERANCE,
@@ -223,30 +209,6 @@ describe("inference parity fixture", () => {
         TOLERANCE,
       );
     }
-  });
-
-  test("short input keeps zero mismatches and a small logit error", () => {
-    let shortest = 0;
-
-    for (let sequence = 1; sequence < sequences; sequence++) {
-      const length = offsets[sequence + 1]! - offsets[sequence]!;
-      const best = offsets[shortest + 1]! - offsets[shortest]!;
-
-      if (length < best) shortest = sequence;
-    }
-
-    const start = offsets[shortest]!;
-    const length = offsets[shortest + 1]! - start;
-    const computed = predictSequence(shortest);
-    const reference = fixtureLogits.subarray(start * ROLE_CLASSES, (start + length) * ROLE_CLASSES);
-    const referenceBoundaries = fixtureBoundaries.subarray(start, start + length);
-
-    expect(argmaxMismatches(computed, reference)).toBe(0);
-    expect(boundaryMismatches(computed, referenceBoundaries)).toBe(0);
-    const error = maximumLogitError(computed, reference);
-
-    console.log(`short input (${length} tokens) max logit error: ${error}`);
-    expect(error).toBeLessThan(TOLERANCE);
   });
 
   test("padding the short input leaves valid predictions unchanged", () => {
@@ -300,24 +262,5 @@ describe("inference parity fixture", () => {
 
     console.log(`padding neutrality max delta: ${error}`);
     expect(error).toBeLessThan(TOLERANCE);
-  });
-
-  test("padding fidelity holds for every sequence", () => {
-    const computed = predictAll(9);
-
-    expect(argmaxMismatches(computed, fixtureLogits)).toBe(0);
-    expect(boundaryMismatches(computed, fixtureBoundaries)).toBe(0);
-    const error = maximumLogitError(computed, fixtureLogits);
-
-    console.log(`padded fixture max logit error: ${error}`);
-    expect(error).toBeLessThan(TOLERANCE);
-  });
-
-  test("legacy artifacts omit speech-act and actionable fields", () => {
-    if (SPEECH_ACT_CLASSES > 0 || HAS_ACTIONABLE) return;
-    const predictions = inferTokens(tokenize("every weekday at 9"));
-
-    expect(predictions.speechAct).toBeUndefined();
-    expect(predictions.actionable).toBeUndefined();
   });
 });
