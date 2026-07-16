@@ -46,6 +46,24 @@ const NGRAMS_PER_SIZE = 5;
 const NGRAM_OFFSETS = { 2: 580, 3: 644, 4: 708 } as const;
 
 /**
+ * Disjoint row ranges inside the summed feature bag. Slot order in `featureRows` is stable:
+ * word hash is slot 4, consonant hash slot 5, number bucket slot 8.
+ */
+export const WORD_HASH_ROW0 = 140;
+export const WORD_HASH_COUNT = 256;
+export const CONSONANT_HASH_ROW0 = 396;
+export const CONSONANT_HASH_COUNT = 128;
+export const NUMBER_BUCKET_ROW0 = 564;
+export const NUMBER_BUCKET_COUNT = 16;
+/** Dedicated lexical table. Wider than the 8-bit row hash, computed from the token string. */
+export const LEXICAL_BUCKETS = 4096;
+
+/** 12-bit identity of the lowercased token. Shared by the sidecar and inference. */
+export function lexicalBucket(text: string): number {
+  return hash(text.toLowerCase()) % LEXICAL_BUCKETS;
+}
+
+/**
  * Keep a small, stable set of character fragments rather than one opaque word
  * identity. Misspellings therefore retain evidence from the fragments they do
  * share with the clean word. Rows are sorted to make the representation
