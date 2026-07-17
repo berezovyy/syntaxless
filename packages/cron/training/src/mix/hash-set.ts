@@ -27,6 +27,10 @@ function capacityFor(expectedEntries: number): number {
  * strings and exceeds the production host's memory. This stores the same
  * identities as eight packed uint32 words plus one occupancy bit per slot.
  * Full digests are compared, so this does not weaken exact deduplication.
+ *
+ * It is still about 32-64 bytes per entry in memory. Do not size it by corpus
+ * rows: the training pipeline's memory must not grow with the corpus. Use
+ * `DiskHash256Set` (disk-hash-set.ts) for corpus-sized membership.
  */
 export class Hash256Set {
   readonly #capacity: number;

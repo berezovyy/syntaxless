@@ -1,12 +1,48 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
-/** Streaming JSONL I/O for plain files and canonical gzip artifacts. */
-import { createReadStream, createWriteStream } from "node:fs";
+/**
+ * Streaming JSONL I/O for plain files and canonical gzip artifacts.
+ *
+ * Every reader here holds one bounded buffer: corpus-sized files are never
+ * read whole, decompressed whole, or split into a line array.
+ */
+import { closeSync, createReadStream, createWriteStream, openSync, readSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { StringDecoder } from "node:string_decoder";
 import { constants, createGunzip, createGzip } from "node:zlib";
 
 export type ArtifactChunkVisitor = (chunk: Buffer) => void;
-const GZIP_INPUT_BUFFER_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Lines of a plain (uncompressed) text file, read synchronously through one
+ * fixed buffer. Use this instead of `readFileSync(...).split("\n")` for any
+ * input whose size is not fixed by the code.
+ */
+export function* readLinesSync(path: string, bufferBytes = 64 * 1024): Generator<string> {
+  const fd = openSync(path, "r");
+  const buffer = Buffer.allocUnsafe(bufferBytes);
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+
+  try {
+    for (;;) {
+      const read = readSync(fd, buffer, 0, buffer.length, null);
+
+      if (read === 0) break;
+      const lines = (pending + decoder.write(buffer.subarray(0, read))).split("\n");
+
+      pending = lines.pop()!;
+      yield* lines;
+    }
+
+    pending += decoder.end();
+    if (pending) yield pending;
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /**
  * Yield decompressed bytes while optionally observing the exact artifact bytes.
@@ -19,91 +55,82 @@ export async function* jsonlByteChunks(
 ): AsyncGenerator<Buffer> {
   const source = createReadStream(path);
 
-  if (!path.endsWith(".gz")) {
-    for await (const value of source) {
-      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  try {
+    if (!path.endsWith(".gz")) {
+      for await (const value of source) {
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
 
-      visitArtifactChunk?.(chunk);
-      yield chunk;
+        visitArtifactChunk?.(chunk);
+        yield chunk;
+      }
+
+      return;
     }
 
-    return;
-  }
+    if (visitArtifactChunk) {
+      source.on("data", (value: Buffer | string) =>
+        visitArtifactChunk(Buffer.isBuffer(value) ? value : Buffer.from(value)),
+      );
+    }
 
-  if (visitArtifactChunk) {
-    source.on("data", (value: Buffer | string) =>
-      visitArtifactChunk(Buffer.isBuffer(value) ? value : Buffer.from(value)),
-    );
-  }
-
-  const gunzip = createGunzip();
-
-  source.once("error", (error) => gunzip.destroy(error));
-  source.pipe(gunzip);
-  for await (const value of gunzip) yield Buffer.isBuffer(value) ? value : Buffer.from(value);
-}
-
-/** A Node readable suitable for readline and other existing streaming APIs. */
-export function createJsonlReadStream(path: string): Readable {
-  return Readable.from(jsonlByteChunks(path));
-}
-
-/**
- * Direct-to-disk deterministic gzip writer. No uncompressed temporary exists.
- * `append` observes backpressure, so callers can stream arbitrarily large files.
- */
-export class CanonicalGzipWriter {
-  readonly path: string;
-  readonly #gzip;
-  readonly #done: Promise<void>;
-  #chunks: Buffer[] = [];
-  #bytes = 0;
-  #closed = false;
-
-  constructor(path: string) {
-    if (!path.endsWith(".gz")) throw new Error(`Canonical gzip output must end in .gz: ${path}`);
-    this.path = path;
-    this.#gzip = createGzip({ level: constants.Z_BEST_SPEED });
-    this.#done = pipeline(this.#gzip, createWriteStream(path, { flags: "wx" }));
-  }
-
-  append(value: string | Buffer): Promise<void> | undefined {
-    if (this.#closed) throw new Error("Cannot append to a closed gzip writer");
-    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-
-    this.#chunks.push(chunk);
-    this.#bytes += chunk.length;
-    if (this.#bytes >= GZIP_INPUT_BUFFER_BYTES) return this.#flush();
-  }
-
-  #flush(): Promise<void> | undefined {
-    if (this.#bytes === 0) return;
-    const chunk = Buffer.concat(this.#chunks, this.#bytes);
-
-    this.#chunks = [];
-    this.#bytes = 0;
-    if (!this.#gzip.write(chunk)) return once(this.#gzip, "drain").then(() => undefined);
-  }
-
-  async close(): Promise<void> {
-    if (this.#closed) throw new Error("Gzip writer is already closed");
-    this.#closed = true;
-    await this.#flush();
-    this.#gzip.end();
-    await this.#done;
-  }
-
-  async abort(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    this.#chunks = [];
-    this.#bytes = 0;
-    this.#gzip.destroy(new Error("Gzip writer aborted"));
+    const gunzip = createGunzip();
 
     try {
-      await this.#done;
-    } catch {
-      // Aborting is cleanup; the staging-directory owner removes the partial.
+      source.once("error", (error) => gunzip.destroy(error));
+      source.pipe(gunzip);
+      for await (const value of gunzip) yield Buffer.isBuffer(value) ? value : Buffer.from(value);
+    } finally {
+      gunzip.destroy();
     }
+  } finally {
+    // Iterator cancellation must finish closing the file before returning.
+    const closed = source.closed
+      ? undefined
+      : new Promise<void>((resolve) => source.once("close", resolve));
+
+    source.destroy();
+    await closed;
   }
+}
+
+/** Own a line reader with `await using`; consume readline's iterator directly. */
+export function jsonlReader(chunks: AsyncIterable<Buffer>) {
+  const input = Readable.from(chunks);
+  const lines = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY });
+  // Register the iterator before input can emit lines or errors.
+  const iterator = lines[Symbol.asyncIterator]();
+
+  return {
+    lines: iterator,
+    async [Symbol.asyncDispose](): Promise<void> {
+      lines.close();
+      const closed = input.closed ? undefined : once(input, "close");
+
+      input.destroy();
+      await closed;
+    },
+  };
+}
+
+/** One awaited pipeline owns gzip output, backpressure, failure and file closure. */
+export async function writeGzip(
+  path: string,
+  chunks: Iterable<Buffer> | AsyncIterable<Buffer>,
+): Promise<{ bytes: number; sha256: string }> {
+  const gzip = createGzip({ level: constants.Z_BEST_SPEED });
+  const hash = createHash("sha256");
+  let bytes = 0;
+
+  gzip.on("data", (chunk: Buffer) => {
+    hash.update(chunk);
+    bytes += chunk.length;
+  });
+
+  await pipeline(
+    Readable.from(chunks, { objectMode: false }),
+    gzip,
+    createWriteStream(path, { flags: "wx" }),
+  );
+
+  return { bytes, sha256: hash.digest("hex") };
 }
