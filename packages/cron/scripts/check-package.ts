@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const packageRoot = join(import.meta.dirname, "..");
 const tscBinary = join(packageRoot, "node_modules", "typescript", "bin", "tsc");
@@ -115,43 +116,175 @@ function assertWeightsIsolated(extractDir: string): void {
     throw new Error(`check:package: ${holders.join(", ")} unexpectedly inline the weight string`);
   }
 
-  const dedicated = join(distDir, "model", "weights.gen.js");
+  const dedicated = join(distDir, "weights.gen.js");
 
   if (!readFileSync(dedicated, "utf8").includes(needle)) {
     throw new Error("check:package: dedicated weights module lacks the payload");
   }
 
-  console.log("check:package: weights isolated in dist/model/weights.gen.js");
+  console.log("check:package: weights isolated in dist/weights.gen.js");
 }
 
-const CONSUMER = `import { compile, getEngine, parse } from "@syntaxless/cron";
+const CONSUMER = `import {
+  clarify,
+  resolveClarification,
+  compile,
+  cron,
+  explain,
+  validate,
+  recurrences,
+  IntentError,
+  getEngine,
+  parse,
+} from "@syntaxless/cron";
+import type { MinuteOfHour, ScheduleClarification, ScheduleIntent } from "@syntaxless/cron";
+import { createTemporalCalendar } from "@syntaxless/cron/temporal";
+import type { TemporalProvider } from "@syntaxless/cron/temporal";
+
+globalThis.fetch = async () => {
+  throw new Error("packed consumer must run offline");
+};
+
+const minute: MinuteOfHour = { minute: 15 };
+const hourly: ScheduleIntent = { frequency: { unit: "hour", interval: 2 }, time: minute };
+
+validate(hourly);
+
+if (!explain(hourly).includes("15 */2 * * *")) {
+  throw new Error("packed hourly explanation mismatch");
+}
+
+const bounded: ScheduleIntent = {
+  frequency: { unit: "day", interval: 1 },
+  bounds: { start: "2028-02-29" },
+};
+
+validate(bounded);
+
+if (!explain(bounded).includes("inclusive local start date is 2028-02-29")) {
+  throw new Error("packed bounds explanation mismatch");
+}
+
+const unsupported = compile(bounded);
+
+if (unsupported.supported || unsupported.code !== "bounds") {
+  throw new Error("packed compiler discarded bounds");
+}
+
+let invalidRejected = false;
+
+try {
+  validate({ ...bounded, bounds: { start: "2026-02-29" } });
+} catch (error) {
+  invalidRejected = error instanceof IntentError && error.code === "invalid-bounds";
+}
+
+if (!invalidRejected) {
+  throw new Error("packed validator accepted an invalid date");
+}
+
+const incomplete: ScheduleIntent = {
+  frequency: { unit: "week", interval: 1 },
+  time: { hour: 9, minute: 25 },
+};
+
+const question: ScheduleClarification | null = clarify(incomplete);
+
+if (question?.field !== "weekdays" || question.allowed.length !== 7) {
+  throw new Error("packed weekday clarification mismatch");
+}
+
+const resolved = resolveClarification(incomplete, { weekdays: ["tuesday", "thursday"] });
+const clarified = compile(resolved);
+
+if (
+  !clarified.supported ||
+  clarified.expression !== "25 9 * * 2,4" ||
+  incomplete.weekdays !== undefined
+) {
+  throw new Error("packed clarification discarded or mutated facts");
+}
+
+const civil = recurrences(
+  { frequency: { unit: "month", interval: 1 }, dayOfMonth: 31 },
+  {
+    timezone: "UTC",
+    reference: "2028-01-31T12:00:00Z",
+    count: 2,
+    policies: { monthEnd: "constrain" },
+  },
+);
+
+const civilInstants = "2028-02-29T00:00:00.000Z,2028-03-31T00:00:00.000Z";
+
+if (!civil.ok || civil.occurrences.map((item) => item.instant).join(",") !== civilInstants) {
+  throw new Error("packed Gregorian recurrence mismatch");
+}
+
+const temporal = (globalThis as unknown as { Temporal: TemporalProvider }).Temporal;
+
+const zoned = recurrences(
+  { frequency: { unit: "day", interval: 1 }, time: { hour: 2, minute: 30 } },
+  {
+    timezone: "America/New_York",
+    reference: "2026-03-07T12:00:00Z",
+    count: 1,
+    calendar: createTemporalCalendar(temporal),
+    policies: { gap: "later" },
+  },
+);
+
+if (!zoned.ok || zoned.occurrences[0]?.instant !== "2026-03-08T07:30:00.000Z") {
+  throw new Error("packed zoned recurrence mismatch");
+}
 
 const weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday"] as const;
+
 const compiled = compile({
   frequency: { unit: "week", interval: 1 },
   weekdays: [...weekdays],
   time: { hour: 9, minute: 0 },
 });
+
 if (typeof (compiled as { then?: unknown }).then === "function") {
   throw new Error("compile must be synchronous");
 }
+
 if (!compiled.supported || compiled.expression !== "0 9 * * 1-5") {
   throw new Error("compile mismatch: " + JSON.stringify(compiled));
 }
 
 const parsed = await parse("every day");
-if (!parsed.ok) throw new Error("packed parse failed: " + parsed.reason);
+
+if (!parsed.ok) {
+  throw new Error("packed parse failed: " + parsed.reason);
+}
+
 if (parsed.intent.frequency.unit !== "day" || parsed.intent.frequency.interval !== 1) {
   throw new Error("packed parse intent mismatch: " + JSON.stringify(parsed.intent));
 }
 
+const missingMonth = await cron("every month");
+
+if (
+  missingMonth.supported ||
+  missingMonth.clarification?.field !== "dayOfMonth" ||
+  missingMonth.intent?.frequency.unit !== "month"
+) {
+  throw new Error("packed convenience clarification mismatch");
+}
+
 let rejected = false;
+
 try {
   await getEngine({ weights: new TextEncoder().encode(JSON.stringify({ version: 2 })) });
 } catch (error) {
   rejected = (error as Error).name === "unsupported-weights-version";
 }
-if (!rejected) throw new Error("packed runtime silently accepted an unsupported weights version");
+
+if (!rejected) {
+  throw new Error("packed runtime silently accepted an unsupported weights version");
+}
 
 console.log("check:package: consumer runtime ok");
 `;
@@ -163,7 +296,7 @@ const CONSUMER_TSCONFIG = {
     moduleResolution: "Bundler",
     lib: ["ES2023", "DOM", "DOM.Iterable"],
     strict: true,
-    noEmit: true,
+    outDir: "emitted",
     skipLibCheck: true,
     types: [],
   },
@@ -204,6 +337,28 @@ function runConsumer(tarball: string, root: string): void {
   });
 
   execFileSync("bun", ["run", "consumer.ts"], { cwd: consumerDir, stdio: "inherit" });
+
+  // The host supplies the optional polyfill; the tarball has no runtime dependency on it.
+  const provider = join(
+    packageRoot,
+    "node_modules",
+    "@js-temporal",
+    "polyfill",
+    "dist",
+    "index.esm.js",
+  );
+
+  const providerSpecifier = JSON.stringify(pathToFileURL(provider).href);
+
+  writeFileSync(
+    join(consumerDir, "temporal-host.mjs"),
+    `import { Temporal } from ${providerSpecifier}; globalThis.Temporal = Temporal;\n`,
+  );
+
+  execFileSync("node", ["--import", "./temporal-host.mjs", "emitted/consumer.js"], {
+    cwd: consumerDir,
+    stdio: "inherit",
+  });
 }
 
 function main(): void {

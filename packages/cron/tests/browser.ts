@@ -1,40 +1,13 @@
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-/**
- * Browser inference test (Phase 20).
- *
- * A real Chromium page loads the built package over a Vite dev server. Every
- * request is routed so the test can (a) count requests for the lazily imported
- * model module and (b) prove no request carries the user's sentence, tokens, or
- * confidence. The model itself is irrelevant here: a weak smoke model is fine,
- * because this test asserts lifecycle counting and privacy, not accuracy.
- *
- * Browsers cache ES modules per document, so `dispose`-then-`parse` cannot
- * produce a second network request inside one document. The dispose case is
- * therefore exercised in a fresh document (a reload) while the route counter
- * persists, which is the only browser-accurate way to observe re-initialization.
- */
+/** Browser checks for lazy artifact loading, engine reuse, and on-device privacy. */
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
 const workspaceRoot = resolve(import.meta.dirname, "../../..");
 const ENTRY = "/packages/cron/dist/index.js";
-const SENTENCE = "every weekday at 9";
-
-// The Phase 21 esbuild split emits flat hashed `model-<hash>.js` chunks. Only
-// the chunks that `dist/index.js` imports dynamically belong to the lazy model
-// boundary; statically imported chunks (labels/tokenizer) load on import and
-// must not be counted as initialization.
-const entrySource = readFileSync(resolve(import.meta.dirname, "../dist/index.js"), "utf8");
-
-const lazyModelChunks = new Set(
-  [...entrySource.matchAll(/import\("\.\/(model-[^"]+\.js)"\)/g)].map((match) => match[1]!),
-);
-
-if (lazyModelChunks.size === 0) {
-  throw new Error("browser: no dynamic model chunks found in dist/index.js");
-}
+const SENTENCE = "every weekday at 9am";
+const WEIGHTS = "/packages/cron/dist/weights.gen.js";
 
 interface RecordedRequest {
   url: string;
@@ -43,7 +16,7 @@ interface RecordedRequest {
 
 interface Recording {
   requests: RecordedRequest[];
-  modelChunkCount: number;
+  weightRequests: number;
 }
 
 function check(condition: boolean, message: string): void {
@@ -58,222 +31,292 @@ const server = await createServer({
   optimizeDeps: { noDiscovery: true, include: [] },
 });
 
-await server.listen();
-const base = server.resolvedUrls!.local[0]!;
+try {
+  await server.listen();
+  const base = server.resolvedUrls!.local[0]!;
+  const browser = await chromium.launch({ headless: true });
 
-const browser = await chromium.launch({ headless: true });
-const recordings: Recording[] = [];
-// Model chunks are emitted as flat `model-<hash>.js` files by the Phase 21
-// esbuild split. One initialization fetches every chunk in that set, so the
-// per-init count is derived from the first parse instead of hard-coded.
-let modelChunksPerInit = 0;
+  try {
+    const recordings: Recording[] = [];
 
-async function recordedPage(): Promise<{
-  page: Awaited<ReturnType<typeof browser.newPage>>;
-  recording: Recording;
-}> {
-  const page = await browser.newPage();
-  const recording: Recording = { requests: [], modelChunkCount: 0 };
+    async function recordedPage(): Promise<{
+      page: Awaited<ReturnType<typeof browser.newPage>>;
+      recording: Recording;
+    }> {
+      const page = await browser.newPage();
+      const recording: Recording = { requests: [], weightRequests: 0 };
 
-  recordings.push(recording);
+      recordings.push(recording);
 
-  await page.route("**/*", (route) => {
-    const request = route.request();
-    const url = request.url();
+      await page.route("**/*", (route) => {
+        const request = route.request();
+        const url = request.url();
 
-    if (url.endsWith("/blank.html")) {
-      return route.fulfill({
-        contentType: "text/html",
-        body: "<!doctype html><title>cron browser</title>",
+        check(
+          new URL(url).origin === new URL(base).origin,
+          "browser attempted an external request",
+        );
+
+        check(
+          request.method() === "GET" && request.postData() === null,
+          "browser attempted to transmit request data",
+        );
+
+        if (url.endsWith("/blank.html")) {
+          return route.fulfill({
+            contentType: "text/html",
+            body: "<!doctype html><title>cron browser</title>",
+          });
+        }
+
+        if (new URL(url).pathname === WEIGHTS) recording.weightRequests += 1;
+        recording.requests.push({ url, body: request.postData() });
+
+        return route.continue();
       });
+
+      return { page, recording };
     }
 
-    const pathname = new URL(url).pathname;
-    const chunkName = pathname.slice(pathname.lastIndexOf("/") + 1);
+    const origin = base + "blank.html";
 
-    if (lazyModelChunks.has(chunkName)) recording.modelChunkCount += 1;
-    recording.requests.push({ url, body: request.postData() });
+    // Zero model requests from importing the entry point alone.
+    {
+      const { page, recording } = await recordedPage();
 
-    return route.continue();
-  });
+      await page.goto(origin);
 
-  return { page, recording };
-}
-
-try {
-  const origin = base + "blank.html";
-
-  // Zero model requests from importing the entry point alone.
-  {
-    const { page, recording } = await recordedPage();
-
-    await page.goto(origin);
-
-    await page.evaluate(async (entry) => {
-      await import(entry);
-    }, ENTRY);
-
-    check(
-      recording.modelChunkCount === 0,
-      `importing the entry requested the model ${recording.modelChunkCount} times, expected 0`,
-    );
-
-    await page.close();
-  }
-
-  // Exactly one model request on the first parse.
-  {
-    const { page, recording } = await recordedPage();
-
-    await page.goto(origin);
-
-    await page.evaluate(
-      async ({ entry, sentence }) => {
+      await page.evaluate(async (entry) => {
         const module = await import(entry);
 
-        await module.parse(sentence);
-      },
-      { entry: ENTRY, sentence: SENTENCE },
-    );
+        const intent = {
+          frequency: { unit: "hour", interval: 2 },
+          time: { minute: 15 },
+        };
 
-    modelChunksPerInit = recording.modelChunkCount;
+        module.validate(intent);
 
-    check(
-      modelChunksPerInit > 0,
-      `first parse requested the model ${modelChunksPerInit} times, expected at least 1`,
-    );
+        if (!module.explain(intent).includes("15 */2 * * *")) {
+          throw new Error("browser hourly explanation mismatch");
+        }
+      }, ENTRY);
 
-    await page.close();
-  }
+      check(
+        recording.weightRequests === 0,
+        `importing the entry requested the model ${recording.weightRequests} times, expected 0`,
+      );
 
-  // Concurrent parses coalesce into one model request.
-  {
-    const { page, recording } = await recordedPage();
+      await page.addScriptTag({
+        path: resolve(
+          import.meta.dirname,
+          "../node_modules/@js-temporal/polyfill/dist/index.umd.js",
+        ),
+      });
 
-    await page.goto(origin);
-
-    await page.evaluate(async (entry) => {
-      const module = await import(entry);
-
-      await Promise.all([
-        module.parse("every day"),
-        module.parse("every week"),
-        module.parse("every hour"),
-      ]);
-    }, ENTRY);
-
-    check(
-      recording.modelChunkCount === modelChunksPerInit,
-      `concurrent parses requested the model ${recording.modelChunkCount} times, expected ${modelChunksPerInit}`,
-    );
-
-    await page.close();
-  }
-
-  // preload() initializes once; a later parse reuses it.
-  {
-    const { page, recording } = await recordedPage();
-
-    await page.goto(origin);
-
-    await page.evaluate(async (entry) => {
-      const module = await import(entry);
-
-      await module.preload();
-    }, ENTRY);
-
-    check(
-      recording.modelChunkCount === modelChunksPerInit,
-      `preload requested the model ${recording.modelChunkCount} times, expected ${modelChunksPerInit}`,
-    );
-
-    await page.evaluate(
-      async ({ entry, sentence }) => {
+      await page.evaluate(async (entry) => {
         const module = await import(entry);
+        const adapterEntry = "/packages/cron/dist/temporal.js";
+        const adapter = await import(adapterEntry);
 
-        await module.parse(sentence);
-      },
-      { entry: ENTRY, sentence: SENTENCE },
-    );
+        const provider = (
+          globalThis as unknown as {
+            temporal: {
+              Temporal: Parameters<typeof adapter.createTemporalCalendar>[0];
+            };
+          }
+        ).temporal.Temporal;
 
-    check(
-      recording.modelChunkCount === modelChunksPerInit,
-      `parse after preload re-initialized the model (${recording.modelChunkCount} requests), expected no re-init`,
-    );
-
-    await page.close();
-  }
-
-  // dispose() releases the engine; a fresh document initializes again.
-  {
-    const { page, recording } = await recordedPage();
-
-    await page.goto(origin);
-
-    await page.evaluate(async (entry) => {
-      const module = await import(entry);
-
-      await module.preload();
-    }, ENTRY);
-
-    check(
-      recording.modelChunkCount === modelChunksPerInit,
-      `preload requested the model ${recording.modelChunkCount} times, expected ${modelChunksPerInit}`,
-    );
-
-    await page.evaluate(async (entry) => {
-      const module = await import(entry);
-
-      module.dispose();
-    }, ENTRY);
-
-    await page.reload();
-
-    await page.evaluate(
-      async ({ entry, sentence }) => {
-        const module = await import(entry);
-
-        await module.parse(sentence);
-      },
-      { entry: ENTRY, sentence: SENTENCE },
-    );
-
-    check(
-      recording.modelChunkCount === modelChunksPerInit * 2,
-      `dispose did not allow re-initialization (${recording.modelChunkCount} requests, expected ${modelChunksPerInit * 2})`,
-    );
-
-    await page.close();
-  }
-
-  // Privacy: no request URL or body carries the sentence or its tokens.
-  const needles = [SENTENCE, "every", "weekday"];
-
-  for (const recording of recordings) {
-    for (const request of recording.requests) {
-      for (const needle of needles) {
-        check(
-          !request.url.toLowerCase().includes(needle),
-          `request URL leaked user text ${JSON.stringify(needle)}: ${request.url}`,
+        const result = module.recurrences(
+          { frequency: { unit: "day", interval: 1 }, time: { hour: 2, minute: 30 } },
+          {
+            timezone: "America/New_York",
+            reference: "2026-03-07T12:00:00Z",
+            count: 1,
+            calendar: adapter.createTemporalCalendar(provider),
+            policies: { gap: "later" },
+          },
         );
 
-        check(
-          request.body === null || !request.body.toLowerCase().includes(needle),
-          `request body leaked user text ${JSON.stringify(needle)}: ${request.body}`,
-        );
+        if (!result.ok || result.occurrences[0]?.instant !== "2026-03-08T07:30:00.000Z") {
+          throw new Error("browser zoned recurrence mismatch");
+        }
+      }, ENTRY);
+
+      check(recording.weightRequests === 0, "recurrence evaluation loaded the model");
+      await page.close();
+    }
+
+    // Exactly one model request on the first parse.
+    {
+      const { page, recording } = await recordedPage();
+
+      await page.goto(origin);
+
+      await page.evaluate(
+        async ({ entry, sentence }) => {
+          const module = await import(entry);
+          const result = await module.parse(sentence);
+
+          if (!result.ok || result.intent.time?.hour !== 9) {
+            throw new Error("browser parse changed the explicit morning clock");
+          }
+        },
+        { entry: ENTRY, sentence: SENTENCE },
+      );
+
+      check(
+        recording.weightRequests === 1,
+        `first parse requested weights ${recording.weightRequests} times, expected 1`,
+      );
+
+      await page.close();
+    }
+
+    // Concurrent parses coalesce into one model request.
+    {
+      const { page, recording } = await recordedPage();
+
+      await page.goto(origin);
+
+      await page.evaluate(async (entry) => {
+        const module = await import(entry);
+
+        await Promise.all([
+          module.parse("every day"),
+          module.parse("every week"),
+          module.parse("every hour"),
+        ]);
+      }, ENTRY);
+
+      check(
+        recording.weightRequests === 1,
+        `concurrent parses requested the model ${recording.weightRequests} times, expected 1`,
+      );
+
+      await page.close();
+    }
+
+    // preload() initializes once; a later parse reuses it.
+    {
+      const { page, recording } = await recordedPage();
+
+      await page.goto(origin);
+
+      await page.evaluate(async (entry) => {
+        const module = await import(entry);
+
+        await module.preload();
+      }, ENTRY);
+
+      check(
+        recording.weightRequests === 1,
+        `preload requested the model ${recording.weightRequests} times, expected 1`,
+      );
+
+      await page.evaluate(
+        async ({ entry, sentence }) => {
+          const module = await import(entry);
+
+          await module.parse(sentence);
+        },
+        { entry: ENTRY, sentence: SENTENCE },
+      );
+
+      check(
+        recording.weightRequests === 1,
+        `parse after preload re-initialized the model (${recording.weightRequests} requests), expected no re-init`,
+      );
+
+      await page.context().setOffline(true);
+
+      await page.evaluate(
+        async ({ entry, sentence }) => {
+          const module = await import(entry);
+          const result = await module.parse(sentence);
+
+          if (!result.ok || result.intent.time?.hour !== 9) {
+            throw new Error("preloaded parsing failed offline");
+          }
+        },
+        { entry: ENTRY, sentence: SENTENCE },
+      );
+
+      check(recording.weightRequests === 1, "offline parsing requested weights again");
+      await page.close();
+    }
+
+    // dispose() releases the engine; a fresh document initializes again.
+    {
+      const { page, recording } = await recordedPage();
+
+      await page.goto(origin);
+
+      await page.evaluate(async (entry) => {
+        const module = await import(entry);
+
+        await module.preload();
+      }, ENTRY);
+
+      check(
+        recording.weightRequests === 1,
+        `preload requested the model ${recording.weightRequests} times, expected 1`,
+      );
+
+      await page.evaluate(async (entry) => {
+        const module = await import(entry);
+
+        module.dispose();
+      }, ENTRY);
+
+      await page.reload();
+
+      await page.evaluate(
+        async ({ entry, sentence }) => {
+          const module = await import(entry);
+
+          await module.parse(sentence);
+        },
+        { entry: ENTRY, sentence: SENTENCE },
+      );
+
+      check(
+        recording.weightRequests === 2,
+        `dispose did not allow re-initialization (${recording.weightRequests} requests, expected 2)`,
+      );
+
+      await page.close();
+    }
+
+    // Privacy: no request URL or body carries the sentence or its tokens.
+    const needles = [SENTENCE, "every", "weekday"];
+
+    for (const recording of recordings) {
+      for (const request of recording.requests) {
+        for (const needle of needles) {
+          check(
+            !request.url.toLowerCase().includes(needle),
+            `request URL leaked user text ${JSON.stringify(needle)}: ${request.url}`,
+          );
+
+          check(
+            request.body === null || !request.body.toLowerCase().includes(needle),
+            `request body leaked user text ${JSON.stringify(needle)}: ${request.body}`,
+          );
+        }
       }
     }
+
+    const modelRequests = recordings.reduce(
+      (total, recording) => total + recording.weightRequests,
+      0,
+    );
+
+    console.log(
+      `browser: ok (${modelRequests} weight requests across ${recordings.length} recordings)`,
+    );
+  } finally {
+    await browser.close();
   }
-
-  const modelRequests = recordings.reduce(
-    (total, recording) => total + recording.modelChunkCount,
-    0,
-  );
-
-  console.log(
-    `browser: ok (${modelRequests} model-chunk requests across ${recordings.length} recordings)`,
-  );
 } finally {
-  await browser.close();
   await server.close();
 }
