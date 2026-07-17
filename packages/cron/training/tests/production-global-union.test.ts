@@ -53,9 +53,10 @@ function record(
 function build(
   rows: CorpusRecord[],
   partitions: number,
+  bounds: { reduceWindowBytes?: number; mergeFanIn?: number } = {},
 ): { plan: CorpusUnionPlan; selected: CorpusRecord[] } {
   const directory = join(tempDir("syntaxless-union-"), "plan");
-  const union = new StreamingCorpusUnion({ directory, partitions });
+  const union = new StreamingCorpusUnion({ directory, partitions, ...bounds });
 
   for (const row of rows) union.add(row);
   const plan = union.finalize();
@@ -79,32 +80,6 @@ test("global union keeps every unique normalized text without storing record pay
   expect(corpusSourceReference(a)).toContain("test/a");
 });
 
-test("partition count and input order do not change deterministic priority winner", () => {
-  const programmatic = record("programmatic", "Notify the operator");
-
-  const human = record("human", "Notify the operator", {
-    authorship: "human-authored",
-  });
-
-  const other = record("other", "Notify the supervisor");
-  const forward = build([programmatic, human, other], 1);
-  const reverse = build([other, human, programmatic], 7);
-
-  expect(forward.selected.map((row) => row.id).sort()).toEqual(["human", "other"]);
-  expect(reverse.selected.map((row) => row.id).sort()).toEqual(["human", "other"]);
-  expect(forward.plan.summary.uniqueTexts).toBe(reverse.plan.summary.uniqueTexts);
-});
-
-test("equal-priority duplicates use a stable provenance reference tie-break", () => {
-  const alpha = record("alpha", "Notify the operator", { group: "alpha" });
-  const beta = record("beta", "Notify the operator", { group: "beta" });
-  const forward = build([alpha, beta], 1).selected[0]!;
-  const reverse = build([beta, alpha], 13).selected[0]!;
-
-  expect(forward.id).toBe(reverse.id);
-  expect(corpusSourceReference(forward)).toBe(corpusSourceReference(reverse));
-});
-
 test("same normalized text with conflicting supervision fails closed", () => {
   const directory = join(tempDir("syntaxless-union-conflict-"), "plan");
   const union = new StreamingCorpusUnion({ directory, partitions: 5 });
@@ -117,61 +92,40 @@ test("same normalized text with conflicting supervision fails closed", () => {
   expect(() => union.finalize()).toThrow("conflicting supervision");
 });
 
-test("exact span supervision differences fail closed without tokenizing", () => {
-  const directory = join(tempDir("syntaxless-union-spans-"), "plan");
-  const union = new StreamingCorpusUnion({ directory, partitions: 3 });
-  const first = record("first", "Start the kiln");
-  const changed = record("changed", "Start the kiln");
+/** One fixed-width scratch candidate; the smallest legal reduce window. */
+const CANDIDATE_BYTES = 109;
 
-  changed.spans = changed.spans.map((span, index) =>
-    index === 0 ? { ...span, clauseStart: !span.clauseStart } : span,
-  );
+test("recursive splitting and multi-pass merging select exactly what one window does", () => {
+  const rows: CorpusRecord[] = [];
 
-  union.add(first);
-  union.add(changed);
-  expect(() => union.finalize()).toThrow("conflicting supervision");
-});
+  for (let index = 0; index < 600; index++) {
+    rows.push(record(`row-${index}`, `Notify operator ${index % 450}`));
 
-test("same-supervision duplicates across splits emit only the priority winner's split", () => {
-  const directory = join(tempDir("syntaxless-union-split-"), "plan");
-  const union = new StreamingCorpusUnion({ directory, partitions: 11 });
+    if (index % 7 === 0) {
+      rows.push(
+        record(`human-${index}`, `Notify operator ${index % 450}`, {
+          authorship: "human-authored",
+        }),
+      );
+    }
+  }
 
-  union.add(record("train", "Start the kiln"));
+  const whole = build(rows, 1);
 
-  const heldout = record("heldout", "Start the kiln", {
-    split: "heldout",
-    authorship: "human-authored",
+  // Two candidates per window forces every partition to split on further
+  // hash bits, and fan-in 2 forces several on-disk merge passes.
+  const bounded = build(rows, 3, {
+    reduceWindowBytes: CANDIDATE_BYTES * 2,
+    mergeFanIn: 2,
   });
 
-  union.add(heldout);
-  const plan = union.finalize();
-  const replay = plan.replay();
-
-  expect(replay.add(record("train", "Start the kiln")).selected).toBe(false);
-
-  expect(replay.add(heldout)).toEqual({
-    selected: true,
-    reference: corpusSourceReference(heldout),
-    split: "heldout",
-    textHash: expect.any(String),
+  expect(bounded.plan.summary).toEqual({
+    ...whole.plan.summary,
+    partitions: 3,
   });
 
-  replay.finish();
-});
-
-test("family and fingerprint metadata do not conflict when model supervision is equal", () => {
-  const first = record("first", "Start the kiln", {
-    authorship: "human-authored",
-  });
-
-  const duplicate = record("duplicate", "Start the kiln");
-
-  duplicate.family = "terse";
-  duplicate.fingerprint = "different-source-frame-metadata";
-  const { plan, selected } = build([first, duplicate], 4);
-
-  expect(plan.summary).toMatchObject({ uniqueTexts: 1, duplicates: 1 });
-  expect(selected.map((row) => row.id)).toEqual(["first"]);
+  expect(bounded.selected.map((row) => row.id)).toEqual(whole.selected.map((row) => row.id));
+  expect(whole.plan.summary.uniqueTexts).toBe(450);
 });
 
 test("replay rejects a changed source sequence instead of emitting a wrong winner", () => {

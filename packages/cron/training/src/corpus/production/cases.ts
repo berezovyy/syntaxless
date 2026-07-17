@@ -61,14 +61,14 @@ export const INTERVAL_VALUES = [
 ] as const;
 
 /** Runtime-admitted semantic domain, not a relabeling of rejected requests. */
-function intervalValues(unit: FrequencyUnit): readonly number[] {
-  return INTERVAL_VALUES.filter((value) => validateInterval(unit, value) === null);
+function intervalValues(): readonly number[] {
+  return INTERVAL_VALUES.filter((value) => validateInterval(value) === null);
 }
 
 export function intervalDomainExclusions() {
   return UNITS.flatMap((unit) =>
     INTERVAL_VALUES.flatMap((interval) => {
-      const failure = validateInterval(unit, interval);
+      const failure = validateInterval(interval);
 
       return failure
         ? [
@@ -175,7 +175,7 @@ function suffix(day: number): string {
 
 function* intervals(): Generator<SemanticCase> {
   for (const unit of UNITS) {
-    for (const n of intervalValues(unit)) {
+    for (const n of intervalValues()) {
       for (const words of n >= 2 && n <= 12 ? [false, true] : [false]) {
         for (const abbreviated of [false, true]) {
           // There is no value-one closed role; spelling 'one' as INTERVAL_LIT would silently decode incorrectly.
@@ -566,7 +566,7 @@ function* exceptions(): Generator<SemanticCase> {
 
 function* corrections(): Generator<SemanticCase> {
   for (const unit of UNITS) {
-    for (const n of intervalValues(unit)) {
+    for (const n of intervalValues()) {
       const old = n === 7 ? 11 : 7;
 
       const schedule = (value: number): Fragment[] => [

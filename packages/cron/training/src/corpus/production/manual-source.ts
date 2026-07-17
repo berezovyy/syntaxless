@@ -1,39 +1,30 @@
-/** Build and replay the canonical manual workflow as one reusable gzip artifact. */
+/** Write and verify the two files of the coordinator-owned synthetic source. */
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import {
   closeSync,
-  createWriteStream,
   existsSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createGzip } from "node:zlib";
 
 import { z } from "zod";
 
-import { BACKWARD_SEED, generatorSha256 } from "../../backward";
+import { generatorSha256 } from "../../backward";
 import { fingerprintExample, sha256Hex } from "../../fingerprint";
 import type { KindExample } from "../../kinds";
 import { iterateMix } from "../../mix/draw";
 import { normalizeAnnotatedText } from "../../sentence";
-import { jsonlByteChunks } from "../jsonl-io";
+import { jsonlByteChunks, jsonlReader, writeGzip } from "../jsonl-io";
 import { type CorpusRecord, corpusRecordSchema } from "../merge";
 
-export const MANUAL_SOURCE_VERSION = "complete-sources-v1";
-export const MANUAL_SOURCE_RECORDS = 20_000_000;
-export const MANUAL_SOURCE_KERNELS_PER_KIND = 2_048;
+/** v2: schedule rows only (R/H) and an explicit spelling-noise share. */
+export const MANUAL_SOURCE_VERSION = "complete-sources-v2";
 
 const hashSchema = z
   .object({
@@ -50,6 +41,7 @@ export const manualSourceManifestSchema = z
     records: z.number().int().positive(),
     seed: z.number().int(),
     kernelsPerKind: z.number().int().positive(),
+    spellingNoise: z.number().min(0).max(1),
     generatorSha256: z.string().regex(/^[0-9a-f]{64}$/),
     implementationSha256: z.string().regex(/^[0-9a-f]{64}$/),
     uncompressed: hashSchema,
@@ -59,43 +51,25 @@ export const manualSourceManifestSchema = z
 
 export type ManualSourceManifest = z.infer<typeof manualSourceManifestSchema>;
 
-export interface BuildManualSourceOptions {
-  outputPath: string;
-  manifestPath: string;
-  records?: number;
-  seed?: number;
-  kernelsPerKind?: number;
-  progress?: (records: number) => void;
-}
-
-export interface StreamManualSourceOptions {
-  corpusPath: string;
-  manifestPath: string;
-  records?: number;
-  seed?: number;
-  kernelsPerKind?: number;
-  progress?: (records: number) => void;
-}
-
-function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+/** The canonical artifact directory and its required generation recipe. */
+export interface ManualSource {
+  directory: string;
+  records: number;
+  seed: number;
+  kernelsPerKind: number;
+  /** Share of rows that carry one meaning-preserving typo. */
+  spellingNoise: number;
 }
 
 /** Hash the code that turns one manual KindExample into a CorpusRecord. */
 export function manualSourceImplementationSha256(): string {
-  return sha256File(fileURLToPath(import.meta.url));
+  return createHash("sha256")
+    .update(readFileSync(fileURLToPath(import.meta.url)))
+    .digest("hex");
 }
 
-export function defaultManualManifestPath(outputPath: string): string {
-  if (!outputPath.endsWith(".jsonl.gz")) {
-    throw new Error(`Manual corpus path must end in .jsonl.gz: ${outputPath}`);
-  }
-
-  return `${outputPath.slice(0, -".jsonl.gz".length)}.manifest.json`;
-}
-
-/** Canonical record conversion shared by live traversal and materialization. */
-export function manualCorpusRecord(example: KindExample, ordinal: number): CorpusRecord {
+/** Canonical conversion from a generator example to a source record. */
+export function manualCorpusRecord(example: KindExample, ordinal: number) {
   const annotated = normalizeAnnotatedText(example.example.text, example.example.spans);
   const rendered = { ...example.example, ...annotated };
 
@@ -130,7 +104,7 @@ export function manualCorpusRecord(example: KindExample, ordinal: number): Corpu
           }
         : {}),
     },
-  };
+  } satisfies CorpusRecord;
 }
 
 function syncFile(path: string): void {
@@ -143,49 +117,21 @@ function syncFile(path: string): void {
   }
 }
 
-function syncDirectory(path: string): void {
-  const fd = openSync(path, "r");
-
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-
-function temporaryPath(finalPath: string): string {
-  return join(dirname(finalPath), `.${basename(finalPath)}.${process.pid}.${Date.now()}.tmp`);
-}
-
 /**
- * Materialize the manual workflow once. The manifest is renamed last and is
- * the publication marker; a failed run removes only temporary/owned outputs.
+ * Write into the staging directory allocated by publishDirectory. That caller
+ * owns publication and removes the whole directory if any preparation fails.
  */
-export async function buildManualSource(
-  options: BuildManualSourceOptions,
+export async function writeManualSource(
+  source: ManualSource,
+  progress?: (records: number) => void,
 ): Promise<ManualSourceManifest> {
-  const outputPath = resolve(options.outputPath);
-  const manifestPath = resolve(options.manifestPath);
-
-  if (!outputPath.endsWith(".jsonl.gz")) {
-    throw new Error(`Manual corpus path must end in .jsonl.gz: ${outputPath}`);
-  }
-
-  if (outputPath === manifestPath) throw new Error("Manual corpus and manifest paths must differ");
+  const { directory, records, seed, kernelsPerKind, spellingNoise } = source;
+  const outputPath = join(directory, "corpus.jsonl.gz");
+  const manifestPath = join(directory, "manifest.json");
 
   if (existsSync(outputPath) || existsSync(manifestPath)) {
     throw new Error("Refusing to overwrite an existing manual corpus or manifest");
   }
-
-  if (dirname(outputPath) !== dirname(manifestPath)) {
-    throw new Error("Manual corpus and manifest must share one publication directory");
-  }
-
-  mkdirSync(dirname(outputPath), { recursive: true });
-
-  const records = options.records ?? MANUAL_SOURCE_RECORDS;
-  const seed = options.seed ?? BACKWARD_SEED;
-  const kernelsPerKind = options.kernelsPerKind ?? MANUAL_SOURCE_KERNELS_PER_KIND;
 
   if (!Number.isInteger(records) || records < 1) {
     throw new Error(`Manual source records must be a positive integer: ${records}`);
@@ -197,127 +143,128 @@ export async function buildManualSource(
     throw new Error(`Manual source kernelsPerKind must be a positive integer: ${kernelsPerKind}`);
   }
 
-  const temporaryCorpus = temporaryPath(outputPath);
-  const temporaryManifest = temporaryPath(manifestPath);
+  if (!(spellingNoise >= 0 && spellingNoise <= 1)) {
+    throw new Error(`Manual source spellingNoise must be within [0, 1]: ${spellingNoise}`);
+  }
+
   const uncompressedHash = createHash("sha256");
-  const compressedHash = createHash("sha256");
   let uncompressedBytes = 0;
-  let compressedBytes = 0;
   let emitted = 0;
-  let corpusPublished = false;
-  let manifestPublished = false;
-  const gzip = createGzip({ level: 1 });
+  // The generator's uniqueness index lives beside the output on the data disk
+  // and is deleted with it; see mix/disk-hash-set.ts.
+  const dedupDirectory = join(directory, ".mix-dedup");
 
-  gzip.on("data", (chunk: Buffer) => {
-    compressedHash.update(chunk);
-    compressedBytes += chunk.length;
-  });
+  async function* chunks(): AsyncGenerator<Buffer> {
+    let pendingLines: string[] = [];
+    let pendingCharacters = 0;
 
-  const output = createWriteStream(temporaryCorpus, { flags: "wx" });
-  const writing = pipeline(gzip, output);
-  let pendingLines: string[] = [];
-  let pendingCharacters = 0;
-
-  const flushLines = async (): Promise<void> => {
-    if (pendingLines.length === 0) return;
-    const chunk = Buffer.from(pendingLines.join(""), "utf8");
-
-    pendingLines = [];
-    pendingCharacters = 0;
-    uncompressedHash.update(chunk);
-    uncompressedBytes += chunk.length;
-    if (!gzip.write(chunk)) await once(gzip, "drain");
-  };
-
-  try {
+    // Negatives come from the public source, which contains every sentence of
+    // the mixer's 50k-line list and outranks it in the union.
     for (const example of iterateMix({
       count: records,
       seed,
       perKindKernels: kernelsPerKind,
+      easyNegatives: false,
+      spellingNoise,
+      dedupDirectory,
     })) {
       const line = `${JSON.stringify(manualCorpusRecord(example, emitted))}\n`;
 
       pendingLines.push(line);
       pendingCharacters += line.length;
       emitted++;
-      // Batch writes to avoid 20 million Buffer allocations and zlib calls.
+
+      // Batch writes to avoid one Buffer allocation and zlib call per row.
       // The manifest commits both the unchanged JSONL bytes and deterministic
       // gzip bytes produced by this batching policy.
-      if (pendingCharacters >= 1024 * 1024) await flushLines();
-      if (emitted % 100_000 === 0) options.progress?.(emitted);
+      if (pendingCharacters >= 1024 * 1024) {
+        const chunk = Buffer.from(pendingLines.join(""), "utf8");
+
+        pendingLines = [];
+        pendingCharacters = 0;
+        uncompressedHash.update(chunk);
+        uncompressedBytes += chunk.length;
+        yield chunk;
+      }
+
+      if (emitted % 100_000 === 0) progress?.(emitted);
     }
 
-    await flushLines();
-    gzip.end();
-    await writing;
-    if (emitted !== records) throw new Error(`Manual source emitted ${emitted}/${records} records`);
-    syncFile(temporaryCorpus);
-    const stat = statSync(temporaryCorpus);
+    if (pendingLines.length > 0) {
+      const chunk = Buffer.from(pendingLines.join(""), "utf8");
 
-    if (stat.size !== compressedBytes) {
-      throw new Error(
-        `Manual compressed byte count mismatch: stream ${compressedBytes}, file ${stat.size}`,
-      );
+      uncompressedHash.update(chunk);
+      uncompressedBytes += chunk.length;
+      yield chunk;
     }
-
-    const manifest: ManualSourceManifest = {
-      version: 1,
-      status: "complete-manual-source",
-      sourceVersion: MANUAL_SOURCE_VERSION,
-      records,
-      seed,
-      kernelsPerKind,
-      generatorSha256: generatorSha256(),
-      implementationSha256: manualSourceImplementationSha256(),
-      uncompressed: {
-        bytes: uncompressedBytes,
-        sha256: uncompressedHash.digest("hex"),
-      },
-      compressed: {
-        bytes: compressedBytes,
-        sha256: compressedHash.digest("hex"),
-      },
-    };
-
-    writeFileSync(temporaryManifest, `${JSON.stringify(manifest)}\n`, { flag: "wx" });
-    syncFile(temporaryManifest);
-    renameSync(temporaryCorpus, outputPath);
-    corpusPublished = true;
-    renameSync(temporaryManifest, manifestPath);
-    manifestPublished = true;
-    syncDirectory(dirname(outputPath));
-
-    return manifest;
-  } catch (error) {
-    gzip.destroy();
-    await writing.catch(() => undefined);
-    rmSync(temporaryCorpus, { force: true });
-    rmSync(temporaryManifest, { force: true });
-    if (corpusPublished && !manifestPublished) rmSync(outputPath, { force: true });
-    throw error;
   }
+
+  let compressed: Awaited<ReturnType<typeof writeGzip>>;
+
+  try {
+    compressed = await writeGzip(outputPath, chunks());
+  } finally {
+    rmSync(dedupDirectory, { recursive: true, force: true });
+  }
+
+  if (emitted !== records) throw new Error(`Manual source emitted ${emitted}/${records} records`);
+  syncFile(outputPath);
+  const stat = statSync(outputPath);
+
+  if (stat.size !== compressed.bytes) {
+    throw new Error(
+      `Manual compressed byte count mismatch: stream ${compressed.bytes}, file ${stat.size}`,
+    );
+  }
+
+  const manifest: ManualSourceManifest = {
+    version: 1,
+    status: "complete-manual-source",
+    sourceVersion: MANUAL_SOURCE_VERSION,
+    records,
+    seed,
+    kernelsPerKind,
+    spellingNoise,
+    generatorSha256: generatorSha256(),
+    implementationSha256: manualSourceImplementationSha256(),
+    uncompressed: {
+      bytes: uncompressedBytes,
+      sha256: uncompressedHash.digest("hex"),
+    },
+    compressed,
+  };
+
+  writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { flag: "wx" });
+  syncFile(manifestPath);
+
+  return manifest;
 }
 
 /** Validate and stream every exact CorpusRecord from a manual gzip artifact. */
-export async function* streamManualSource(
-  options: StreamManualSourceOptions,
-): AsyncGenerator<CorpusRecord> {
-  const manifest = manualSourceManifestSchema.parse(
-    JSON.parse(readFileSync(options.manifestPath, "utf8")),
-  );
+export async function* streamManualSource(source: ManualSource): AsyncGenerator<CorpusRecord> {
+  const {
+    directory,
+    records: expectedRecords,
+    seed: expectedSeed,
+    kernelsPerKind: expectedKernels,
+    spellingNoise: expectedNoise,
+  } = source;
 
-  const expectedRecords = options.records ?? MANUAL_SOURCE_RECORDS;
-  const expectedSeed = options.seed ?? BACKWARD_SEED;
-  const expectedKernels = options.kernelsPerKind ?? MANUAL_SOURCE_KERNELS_PER_KIND;
+  const corpusPath = join(directory, "corpus.jsonl.gz");
+
+  const manifest = manualSourceManifestSchema.parse(
+    JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8")),
+  );
 
   if (
     manifest.records !== expectedRecords ||
     manifest.seed !== expectedSeed ||
-    manifest.kernelsPerKind !== expectedKernels
+    manifest.kernelsPerKind !== expectedKernels ||
+    manifest.spellingNoise !== expectedNoise
   ) {
     throw new Error(
-      `Manual source configuration mismatch: expected ${expectedRecords}/${expectedSeed}/${expectedKernels}, ` +
-        `got ${manifest.records}/${manifest.seed}/${manifest.kernelsPerKind}`,
+      `Manual source configuration mismatch: expected ${expectedRecords}/${expectedSeed}/${expectedKernels}/${expectedNoise}, ` +
+        `got ${manifest.records}/${manifest.seed}/${manifest.kernelsPerKind}/${manifest.spellingNoise}`,
     );
   }
 
@@ -328,7 +275,7 @@ export async function* streamManualSource(
     throw new Error("Manual source generator or implementation hash changed");
   }
 
-  const stat = statSync(options.corpusPath);
+  const stat = statSync(corpusPath);
 
   if (stat.size !== manifest.compressed.bytes) {
     throw new Error(
@@ -342,7 +289,7 @@ export async function* streamManualSource(
   let uncompressedBytes = 0;
   let records = 0;
 
-  const chunks = jsonlByteChunks(options.corpusPath, (chunk) => {
+  const chunks = jsonlByteChunks(corpusPath, (chunk) => {
     compressedHash.update(chunk);
     compressedBytes += chunk.length;
   });
@@ -355,24 +302,22 @@ export async function* streamManualSource(
     }
   })();
 
-  const lines = createInterface({
-    input: Readable.from(observed),
-    crlfDelay: Number.POSITIVE_INFINITY,
-  });
+  {
+    await using reader = jsonlReader(observed);
 
-  for await (const line of lines) {
-    if (!line) throw new Error(`Manual source contains a blank record at line ${records + 1}`);
-    records++;
-    let record: CorpusRecord;
+    for await (const line of reader.lines) {
+      if (!line) throw new Error(`Manual source contains a blank record at line ${records + 1}`);
+      records++;
+      let record: CorpusRecord;
 
-    try {
-      record = corpusRecordSchema.parse(JSON.parse(line)) as CorpusRecord;
-    } catch (error) {
-      throw new Error(`Invalid manual source record ${records}`, { cause: error });
+      try {
+        record = corpusRecordSchema.parse(JSON.parse(line)) as CorpusRecord;
+      } catch (error) {
+        throw new Error(`Invalid manual source record ${records}`, { cause: error });
+      }
+
+      yield record;
     }
-
-    options.progress?.(records);
-    yield record;
   }
 
   if (
@@ -384,23 +329,4 @@ export async function* streamManualSource(
   ) {
     throw new Error("Manual source count, byte size, or checksum mismatch");
   }
-}
-
-if (import.meta.main) {
-  const output = process.argv[2];
-
-  if (!output || process.argv.length !== 3) {
-    throw new Error("Usage: manual-source.ts NEW_OUTPUT.jsonl.gz");
-  }
-
-  const outputPath = resolve(output);
-  const manifestPath = defaultManualManifestPath(outputPath);
-
-  const manifest = await buildManualSource({
-    outputPath,
-    manifestPath,
-    progress: (records) => console.error(`manual source: ${records.toLocaleString()} records`),
-  });
-
-  console.log(JSON.stringify({ outputPath, manifestPath, ...manifest }, null, 2));
 }

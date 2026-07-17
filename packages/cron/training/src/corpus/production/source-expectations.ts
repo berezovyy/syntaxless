@@ -1,13 +1,14 @@
-import { createHash, type Hash } from "node:crypto";
 /** Independent pure per-record feature pass over the actual published-candidate JSONL. */
-import { writeFileSync } from "node:fs";
+import { createHash, type Hash } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 
 import { LABELS } from "../../../../src/model/labels";
 import { SCHEDULE_KINDS, type ScheduleKind } from "../../../../src/model/schedule-kinds";
+import { SPEECH_ACTS } from "../../../../src/model/speech-acts";
 import { EMBEDDING_ROWS, FEATURE_COUNT, tokenize } from "../../../../src/model/tokenizer";
 import { featurizeRecord, MAX_TOKENS, POPULATION_IDS } from "../../featurize";
 import { classifyPopulation } from "../../mix/quotas";
+import { METADATA_SUFFIX, sequenceMetadata } from "../../sequence-metadata";
 import { jsonlByteChunks } from "../jsonl-io";
 import { type CorpusRecord, corpusRecordSchema, SPLITS } from "../merge";
 
@@ -125,6 +126,7 @@ export async function sourceExpectations(input: string, visit?: (row: CorpusReco
         populationCounts: { R: 0, H: 0, E: 0 },
         fields: Object.fromEntries(FIELDS.map((key) => [key, make()])) as Record<Field, Digest>,
         scheduleKinds: make(),
+        metadata: make(),
       },
     ]),
   ) as Record<
@@ -139,6 +141,7 @@ export async function sourceExpectations(input: string, visit?: (row: CorpusReco
       populationCounts: Record<"R" | "H" | "E", number>;
       fields: Record<Field, Digest>;
       scheduleKinds: Digest;
+      metadata: Digest;
     }
   >;
 
@@ -174,12 +177,18 @@ export async function sourceExpectations(input: string, visit?: (row: CorpusReco
 
     const population = classifyPopulation({
       intent: row.intent,
-      speechAct: row.speechAct ?? "none",
+      speechAct: SPEECH_ACTS[f.speech[0]!]!,
       spans: row.spans,
     });
 
     update(state.fields.populations, Uint8Array.of(POPULATION_IDS[population]));
     state.populationCounts[population]++;
+
+    update(
+      state.metadata,
+      Buffer.from(`${JSON.stringify(sequenceMetadata(row, f, state.sequences, population))}\n`),
+    );
+
     const frame = (row.template ?? `${row.family}/unspecified`).split("/")[0]!;
 
     if (!state.frames.has(frame)) {
@@ -244,20 +253,14 @@ export async function sourceExpectations(input: string, visit?: (row: CorpusReco
           populationCounts: state.populationCounts,
           fields: Object.fromEntries(FIELDS.map((key) => [key, finish(state.fields[key])])),
           scheduleKinds: finish(state.scheduleKinds),
+          sequenceMetadata: {
+            version: 1,
+            suffix: METADATA_SUFFIX,
+            rows: state.sequences,
+            ...finish(state.metadata),
+          },
         },
       ]),
     ),
   };
-}
-
-if (import.meta.main) {
-  if (process.argv.length !== 4) {
-    throw Error("Usage: source-expectations INPUT.jsonl[.gz] OUTPUT.json");
-  }
-
-  writeFileSync(
-    process.argv[3]!,
-    JSON.stringify(await sourceExpectations(process.argv[2]!), null, 2) + "\n",
-    { flag: "wx" },
-  );
 }

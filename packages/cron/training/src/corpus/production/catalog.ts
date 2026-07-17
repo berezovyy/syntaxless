@@ -1,4 +1,4 @@
-/** Exhaustive clean catalog traversal: no carrier Cartesian product or seed cap. */
+/** Clean catalog traversal: no carrier Cartesian product; optional value sampling. */
 import { fingerprintExample, sha256Hex } from "../../fingerprint";
 import { type KindDef, KINDS } from "../../kinds";
 import { normalizeAnnotatedText, Sentence } from "../../sentence";
@@ -26,10 +26,15 @@ export interface CatalogTraversal {
  * source. This source preserves every finite schedule value and clean template
  * from the existing catalog, including templates formerly marked heldout.
  * Old generator splits are not valid ownership keys for a newly grouped corpus.
+ *
+ * `include` selects (template, intent) pairs before rendering. Intents are
+ * full value grids (every minute of the day × every weekday set), so a
+ * per-template sample keeps every template while skipping most of the grid.
  */
 export function* catalogCandidates(
   kinds: readonly KindDef[] = KINDS,
   visit?: (attempt: CatalogTraversal) => void,
+  include?: (constructionId: string, intentId: string) => boolean,
 ): Generator<CatalogCandidate> {
   for (const kind of kinds) {
     for (const intent of kind.intents) {
@@ -38,6 +43,8 @@ export function* catalogCandidates(
 
       for (const template of kind.templates) {
         const constructionId = `${kind.id}/${template.id}`;
+
+        if (include !== undefined && !include(constructionId, intentId)) continue;
         const sentence = new Sentence();
 
         sentence.clause();

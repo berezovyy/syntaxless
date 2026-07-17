@@ -187,7 +187,7 @@
         {
           "id": "request-1",
           "speechAct": "request",
-          "pattern": "For worker 42, run the cleanup [RECUR:every] {n} {unit}; 503 is the issue number, not a time",
+          "pattern": "For worker [CONTEXT_NUMBER:42], run the cleanup [RECUR:every] {n} {unit}; [CONTEXT_NUMBER:503] is the issue number, not a time",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -198,13 +198,13 @@
         {
           "id": "request-2",
           "speechAct": "request",
-          "pattern": "[RECUR:Every] {n} {unit}, run cleanup for worker 42 and leave the batch size at 256",
+          "pattern": "[RECUR:Every] {n} {unit}, run cleanup for worker [CONTEXT_NUMBER:42] and leave the batch size at [CONTEXT_NUMBER:256]",
           "tags": ["direct-request", "distracting-numbers", "context-after-schedule"]
         },
         {
           "id": "request-3",
           "speechAct": "request",
-          "pattern": "Please schedule cleanup [RECUR:every] {n} {unit}, with 3 retries if it fails",
+          "pattern": "Please schedule cleanup [RECUR:every] {n} {unit}, with [CONTEXT_NUMBER:3] retries if it fails",
           "tags": [
             "direct-request",
             "polite-request",
@@ -215,19 +215,19 @@
         {
           "id": "negative-1",
           "speechAct": "incomplete",
-          "pattern": "Schedule cleanup for worker 42 [RECUR:every] {n} {unit}, but only if",
+          "pattern": "Schedule cleanup for worker [CONTEXT_NUMBER:42] [RECUR:every] {n} {unit}, but only if",
           "tags": ["incomplete-request"]
         },
         {
           "id": "negative-2",
           "speechAct": "cancel",
-          "pattern": "Worker 42 has cleanup [RECUR:every] {n} {unit}; remove that recurring task",
+          "pattern": "Worker [CONTEXT_NUMBER:42] has cleanup [RECUR:every] {n} {unit}; remove that recurring task",
           "tags": ["cancellation"]
         },
         {
           "id": "request-1-prose-typo",
           "speechAct": "request",
-          "pattern": "For worker 42, rn the cleanup [RECUR:every] {n} {unit}; 503 is the issue number, not a time",
+          "pattern": "For worker [CONTEXT_NUMBER:42], rn the cleanup [RECUR:every] {n} {unit}; [CONTEXT_NUMBER:503] is the issue number, not a time",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -239,7 +239,7 @@
         {
           "id": "negative-1-prose-typo",
           "speechAct": "incomplete",
-          "pattern": "schdule cleanup for worker 42 [RECUR:every] {n} {unit}, but only if",
+          "pattern": "schdule cleanup for worker [CONTEXT_NUMBER:42] [RECUR:every] {n} {unit}, but only if",
           "tags": ["incomplete-request", "non-value-spelling-variation"]
         }
       ]
@@ -309,7 +309,7 @@
         {
           "id": "retry-context",
           "speechAct": "request",
-          "pattern": "Keep the heartbeat recurring; the gap between runs must be {n} {unit}; allow 6 retries for task 83",
+          "pattern": "Keep the heartbeat recurring; the gap between runs must be {n} {unit}; allow [CONTEXT_NUMBER:6] retries for task [CONTEXT_NUMBER:83]",
           "tags": ["direct-request", "context-before-schedule", "distracting-numbers"]
         }
       ]
@@ -631,7 +631,7 @@
         {
           "id": "request-1",
           "speechAct": "request",
-          "pattern": "Send report 17 [UNIT_DAY:daily] [GLUE:at] {clock}; its recipient is account 204",
+          "pattern": "Send report [CONTEXT_NUMBER:17] [UNIT_DAY:daily] [GLUE:at] {clock}; its recipient is account [CONTEXT_NUMBER:204]",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -642,7 +642,7 @@
         {
           "id": "request-2",
           "speechAct": "request",
-          "pattern": "[GLUE:At] {clock} [UNIT_DAY:daily], send report 17 to account 204",
+          "pattern": "[GLUE:At] {clock} [UNIT_DAY:daily], send report [CONTEXT_NUMBER:17] to account [CONTEXT_NUMBER:204]",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -653,7 +653,7 @@
         {
           "id": "request-3",
           "speechAct": "request",
-          "pattern": "For report 17, create a [UNIT_DAY:daily] delivery [GLUE:at] {clock} with 2 retries",
+          "pattern": "For report [CONTEXT_NUMBER:17], create a [UNIT_DAY:daily] delivery [GLUE:at] {clock} with [CONTEXT_NUMBER:2] retries",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -664,19 +664,19 @@
         {
           "id": "negative-1",
           "speechAct": "incomplete",
-          "pattern": "Send report 17 [UNIT_DAY:daily] [GLUE:at] {clock}, provided that",
+          "pattern": "Send report [CONTEXT_NUMBER:17] [UNIT_DAY:daily] [GLUE:at] {clock}, provided that",
           "tags": ["incomplete-request"]
         },
         {
           "id": "negative-2",
           "speechAct": "cancel",
-          "pattern": "Cancel report 17 delivery [UNIT_DAY:daily] [GLUE:at] {clock}, but keep report 18",
+          "pattern": "Cancel report [CONTEXT_NUMBER:17] delivery [UNIT_DAY:daily] [GLUE:at] {clock}, but keep report [CONTEXT_NUMBER:18]",
           "tags": ["cancellation"]
         },
         {
           "id": "request-1-prose-typo",
           "speechAct": "request",
-          "pattern": "snd report 17 [UNIT_DAY:daily] [GLUE:at] {clock}; its recipient is account 204",
+          "pattern": "snd report [CONTEXT_NUMBER:17] [UNIT_DAY:daily] [GLUE:at] {clock}; its recipient is account [CONTEXT_NUMBER:204]",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -688,7 +688,7 @@
         {
           "id": "negative-1-prose-typo",
           "speechAct": "incomplete",
-          "pattern": "snd report 17 [UNIT_DAY:daily] [GLUE:at] {clock}, provided that",
+          "pattern": "snd report [CONTEXT_NUMBER:17] [UNIT_DAY:daily] [GLUE:at] {clock}, provided that",
           "tags": ["incomplete-request", "non-value-spelling-variation"]
         }
       ]
@@ -759,7 +759,7 @@
         {
           "id": "retry-context",
           "speechAct": "request",
-          "pattern": "Configure the [UNIT_DAY:daily] reconciliation as follows: time {clock}, automatic execution enabled; allow 6 retries for task 83",
+          "pattern": "Configure the [UNIT_DAY:daily] reconciliation as follows: time {clock}, automatic execution enabled; allow [CONTEXT_NUMBER:6] retries for task [CONTEXT_NUMBER:83]",
           "tags": [
             "direct-request",
             "context-after-schedule",
@@ -911,7 +911,7 @@
         {
           "id": "request-1",
           "speechAct": "request",
-          "pattern": "I need a [UNIT_DAY:daily] restart of service 6; please choose {clock} for it",
+          "pattern": "I need a [UNIT_DAY:daily] restart of service [CONTEXT_NUMBER:6]; please choose {clock} for it",
           "tags": [
             "direct-request",
             "polite-request",
@@ -923,7 +923,7 @@
         {
           "id": "request-2",
           "speechAct": "request",
-          "pattern": "Choose {clock} for the restart of service 6 and repeat it [UNIT_DAY:daily]",
+          "pattern": "Choose {clock} for the restart of service [CONTEXT_NUMBER:6] and repeat it [UNIT_DAY:daily]",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -934,7 +934,7 @@
         {
           "id": "request-3",
           "speechAct": "request",
-          "pattern": "Would you put the restart of service 6 [GLUE:at] {clock} on a [UNIT_DAY:daily] recurrence",
+          "pattern": "Would you put the restart of service [CONTEXT_NUMBER:6] [GLUE:at] {clock} on a [UNIT_DAY:daily] recurrence",
           "tags": [
             "interrogative-request",
             "distracting-numbers",
@@ -945,19 +945,19 @@
         {
           "id": "negative-1",
           "speechAct": "descriptive",
-          "pattern": "Service 6 previously restarted [UNIT_DAY:daily] [GLUE:at] {clock}",
+          "pattern": "Service [CONTEXT_NUMBER:6] previously restarted [UNIT_DAY:daily] [GLUE:at] {clock}",
           "tags": ["historical-report"]
         },
         {
           "id": "negative-2",
           "speechAct": "question",
-          "pattern": "Why did service 6 restart [UNIT_DAY:daily] [GLUE:at] {clock}",
+          "pattern": "Why did service [CONTEXT_NUMBER:6] restart [UNIT_DAY:daily] [GLUE:at] {clock}",
           "tags": ["informational-question"]
         },
         {
           "id": "request-1-prose-typo",
           "speechAct": "request",
-          "pattern": "I need a [UNIT_DAY:daily] restart of service 6; pls choose {clock} for it",
+          "pattern": "I need a [UNIT_DAY:daily] restart of service [CONTEXT_NUMBER:6]; pls choose {clock} for it",
           "tags": [
             "direct-request",
             "polite-request",
@@ -1153,7 +1153,7 @@
         {
           "id": "request-1",
           "speechAct": "request",
-          "pattern": "For job 73, schedule a recurring scan on {selector} [GLUE:at] {clock}",
+          "pattern": "For job [CONTEXT_NUMBER:73], schedule a recurring scan on {selector} [GLUE:at] {clock}",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -1164,7 +1164,7 @@
         {
           "id": "request-2",
           "speechAct": "request",
-          "pattern": "[GLUE:At] {clock} on {selector}, scan queue 73 [RECUR:every] [UNIT_WEEK:week], with 4 retries",
+          "pattern": "[GLUE:At] {clock} on {selector}, scan queue [CONTEXT_NUMBER:73] [RECUR:every] [UNIT_WEEK:week], with [CONTEXT_NUMBER:4] retries",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -1176,7 +1176,7 @@
         {
           "id": "request-3",
           "speechAct": "request",
-          "pattern": "Configure scan 73 to recur on {selector}; set the time to {clock} and leave the limit at 500",
+          "pattern": "Configure scan [CONTEXT_NUMBER:73] to recur on {selector}; set the time to {clock} and leave the limit at [CONTEXT_NUMBER:500]",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -1189,19 +1189,19 @@
         {
           "id": "negative-1",
           "speechAct": "incomplete",
-          "pattern": "Schedule scan 73 on {selector} [GLUE:at] {clock} [RECUR:each] [UNIT_WEEK:week], unless",
+          "pattern": "Schedule scan [CONTEXT_NUMBER:73] on {selector} [GLUE:at] {clock} [RECUR:each] [UNIT_WEEK:week], unless",
           "tags": ["incomplete-request"]
         },
         {
           "id": "negative-2",
           "speechAct": "cancel",
-          "pattern": "Remove the scan 73 schedule on {selector} [GLUE:at] {clock}",
+          "pattern": "Remove the scan [CONTEXT_NUMBER:73] schedule on {selector} [GLUE:at] {clock}",
           "tags": ["cancellation"]
         },
         {
           "id": "request-1-prose-typo",
           "speechAct": "request",
-          "pattern": "For job 73, schdule a recurring scan on {selector} [GLUE:at] {clock}",
+          "pattern": "For job [CONTEXT_NUMBER:73], schdule a recurring scan on {selector} [GLUE:at] {clock}",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -1213,7 +1213,7 @@
         {
           "id": "negative-1-prose-typo",
           "speechAct": "incomplete",
-          "pattern": "schdule scan 73 on {selector} [GLUE:at] {clock} [RECUR:each] [UNIT_WEEK:week], unless",
+          "pattern": "schdule scan [CONTEXT_NUMBER:73] on {selector} [GLUE:at] {clock} [RECUR:each] [UNIT_WEEK:week], unless",
           "tags": ["incomplete-request", "non-value-spelling-variation"]
         }
       ]
@@ -1281,7 +1281,7 @@
         {
           "id": "retry-context",
           "speechAct": "request",
-          "pattern": "Recurring maintenance settings: days {selector}; execution time {clock}; please enable; allow 6 retries for task 83",
+          "pattern": "Recurring maintenance settings: days {selector}; execution time {clock}; please enable; allow [CONTEXT_NUMBER:6] retries for task [CONTEXT_NUMBER:83]",
           "tags": [
             "direct-request",
             "polite-request",
@@ -1660,7 +1660,7 @@
         {
           "id": "request-1",
           "speechAct": "request",
-          "pattern": "Schedule reconciliation 28 on the {selector} [GLUE:at] {clock}, with 5 retries",
+          "pattern": "Schedule reconciliation [CONTEXT_NUMBER:28] on the {selector} [GLUE:at] {clock}, with [CONTEXT_NUMBER:5] retries",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -1672,7 +1672,7 @@
         {
           "id": "request-2",
           "speechAct": "request",
-          "pattern": "For account 302, run reconciliation [GLUE:at] {clock} on the {selector}",
+          "pattern": "For account [CONTEXT_NUMBER:302], run reconciliation [GLUE:at] {clock} on the {selector}",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -1683,7 +1683,7 @@
         {
           "id": "request-3",
           "speechAct": "request",
-          "pattern": "Create a recurring reconciliation for account 302: the {selector}, [GLUE:at] {clock}",
+          "pattern": "Create a recurring reconciliation for account [CONTEXT_NUMBER:302]: the {selector}, [GLUE:at] {clock}",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -1694,19 +1694,19 @@
         {
           "id": "negative-1",
           "speechAct": "incomplete",
-          "pattern": "Schedule reconciliation 28 on the {selector} [GLUE:at] {clock}, but only after the",
+          "pattern": "Schedule reconciliation [CONTEXT_NUMBER:28] on the {selector} [GLUE:at] {clock}, but only after the",
           "tags": ["incomplete-request"]
         },
         {
           "id": "negative-2",
           "speechAct": "cancel",
-          "pattern": "Delete reconciliation 28 on the {selector} [GLUE:at] {clock}, not account 302",
+          "pattern": "Delete reconciliation [CONTEXT_NUMBER:28] on the {selector} [GLUE:at] {clock}, not account [CONTEXT_NUMBER:302]",
           "tags": ["cancellation"]
         },
         {
           "id": "request-1-prose-typo",
           "speechAct": "request",
-          "pattern": "schdule reconciliation 28 on the {selector} [GLUE:at] {clock}, with 5 retries",
+          "pattern": "schdule reconciliation [CONTEXT_NUMBER:28] on the {selector} [GLUE:at] {clock}, with [CONTEXT_NUMBER:5] retries",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -1719,7 +1719,7 @@
         {
           "id": "negative-1-prose-typo",
           "speechAct": "incomplete",
-          "pattern": "schdule reconciliation 28 on the {selector} [GLUE:at] {clock}, but only after the",
+          "pattern": "schdule reconciliation [CONTEXT_NUMBER:28] on the {selector} [GLUE:at] {clock}, but only after the",
           "tags": ["incomplete-request", "non-value-spelling-variation"]
         }
       ]
@@ -1791,7 +1791,7 @@
         {
           "id": "retry-context",
           "speechAct": "request",
-          "pattern": "Enable this billing reminder configuration: calendar position the {selector}; time {clock}; allow 6 retries for task 83",
+          "pattern": "Enable this billing reminder configuration: calendar position the {selector}; time {clock}; allow [CONTEXT_NUMBER:6] retries for task [CONTEXT_NUMBER:83]",
           "tags": [
             "direct-request",
             "context-before-schedule",
@@ -2137,13 +2137,13 @@
         {
           "id": "request-1",
           "speechAct": "request",
-          "pattern": "For queue 81, schedule polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}",
+          "pattern": "For queue [CONTEXT_NUMBER:81], schedule polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}",
           "tags": ["direct-request", "distracting-numbers", "context-before-schedule"]
         },
         {
           "id": "request-2",
           "speechAct": "request",
-          "pattern": "Set queue 81 polling to [UNIT_DAY:daily], {bounds}, [GLUE:at] {clock}; keep the limit at 200",
+          "pattern": "Set queue [CONTEXT_NUMBER:81] polling to [UNIT_DAY:daily], {bounds}, [GLUE:at] {clock}; keep the limit at [CONTEXT_NUMBER:200]",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -2154,25 +2154,25 @@
         {
           "id": "request-3",
           "speechAct": "request",
-          "pattern": "[GLUE:At] {clock} [UNIT_DAY:daily], poll queue 81, {bounds}",
+          "pattern": "[GLUE:At] {clock} [UNIT_DAY:daily], poll queue [CONTEXT_NUMBER:81], {bounds}",
           "tags": ["direct-request", "distracting-numbers", "interleaved-request"]
         },
         {
           "id": "negative-1",
           "speechAct": "incomplete",
-          "pattern": "Schedule queue 81 polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}, but only if",
+          "pattern": "Schedule queue [CONTEXT_NUMBER:81] polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}, but only if",
           "tags": ["incomplete-request"]
         },
         {
           "id": "negative-2",
           "speechAct": "cancel",
-          "pattern": "Disable queue 81 polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}",
+          "pattern": "Disable queue [CONTEXT_NUMBER:81] polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}",
           "tags": ["cancellation"]
         },
         {
           "id": "request-1-prose-typo",
           "speechAct": "request",
-          "pattern": "For queue 81, schdule polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}",
+          "pattern": "For queue [CONTEXT_NUMBER:81], schdule polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -2183,7 +2183,7 @@
         {
           "id": "negative-1-prose-typo",
           "speechAct": "incomplete",
-          "pattern": "schdule queue 81 polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}, but only if",
+          "pattern": "schdule queue [CONTEXT_NUMBER:81] polling [UNIT_DAY:daily] [GLUE:at] {clock}, {bounds}, but only if",
           "tags": ["incomplete-request", "non-value-spelling-variation"]
         }
       ]
@@ -2237,7 +2237,7 @@
         {
           "id": "retry-context",
           "speechAct": "request",
-          "pattern": "Create a recurring verification with frequency [UNIT_DAY:daily], time {clock}, date constraint {bounds}; allow 6 retries for task 83",
+          "pattern": "Create a recurring verification with frequency [UNIT_DAY:daily], time {clock}, date constraint {bounds}; allow [CONTEXT_NUMBER:6] retries for task [CONTEXT_NUMBER:83]",
           "tags": [
             "direct-request",
             "context-before-schedule",
@@ -2554,19 +2554,19 @@
         {
           "id": "request-1",
           "speechAct": "request",
-          "pattern": "For route 16, enable deliveries {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}",
+          "pattern": "For route [CONTEXT_NUMBER:16], enable deliveries {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}",
           "tags": ["direct-request", "distracting-numbers", "context-before-schedule"]
         },
         {
           "id": "request-2",
           "speechAct": "request",
-          "pattern": "[GLUE:At] {clock} {base}, deliver for route 16, [EXCEPT:skipping] {excluded}",
+          "pattern": "[GLUE:At] {clock} {base}, deliver for route [CONTEXT_NUMBER:16], [EXCEPT:skipping] {excluded}",
           "tags": ["direct-request", "distracting-numbers", "interleaved-request"]
         },
         {
           "id": "request-3",
           "speechAct": "request",
-          "pattern": "Configure route 16 delivery {base}, [EXCEPT:excluding] {excluded}, [GLUE:at] {clock}; keep the item limit at 100",
+          "pattern": "Configure route [CONTEXT_NUMBER:16] delivery {base}, [EXCEPT:excluding] {excluded}, [GLUE:at] {clock}; keep the item limit at [CONTEXT_NUMBER:100]",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -2577,19 +2577,19 @@
         {
           "id": "negative-1",
           "speechAct": "incomplete",
-          "pattern": "Enable route 16 delivery {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}, but only if",
+          "pattern": "Enable route [CONTEXT_NUMBER:16] delivery {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}, but only if",
           "tags": ["incomplete-request"]
         },
         {
           "id": "negative-2",
           "speechAct": "cancel",
-          "pattern": "Remove route 16 delivery {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}",
+          "pattern": "Remove route [CONTEXT_NUMBER:16] delivery {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}",
           "tags": ["cancellation"]
         },
         {
           "id": "request-1-prose-typo",
           "speechAct": "request",
-          "pattern": "For route 16, enble deliveries {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}",
+          "pattern": "For route [CONTEXT_NUMBER:16], enble deliveries {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}",
           "tags": [
             "direct-request",
             "distracting-numbers",
@@ -2600,7 +2600,7 @@
         {
           "id": "negative-1-prose-typo",
           "speechAct": "incomplete",
-          "pattern": "Enable route 16 delivry {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}, but only if",
+          "pattern": "Enable route [CONTEXT_NUMBER:16] delivry {base} [GLUE:at] {clock}, [EXCEPT:except] {excluded}, but only if",
           "tags": ["incomplete-request", "non-value-spelling-variation"]
         }
       ]
@@ -2653,7 +2653,7 @@
         {
           "id": "retry-context",
           "speechAct": "request",
-          "pattern": "Create this recurring summary: {base}; time {clock}; [EXCEPT:excluding] {excluded}; allow 6 retries for task 83",
+          "pattern": "Create this recurring summary: {base}; time {clock}; [EXCEPT:excluding] {excluded}; allow [CONTEXT_NUMBER:6] retries for task [CONTEXT_NUMBER:83]",
           "tags": ["direct-request", "context-before-schedule", "distracting-numbers"]
         }
       ]
@@ -2945,7 +2945,7 @@
         {
           "id": "request-1",
           "speechAct": "correction",
-          "pattern": "For job 64, change {!old} to {#}{next}; keep the retry count at 3",
+          "pattern": "For job [CONTEXT_NUMBER:64], change {!old} to {#}{next}; keep the retry count at [CONTEXT_NUMBER:3]",
           "tags": [
             "correction-discarded-first",
             "distracting-numbers",
@@ -2956,7 +2956,7 @@
         {
           "id": "request-2",
           "speechAct": "correction",
-          "pattern": "Make job 64 run {#}{next} instead of {#}{!old}",
+          "pattern": "Make job [CONTEXT_NUMBER:64] run {#}{next} instead of {#}{!old}",
           "tags": [
             "correction-replacement-first",
             "distracting-numbers",
@@ -2966,7 +2966,7 @@
         {
           "id": "request-3",
           "speechAct": "correction",
-          "pattern": "Job 64 currently runs {!old}; reschedule it to {#}{next}",
+          "pattern": "Job [CONTEXT_NUMBER:64] currently runs {!old}; reschedule it to {#}{next}",
           "tags": [
             "correction-discarded-first",
             "distracting-numbers",
@@ -2977,13 +2977,13 @@
         {
           "id": "negative-1",
           "speechAct": "incomplete",
-          "pattern": "Change job 64 to {next}, but only when the",
+          "pattern": "Change job [CONTEXT_NUMBER:64] to {next}, but only when the",
           "tags": ["incomplete-request"]
         },
         {
           "id": "negative-2",
           "speechAct": "cancel",
-          "pattern": "Delete job 64 that runs {next}; do not reschedule it",
+          "pattern": "Delete job [CONTEXT_NUMBER:64] that runs {next}; do not reschedule it",
           "tags": ["cancellation"]
         }
       ]
@@ -3047,7 +3047,7 @@
         {
           "id": "retry-context",
           "speechAct": "correction",
-          "pattern": "Amend the recurring sync: requested {#}{next}; superseded {#}{!old}; allow 6 retries for task 83",
+          "pattern": "Amend the recurring sync: requested {#}{next}; superseded {#}{!old}; allow [CONTEXT_NUMBER:6] retries for task [CONTEXT_NUMBER:83]",
           "tags": [
             "correction-replacement-first",
             "context-before-schedule",
@@ -3322,7 +3322,7 @@
         {
           "id": "form-3",
           "speechAct": "request",
-          "pattern": "For restore test 94, set the recurrence to [RECUR:every] {n} {unit} and the time to {clock}",
+          "pattern": "For restore test [CONTEXT_NUMBER:94], set the recurrence to [RECUR:every] {n} {unit} and the time to {clock}",
           "tags": ["distracting-numbers", "interleaved-request"]
         },
         {
@@ -3459,7 +3459,7 @@
         {
           "id": "form-2",
           "speechAct": "request",
-          "pattern": "Use {selector} as the recurring review days for team 26",
+          "pattern": "Use {selector} as the recurring review days for team [CONTEXT_NUMBER:26]",
           "tags": ["distracting-numbers"]
         },
         {
@@ -3495,7 +3495,7 @@
         {
           "id": "retry-context",
           "speechAct": "request",
-          "pattern": "Enable this recurring review: days {selector}; allow 6 retries for task 83",
+          "pattern": "Enable this recurring review: days {selector}; allow [CONTEXT_NUMBER:6] retries for task [CONTEXT_NUMBER:83]",
           "tags": ["terse-request", "distracting-numbers"]
         }
       ]
@@ -3606,7 +3606,7 @@
         {
           "id": "form-2",
           "speechAct": "request",
-          "pattern": "For account 58, set the totals check to recur on the {selector}",
+          "pattern": "For account [CONTEXT_NUMBER:58], set the totals check to recur on the {selector}",
           "tags": ["distracting-numbers"]
         },
         {
@@ -3642,7 +3642,7 @@
         {
           "id": "retry-context",
           "speechAct": "request",
-          "pattern": "Recurring totals check: calendar position the {selector}; enable; allow 6 retries for task 83",
+          "pattern": "Recurring totals check: calendar position the {selector}; enable; allow [CONTEXT_NUMBER:6] retries for task [CONTEXT_NUMBER:83]",
           "tags": ["terse-request", "distracting-numbers"]
         }
       ]

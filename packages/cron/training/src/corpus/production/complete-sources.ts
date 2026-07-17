@@ -1,38 +1,56 @@
-/** Canonical source traversal for the complete, all-unique training corpus. */
-import { createReadStream } from "node:fs";
-import { createInterface } from "node:readline";
+/** Canonical source traversal for the budgeted, all-unique training corpus. */
+import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
 import { SPEECH_ACTS } from "../../../../src/model/speech-acts";
-import { BACKWARD_SEED } from "../../backward";
 import { fingerprintExample, sha256Hex } from "../../fingerprint";
 import { KINDS } from "../../kinds";
-import { iterateMix } from "../../mix/draw";
-import { loadAcceptedReal } from "../../real/accepted";
+import { type AcceptedRealRecord, iterateAcceptedReal } from "../../real/accepted";
 import { normalizeAnnotatedText } from "../../sentence";
-import { type CorpusRecord, corpusRecordSchema, FAMILIES, readLlmRecords } from "../merge";
+import { jsonlByteChunks, jsonlReader } from "../jsonl-io";
+import { type CorpusRecord, corpusRecordSchema, FAMILIES, iterateLlmRecords } from "../merge";
 import { provenanceSchema } from "../provenance";
 import { semanticCases } from "./cases";
 import { catalogCandidates } from "./catalog";
 import { loadConstructions, renderConstruction, verifyDiscarded } from "./constructions";
 import type { CorpusUnionCandidateOptions } from "./global-union";
-import { manualCorpusRecord, streamManualSource } from "./manual-source";
+import { type ManualSource, streamManualSource } from "./manual-source";
 import { corpusTextKey, loadProtectedText, type ProtectedText } from "./protected-text";
 
-export const COMPLETE_SOURCE_VERSION = "complete-sources-v1";
+/** v2: per-source deterministic sampling rates. */
+export const COMPLETE_SOURCE_VERSION = "complete-sources-v2";
+
+/**
+ * Keep rates for sources whose size is fixed by their inputs rather than by a
+ * generation budget. 1 keeps everything; omitted sources keep everything.
+ */
+export interface SourceSampling {
+  authored?: number;
+  systematic?: number;
+  public?: number;
+}
+
+/** Stable keep decision: the same key and rate always give the same answer. */
+export function sampled(rate: number, ...key: readonly string[]): boolean {
+  if (!(rate >= 0 && rate <= 1)) {
+    throw new RangeError(`Source sampling rate must be within [0, 1]: ${rate}`);
+  }
+
+  if (rate === 1) return true;
+  const value = createHash("sha256").update(key.join("\0")).digest().readUInt32BE(0);
+
+  return value < rate * 2 ** 32;
+}
 
 export interface CompleteSourceOptions {
-  manualRecords?: number;
-  manualSeed?: number;
-  manualKernelsPerKind?: number;
-  /** Reusable manual artifact. Both paths must be supplied together. */
-  manualCorpusPath?: string;
-  manualManifestPath?: string;
+  /** Prepared artifact required whenever the manual source is traversed. */
+  manualSource?: ManualSource;
   publicCorpusPath: string;
   verifiedLlmPath: string;
   acceptedRealDirectory: string;
   protectedText?: ProtectedText;
+  sampling?: SourceSampling;
   /** Test/debug restriction. Production omits this and traverses every source. */
   sources?: readonly CompleteSourceName[];
   progress?: (source: CompleteSourceName, candidates: number) => void;
@@ -75,46 +93,52 @@ const acceptedHumanMetadataSchema = z
   })
   .passthrough();
 
-function acceptedHumanRecords(directory: string): CorpusRecord[] {
-  return loadAcceptedReal(directory).map((input, index) => {
-    const metadata = acceptedHumanMetadataSchema.safeParse(input);
+function* acceptedHumanRecords(directory: string): Generator<CorpusRecord> {
+  let index = 0;
 
-    if (!metadata.success) {
-      throw new Error(
-        `Accepted real record ${input.id || index} lacks explicit human provenance and model-training consent: ${metadata.error.message}`,
-      );
-    }
+  for (const input of iterateAcceptedReal(directory)) {
+    yield acceptedHumanRecord(input, index++);
+  }
+}
 
-    if (input.spans.some((span) => span.actionable === undefined)) {
-      throw new Error(`Accepted real record ${input.id} lacks explicit span actionability`);
-    }
+function acceptedHumanRecord(input: AcceptedRealRecord, index: number): CorpusRecord {
+  const metadata = acceptedHumanMetadataSchema.safeParse(input);
 
-    const annotated = normalizeAnnotatedText(
-      input.text,
-      input.spans as Parameters<typeof normalizeAnnotatedText>[1],
+  if (!metadata.success) {
+    throw new Error(
+      `Accepted real record ${input.id || index} lacks explicit human provenance and model-training consent: ${metadata.error.message}`,
     );
+  }
 
-    const speechAct = metadata.data.speechAct;
+  if (input.spans.some((span) => span.actionable === undefined)) {
+    throw new Error(`Accepted real record ${input.id} lacks explicit span actionability`);
+  }
 
-    const fingerprint =
-      input.intent === null
-        ? sha256Hex(`negative\0${annotated.text}`)
-        : fingerprintExample({ ...annotated, speechAct });
+  const annotated = normalizeAnnotatedText(
+    input.text,
+    input.spans as Parameters<typeof normalizeAnnotatedText>[1],
+  );
 
-    return corpusRecordSchema.parse({
-      id: `${COMPLETE_SOURCE_VERSION}/accepted-human/${input.id}`,
-      split: "train",
-      family: metadata.data.family,
-      fingerprint,
-      text: annotated.text,
-      intent: input.intent === null ? null : structuredClone(input.intent),
-      speechAct,
-      spans: annotated.spans,
-      template: "real/accepted",
-      source: "llm",
-      provenance: metadata.data.provenance,
-    }) as CorpusRecord;
-  });
+  const speechAct = metadata.data.speechAct;
+
+  const fingerprint =
+    input.intent === null
+      ? sha256Hex(`negative\0${annotated.text}`)
+      : fingerprintExample({ ...annotated, speechAct });
+
+  return corpusRecordSchema.parse({
+    id: `${COMPLETE_SOURCE_VERSION}/accepted-human/${input.id}`,
+    split: "train",
+    family: metadata.data.family,
+    fingerprint,
+    text: annotated.text,
+    intent: input.intent === null ? null : structuredClone(input.intent),
+    speechAct,
+    spans: annotated.spans,
+    template: "real/accepted",
+    source: "llm",
+    provenance: metadata.data.provenance,
+  }) as CorpusRecord;
 }
 
 function permitted(guard: ProtectedText, record: CorpusRecord): boolean {
@@ -141,6 +165,12 @@ export async function* completeSourceCandidates(
     ],
   );
 
+  const rate = {
+    authored: options.sampling?.authored ?? 1,
+    systematic: options.sampling?.systematic ?? 1,
+    public: options.sampling?.public ?? 1,
+  };
+
   const report = (source: CompleteSourceName, count: number): void => {
     if (count % 100_000 === 0) options.progress?.(source, count);
   };
@@ -148,35 +178,11 @@ export async function* completeSourceCandidates(
   let count = 0;
 
   if (enabled.has("manual")) {
-    if ((options.manualCorpusPath === undefined) !== (options.manualManifestPath === undefined)) {
-      throw new Error("manualCorpusPath and manualManifestPath must be supplied together");
+    if (options.manualSource === undefined) {
+      throw new Error("A prepared manual source is required before corpus traversal");
     }
 
-    const records =
-      options.manualCorpusPath !== undefined && options.manualManifestPath !== undefined
-        ? streamManualSource({
-            corpusPath: options.manualCorpusPath,
-            manifestPath: options.manualManifestPath,
-            ...(options.manualRecords === undefined ? {} : { records: options.manualRecords }),
-            ...(options.manualSeed === undefined ? {} : { seed: options.manualSeed }),
-            ...(options.manualKernelsPerKind === undefined
-              ? {}
-              : { kernelsPerKind: options.manualKernelsPerKind }),
-          })
-        : (async function* (): AsyncGenerator<CorpusRecord> {
-            let ordinal = 0;
-
-            for (const example of iterateMix({
-              count: options.manualRecords ?? 20_000_000,
-              seed: options.manualSeed ?? BACKWARD_SEED,
-              perKindKernels: options.manualKernelsPerKind ?? 2_048,
-            })) {
-              yield manualCorpusRecord(example, ordinal);
-              ordinal++;
-            }
-          })();
-
-    for await (const record of records) {
+    for await (const record of streamManualSource(options.manualSource)) {
       count++;
       report("manual", count);
 
@@ -200,6 +206,7 @@ export async function* completeSourceCandidates(
 
           count++;
           report("authored", count);
+          if (!sampled(rate.authored, "authored", record.id)) continue;
 
           if (permitted(guard, record)) {
             yield {
@@ -216,7 +223,13 @@ export async function* completeSourceCandidates(
   if (enabled.has("systematic")) {
     count = 0;
 
-    for (const candidate of catalogCandidates(KINDS)) {
+    const include =
+      rate.systematic === 1
+        ? undefined
+        : (constructionId: string, intentId: string) =>
+            sampled(rate.systematic, "systematic", constructionId, intentId);
+
+    for (const candidate of catalogCandidates(KINDS, undefined, include)) {
       const record: CorpusRecord = { ...candidate.record, split: "train" };
 
       count++;
@@ -234,13 +247,9 @@ export async function* completeSourceCandidates(
 
   if (enabled.has("public")) {
     count = 0;
+    await using reader = jsonlReader(jsonlByteChunks(options.publicCorpusPath));
 
-    const lines = createInterface({
-      input: createReadStream(options.publicCorpusPath, { encoding: "utf8" }),
-      crlfDelay: Number.POSITIVE_INFINITY,
-    });
-
-    for await (const line of lines) {
+    for await (const line of reader.lines) {
       if (!line.trim()) continue;
       count++;
       let record: CorpusRecord;
@@ -254,6 +263,7 @@ export async function* completeSourceCandidates(
       }
 
       report("public", count);
+      if (!sampled(rate.public, "public", record.id)) continue;
 
       if (permitted(guard, record)) {
         yield { source: "public", record, union: { priority: PRIORITY.public } };
@@ -264,7 +274,7 @@ export async function* completeSourceCandidates(
   if (enabled.has("verified-llm")) {
     count = 0;
 
-    for (const input of readLlmRecords(options.verifiedLlmPath)) {
+    for (const input of iterateLlmRecords(options.verifiedLlmPath)) {
       if (corpusTextKey(input.text) !== input.text) {
         throw new Error(`Verified LLM record ${input.id} is not runtime-normalized`);
       }

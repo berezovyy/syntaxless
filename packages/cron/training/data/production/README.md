@@ -1,7 +1,8 @@
-# Production corpus sources (in progress)
+# Production corpus inputs
 
-The authoritative goal is [`CORPUS-GOAL.md`](../../../../../CORPUS-GOAL.md).
-This directory contains versioned **source specifications**, not a finished
+Training uses `bun run train` from the repository root; see the
+[training workflow](../../README.md). This directory contains versioned
+**source specifications**, not a finished
 corpus, an acceptance set, or evidence of model improvement.
 
 ## Whole-utterance constructions
@@ -20,6 +21,9 @@ The source syntax is deliberately explicit:
 - `{clock}`, `{selector}`, etc. insert role-annotated values supplied by a semantic
   case. Missing slots fail rather than becoming ordinary prose.
 - `[UNIT_DAY:daily]` inserts the specified role on a fixed phrase.
+- `[CONTEXT_NUMBER:17]` explicitly marks a background ID/count. It is numeric,
+  non-actionable and cannot begin a schedule clause. Plain prose digits remain
+  unknown operands; the renderer never guesses their relevance.
 - `{!old}` inserts genuine but non-actionable discarded schedule evidence.
 - `{#}` begins a new semantic clause.
 - All remaining words are non-actionable prose. Full sentence normalization and
@@ -36,83 +40,88 @@ negatives remain together. All groups have an explicit split. Separate identity
 checks still reject cross-split text and fingerprint collisions; an invented
 new group identifier is not permission to leak an old construction.
 
-## Validation commands
+## Source review
 
-From the repository root, using a new report path:
-
-```sh
-bun packages/cron/training/src/corpus/production/source-audit.ts \
-  packages/cron/training/results/whole-utterances-audit.json
-
-bun test packages/cron/training/tests/production-constructions.test.ts
-```
-
-The source audit renders **every** form/value combination. It checks every
-published candidate's supervision and split isolation, separately decodes the
-discarded correction clauses, excludes protected wording without using that
-wording to author examples, and reports source hashes, coverage, and repetition.
-It does not write a final training corpus or enforce the final R/H/E mix.
+The earlier exhaustive source audits rendered every form/value combination and
+recorded supervision, coverage, isolation and repetition evidence. Their
+standalone runners have been retired. Construction checks and discarded-clause
+validation remain in the production renderer and its fixtures. `bun run train`
+owns corpus preparation; earlier audit reports are historical evidence.
+The latest refactoring checked all 2,592,141 authored rows with perfect labels,
+including refused requests' inner schedules, with zero decoder mismatches.
+This is semantic round-trip evidence, not complete corpus integrity or model
+performance.
 
 ## Remaining production work
 
 - Continue source language review as coverage expands. Bare factual negatives,
   punctuation joins, explicit recurrence labels, and per-form tags were reviewed
   in the first pass; that is not a claim of independent language validation.
-- Integrate these constructions with systematic generator coverage and actual
-  sampling weights; do not publish this candidate inventory as the final mix.
+- The complete union combines these constructions with systematic generator
+  coverage and pinned sources. A source inventory alone is not the final corpus.
 - Preserve the systematic catalog's full numeric and selector domains during
   integration, and review broader correction value pairings and range boundaries.
   Both grids now include all 42 directed weekday ranges, and the coverage matrix
   requires timed and untimed evidence for every endpoint pair in every split.
   The older exhaustive report predates this expansion; the strengthened matrix
   must pass on the actual selected production artifacts.
-- Select from the expanded, attributed public-English source pool with explicit
-  concentration limits and no replacement; retain the full pool for traceability.
-- Publish a complete versioned corpus, manifest, and all feature shards through
-  a resource-checked, failure-safe path, then validate Python consumption.
+- The workflow samples public-English records at the specification's
+  `sampling.public` rate and retains source attribution. Population counts are
+  reported without oversampling.
+- The workflow publishes the versioned corpus, manifest, and feature shards
+  after resource checks and complete Python consumption verification.
 
 Generator-heldout examples are development evidence, **not independent final
 acceptance data**. Genuine consented scheduling requests are still absent.
 
-## Complete public-English source builder
+## Synthetic source preparation
 
-The importer uses `tatoeba-v2.json` to pin both detailed sentences and their
-English-English links. From the repository root, with a new output directory:
+`bun run train` builds or reuses the manual synthetic source internally. Its
+immutable directory is keyed by the fixed recipe, writer/publisher dependencies,
+Tatoeba input files, and protected wording. Existing legacy snapshots are left
+intact. No standalone manual-generation, mixture, or merge command is required.
+Both union planning and emission replay the prepared artifact. Traversal rejects
+missing preparation instead of running a second live generator.
+The writer only creates the two canonical files in the coordinator's staging
+directory. One directory publisher owns locks, atomic visibility and rollback.
+Both source publication and resumable corpus phases hold the same native lock
+protocol. A persistent sibling `.lock.sqlite` inode provides coordination;
+process death releases ownership without PID-file recovery or unlinking.
+Temporary fixtures verify this structure and artifact bytes; full production
+preparation and model training remain unexecuted.
 
-```sh
-bun packages/cron/training/src/corpus/production/public-source.ts \
-  packages/cron/training/data/synth/production-sources/tatoeba-english-v2
-```
+## Pinned public-English input
 
-Successful publication produces `corpus.jsonl`, `source.sqlite`, `validation.json`
-and `manifest.json`. This is the full eligible source pool. The SQLite file is a
-legacy importer/index artifact; the complete-corpus path reads `corpus.jsonl`
-and does not use that database for candidate selection or training.
+The workflow consumes the already published public-English `corpus.jsonl` and
+its pinned `manifest.json`. Before use, preparation checks the manifest checksum
+and the corpus bytes and checksum recorded in it. Records retain attribution,
+source IDs and their existing split assignments.
 
-A build refuses changed archive checksums, changed source/configuration during
-execution, malformed input, bad supervision, insufficient space, or an existing
-output version. Failed runs never publish a partial final directory. The legacy
-50k pin is not overwritten. Final corpus/shard publication remains part of the
-production integration work.
+The old source-import builders and downloader have been removed. The historical
+`tatoeba-v2.json`, archives, reports and `source.sqlite` document how the input was
+produced; training does not rebuild or consume the SQLite index. The separate
+local sentence/manifest pin remains the required easy-negative input.
+
+Missing or changed pinned inputs stop `bun run train`. Final corpus and shard
+preparation still belongs to that command, with independent verification before
+publication. Earlier source counts and reproduction evidence are preserved in
+[PUBLIC-SOURCES.md](PUBLIC-SOURCES.md).
 
 ## Complete clean catalog inventory
 
-`catalog.ts` traverses every applicable clean template/value pair in the existing
-systematic generator, without the carrier Cartesian product or the former seed
-cap. It emits **unassigned candidates**, not production-owned rows. All finite
+`catalog.ts` can traverse every applicable clean template/value pair in the
+existing systematic generator, without the carrier Cartesian product or the
+former seed cap. Production samples (template, intent) pairs at
+`sampling.systematic` before rendering, which keeps every template while
+skipping most of each value grid. It emits **unassigned candidates**, not production-owned rows. All finite
 numeric/selector domains and formerly held-out clean templates are inspected:
 407,668 kind/intent combinations and 7,721,878 possible template/value attempts.
 
-```sh
-bun packages/cron/training/src/corpus/production/catalog-audit.ts \
-  packages/cron/training/results/systematic-catalog-audit.json
-```
-
-The audit uses a temporary all-train assignment solely to check every candidate's
-supervision and identify conflicting labels. Its report explicitly does **not**
-certify split isolation. The complete-corpus path includes every eligible unique
-rendered record. Global normalized-text deduplication removes overlap; R/H/E
-exposure is controlled by the training sampler instead of deleting rows here.
+The earlier catalog audit used a temporary all-train assignment solely to check
+supervision and identify conflicting labels. That historical report does **not**
+certify split isolation. The production path includes every sampled, rendered
+record. Global normalized-text deduplication removes overlap. Training
+visits each row once per epoch; population metadata is retained for reporting.
 
 ## Integration and complete shard consumption
 
@@ -120,16 +129,7 @@ See [INTEGRATION.md](INTEGRATION.md) for the complete-union/publication path.
 `complete-sources.ts` and `global-union.ts` provide canonical traversal and
 bounded-memory deduplication without a candidate database.
 
-For a complete generated JSONL and its split-shard prefix, source-derived
-expectations and Python consumption verification are available:
-
-```sh
-bun packages/cron/training/src/corpus/production/source-expectations.ts \
-  CORPUS.jsonl NEW_EXPECTATIONS.json
-training/cron/.venv/bin/python training/cron/verify_production_shards.py \
-  CORPUS.jsonl SHARD_BASE NEW_EXPECTATIONS.json NEW_VERIFICATION.json
-```
-
-Expectations come from the actual JSONL, not from copying shard checksums. The
-Python verifier checks all fields and every sequence/batch; it does not train or
-promote a model. Use new output paths; existing evidence is not overwritten.
+The training workflow derives expectations from the emitted JSONL, then invokes
+Python consumption verification before publication. Expectations are not copied
+from shard checksums. The verifier checks all fields and every sequence/batch;
+it does not train or promote a model. Existing evidence is not overwritten.

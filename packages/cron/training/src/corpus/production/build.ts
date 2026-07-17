@@ -1,8 +1,8 @@
-/** Resumable, no-database coordinator for the complete all-unique corpus. */
+/** Resumable, disk-partitioned coordinator for the budgeted all-unique corpus. */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   closeSync,
-  copyFileSync,
   existsSync,
   fsyncSync,
   mkdirSync,
@@ -22,7 +22,9 @@ import { z } from "zod";
 import { SHARD_FORMAT } from "../../featurize";
 import { featurizeKindsStreaming } from "../../featurize-kinds";
 import { classifyPopulation } from "../../mix/quotas";
-import { CanonicalGzipWriter } from "../jsonl-io";
+import { loadTatoebaSentences, TATOEBA_MANIFEST, TATOEBA_SENTENCES } from "../../mix/tatoeba";
+import { humanEvalTexts } from "../../slots/leak";
+import { writeGzip } from "../jsonl-io";
 import { type CorpusRecord, SPLITS } from "../merge";
 import {
   COMPLETE_SOURCE_VERSION,
@@ -31,10 +33,17 @@ import {
   type CompleteSourceOptions,
 } from "./complete-sources";
 import { CONSTRUCTIONS_PATH } from "./constructions";
-import { CorpusUnionPlan, StreamingCorpusUnion } from "./global-union";
-import { manualSourceManifestSchema } from "./manual-source";
+import { CORPUS_UNION_PLAN_FILES, CorpusUnionPlan, StreamingCorpusUnion } from "./global-union";
+import { HashOrderedSpool } from "./hash-order";
+import { manualSourceManifestSchema, writeManualSource } from "./manual-source";
 import { loadProtectedText } from "./protected-text";
-import { diskPreflight, hashArtifact } from "./publication";
+import {
+  acquirePreparationLock,
+  diskPreflight,
+  hashArtifact,
+  publishDirectory,
+  replaceJson,
+} from "./publication";
 import { sourceExpectations } from "./source-expectations";
 import { corpusCodeHashes, fileHash } from "./source-hashes";
 
@@ -42,41 +51,36 @@ const training = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const repo = resolve(training, "../../..");
 const INITIAL_REQUIRED_BYTES = 24 * 1024 ** 3;
 
-export const PRODUCTION_CONFIG_PATH = new URL(
+const PRODUCTION_CONFIG_PATH = new URL(
   "../../../data/production/production-complete-v1.json",
   import.meta.url,
 );
 
-export const DEFAULT_PRODUCTION_OUTPUT = join(training, "data/synth/production-complete-v1");
-
-export const PRODUCTION_PHASES = [
-  "plan",
-  "emit",
-  "expectations",
-  "shards",
-  "verify",
-  "publish",
-] as const;
-
-export type ProductionPhase = (typeof PRODUCTION_PHASES)[number];
+type ProductionPhase = "plan" | "emit" | "expectations" | "shards" | "verify" | "publish";
 
 const configSchema = z
   .object({
     version: z.literal(1),
     corpusVersion: z.literal("production-complete-v1"),
-    policy: z.literal("all-eligible-runtime-normalized-texts"),
+    policy: z.literal("budgeted-runtime-normalized-texts"),
     manual: z
       .object({
         records: z.number().int().positive(),
         seed: z.number().int(),
         kernelsPerKind: z.number().int().positive(),
+        spellingNoise: z.number().min(0).max(1),
+      })
+      .strict(),
+    sampling: z
+      .object({
+        authored: z.number().gt(0).max(1),
+        systematic: z.number().gt(0).max(1),
+        public: z.number().gt(0).max(1),
       })
       .strict(),
     union: z.object({ partitions: z.number().int().min(1).max(256) }).strict(),
     inputs: z
       .object({
-        manualCorpus: z.string().min(1),
-        manualManifest: z.string().min(1),
         publicCorpus: z.string().min(1),
         publicManifest: z.string().min(1),
         publicManifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -150,10 +154,6 @@ function resolveTrainingPath(path: string): string {
   return resolved;
 }
 
-function configFilePath(path: string | URL): string {
-  return typeof path === "string" ? resolve(path) : fileURLToPath(path);
-}
-
 function pathsFor(outputValue: string) {
   const output = resolve(outputValue);
   const parent = dirname(output);
@@ -164,27 +164,11 @@ function pathsFor(outputValue: string) {
     parent,
     work: join(parent, `.${name}.work`),
     state: join(parent, `.${name}.state.json`),
-    lock: join(parent, `.${name}.build.lock`),
   };
 }
 
 function writeJsonExclusive(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
-}
-
-function writeState(path: string, state: BuildState): void {
-  const temporary = `${path}.tmp-${process.pid}`;
-
-  writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { flag: "wx" });
-  const fd = openSync(temporary, "r");
-
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-
-  renameSync(temporary, path);
 }
 
 function readState(path: string): BuildState {
@@ -193,41 +177,6 @@ function readState(path: string): BuildState {
 
 async function artifact(path: string): Promise<Artifact> {
   return { bytes: statSync(path).size, sha256: await hashArtifact(path) };
-}
-
-class CorpusGzipWriter {
-  readonly #writer: CanonicalGzipWriter;
-  #pending = "";
-  #closed = false;
-
-  constructor(path: string) {
-    this.#writer = new CanonicalGzipWriter(path);
-  }
-
-  add(record: CorpusRecord): Promise<void> | undefined {
-    this.#pending += `${JSON.stringify(record)}\n`;
-    if (this.#pending.length >= 1024 * 1024) return this.flush();
-  }
-
-  private async flush(): Promise<void> {
-    if (!this.#pending) return;
-    await this.#writer.append(this.#pending);
-    this.#pending = "";
-  }
-
-  async close(): Promise<void> {
-    if (this.#closed) throw new Error("Corpus JSONL writer is already closed");
-    await this.flush();
-    await this.#writer.close();
-    this.#closed = true;
-  }
-
-  async abort(): Promise<void> {
-    if (this.#closed) return;
-    await this.#writer.abort();
-    this.#closed = true;
-    this.#pending = "";
-  }
 }
 
 function hashDirectoryFiles(directory: string): Record<string, string> {
@@ -251,52 +200,81 @@ function hashDirectoryFiles(directory: string): Record<string, string> {
   return result;
 }
 
+/** Generated inputs belong to this workflow, keyed by their actual producer. */
+function manualSourcePaths(config: Config, protectedText: ReturnType<typeof loadProtectedText>) {
+  const inputs = Object.fromEntries(
+    [TATOEBA_SENTENCES, TATOEBA_MANIFEST, ...protectedText.sources.map((source) => source.file)]
+      .sort()
+      .map((path) => [relative(repo, path), fileHash(path)]),
+  );
+
+  const identity = createHash("sha256")
+    .update(
+      JSON.stringify({
+        manual: config.manual,
+        implementation: {
+          ...corpusCodeHashes(new URL("./manual-source.ts", import.meta.url).href),
+          ...corpusCodeHashes(new URL("./publication.ts", import.meta.url).href),
+        },
+        inputs,
+      }),
+    )
+    .digest("hex");
+
+  const directory = join(training, "data/synth/production-sources", `manual-${identity}`);
+
+  return {
+    directory,
+    corpus: join(directory, "corpus.jsonl.gz"),
+    manifest: join(directory, "manifest.json"),
+    inputs,
+  };
+}
+
+async function prepareManualSource(
+  config: Config,
+  progress: (phase: string, count?: number) => void,
+): Promise<void> {
+  const paths = manualSourcePaths(config, loadProtectedText());
+
+  loadTatoebaSentences({ blocked: new Set(humanEvalTexts()) });
+  if (existsSync(paths.directory)) return;
+  mkdirSync(dirname(paths.directory), { recursive: true });
+  progress("manual-source");
+
+  await publishDirectory(paths.directory, INITIAL_REQUIRED_BYTES, async (staging) => {
+    await writeManualSource({ directory: staging, ...config.manual }, (count) =>
+      progress("manual-source", count),
+    );
+
+    if (manualSourcePaths(config, loadProtectedText()).directory !== paths.directory) {
+      throw new Error("Manual source inputs or implementation changed during preparation");
+    }
+  });
+}
+
 function sourceOptions(
   config: Config,
   protectedText: ReturnType<typeof loadProtectedText>,
   progress: (phase: string, count?: number) => void,
 ): CompleteSourceOptions {
+  const manual = manualSourcePaths(config, protectedText);
+
   return {
-    manualRecords: config.manual.records,
-    manualSeed: config.manual.seed,
-    manualKernelsPerKind: config.manual.kernelsPerKind,
-    manualCorpusPath: resolveTrainingPath(config.inputs.manualCorpus),
-    manualManifestPath: resolveTrainingPath(config.inputs.manualManifest),
+    manualSource: {
+      directory: manual.directory,
+      ...config.manual,
+    },
     publicCorpusPath: resolveTrainingPath(config.inputs.publicCorpus),
     verifiedLlmPath: resolveTrainingPath(config.inputs.verifiedLlm),
     acceptedRealDirectory: resolveTrainingPath(config.inputs.acceptedRealDirectory),
     protectedText,
+    sampling: config.sampling,
     progress: (source, count) => progress(`source/${source}`, count),
   };
 }
 
-async function inputHashes(
-  configPath: string | URL,
-  config: Config,
-  protectedText: ReturnType<typeof loadProtectedText>,
-): Promise<Record<string, string>> {
-  const manualCorpus = resolveTrainingPath(config.inputs.manualCorpus);
-  const manualManifest = resolveTrainingPath(config.inputs.manualManifest);
-  const manualManifestSha256 = fileHash(manualManifest);
-  const manual = manualSourceManifestSchema.parse(JSON.parse(readFileSync(manualManifest, "utf8")));
-
-  if (
-    manual.records !== config.manual.records ||
-    manual.seed !== config.manual.seed ||
-    manual.kernelsPerKind !== config.manual.kernelsPerKind
-  ) {
-    throw new Error("Manual-source manifest does not match production config");
-  }
-
-  const actualManual = await artifact(manualCorpus);
-
-  if (
-    actualManual.bytes !== manual.compressed.bytes ||
-    actualManual.sha256 !== manual.compressed.sha256
-  ) {
-    throw new Error("Compressed manual source differs from its manifest");
-  }
-
+async function publicSourceHashes(config: Config): Promise<Record<string, string>> {
   const publicCorpus = resolveTrainingPath(config.inputs.publicCorpus);
   const publicManifest = resolveTrainingPath(config.inputs.publicManifest);
 
@@ -320,18 +298,54 @@ async function inputHashes(
     throw new Error("Public corpus differs from its pinned manifest");
   }
 
+  return {
+    [relative(repo, publicManifest)]: config.inputs.publicManifestSha256,
+    [relative(repo, publicCorpus)]: actualPublic.sha256,
+  };
+}
+
+async function inputHashes(
+  config: Config,
+  protectedText: ReturnType<typeof loadProtectedText>,
+): Promise<Record<string, string>> {
+  const manualSource = manualSourcePaths(config, protectedText);
+  const manualCorpus = manualSource.corpus;
+  const manualManifest = manualSource.manifest;
+  const manualManifestSha256 = fileHash(manualManifest);
+  const manual = manualSourceManifestSchema.parse(JSON.parse(readFileSync(manualManifest, "utf8")));
+
+  if (
+    manual.records !== config.manual.records ||
+    manual.seed !== config.manual.seed ||
+    manual.kernelsPerKind !== config.manual.kernelsPerKind ||
+    manual.spellingNoise !== config.manual.spellingNoise
+  ) {
+    throw new Error("Manual-source manifest does not match production config");
+  }
+
+  const actualManual = await artifact(manualCorpus);
+
+  if (
+    actualManual.bytes !== manual.compressed.bytes ||
+    actualManual.sha256 !== manual.compressed.sha256
+  ) {
+    throw new Error("Compressed manual source differs from its manifest");
+  }
+
+  const publicHashes = await publicSourceHashes(config);
+
   const verifiedLlm = resolveTrainingPath(config.inputs.verifiedLlm);
   const constructions = fileURLToPath(CONSTRUCTIONS_PATH);
 
   const hashes: Record<string, string> = {
-    [relative(repo, configFilePath(configPath))]: fileHash(configPath),
+    [relative(repo, fileURLToPath(PRODUCTION_CONFIG_PATH))]: fileHash(PRODUCTION_CONFIG_PATH),
     [relative(repo, manualManifest)]: manualManifestSha256,
     [relative(repo, manualCorpus)]: actualManual.sha256,
-    [relative(repo, publicManifest)]: config.inputs.publicManifestSha256,
-    [relative(repo, publicCorpus)]: actualPublic.sha256,
+    ...publicHashes,
     [relative(repo, verifiedLlm)]: fileHash(verifiedLlm),
     [relative(repo, constructions)]: fileHash(constructions),
     ...hashDirectoryFiles(resolveTrainingPath(config.inputs.acceptedRealDirectory)),
+    ...manualSource.inputs,
   };
 
   for (const source of protectedText.sources) hashes[relative(repo, source.file)] = source.sha256;
@@ -356,22 +370,17 @@ function verifyPythonAvailable(python: string): Record<string, string> {
   return JSON.parse(result.stdout) as Record<string, string>;
 }
 
-function assertState(
-  state: BuildState,
-  output: string,
-  config: Config,
-  configPath: string | URL,
-): void {
+function assertState(state: BuildState, output: string, config: Config): void {
   if (
     state.version !== 1 ||
     state.output !== output ||
     state.corpusVersion !== config.corpusVersion ||
-    state.configSha256 !== fileHash(configPath)
+    state.configSha256 !== fileHash(PRODUCTION_CONFIG_PATH)
   ) {
     throw new Error("Production work state belongs to different inputs or output");
   }
 
-  if (JSON.stringify(corpusCodeHashes()) !== JSON.stringify(state.implementation)) {
+  if (JSON.stringify(corpusCodeHashes(import.meta.url)) !== JSON.stringify(state.implementation)) {
     throw new Error("Corpus implementation changed since the plan phase");
   }
 }
@@ -391,9 +400,8 @@ async function planPhase(
   work: string,
   output: string,
   config: Config,
-  configPath: string | URL,
   progress: (phase: string, count?: number) => void,
-): Promise<BuildState> {
+): Promise<void> {
   if (existsSync(statePath)) throw new Error("Plan phase is already complete");
   // Without a committed state file, everything at this owned hidden path is
   // an interrupted plan attempt and is safe to rebuild.
@@ -401,8 +409,8 @@ async function planPhase(
   mkdirSync(work, { recursive: true });
   diskPreflight(work, INITIAL_REQUIRED_BYTES);
   const protectedText = loadProtectedText();
-  const inputs = await inputHashes(configPath, config, protectedText);
-  const implementation = corpusCodeHashes();
+  const inputs = await inputHashes(config, protectedText);
+  const implementation = corpusCodeHashes(import.meta.url);
   const python = join(repo, "training/cron/.venv/bin/python");
 
   const toolchain = {
@@ -436,33 +444,32 @@ async function planPhase(
 
     rmSync(target, { recursive: true, force: true });
     mkdirSync(target);
-    copyFileSync(join(scratch, "manifest.json"), join(target, "manifest.json"));
-
-    copyFileSync(
-      join(scratch, "selected-references.bitmap"),
-      join(target, "selected-references.bitmap"),
-    );
+    // Same filesystem: move the plan instead of copying its winner file.
+    for (const name of CORPUS_UNION_PLAN_FILES) renameSync(join(scratch, name), join(target, name));
 
     const state: BuildState = {
       version: 1,
       corpusVersion: config.corpusVersion,
       output,
       config,
-      configSha256: fileHash(configPath),
+      configSha256: fileHash(PRODUCTION_CONFIG_PATH),
       inputs,
       implementation,
       toolchain,
       plan: { summary: plan.summary, candidatesBySource },
     };
 
-    writeState(statePath, state);
-
-    return state;
+    replaceJson(statePath, state);
   } finally {
     union.abort();
   }
 }
 
+/**
+ * Replay the union and write the winners in text-hash order. Source traversal
+ * order groups rows by source, and the trainer shuffles only inside bounded
+ * locality blocks, so the published file itself must already be well mixed.
+ */
 async function emitPhase(
   state: BuildState,
   statePath: string,
@@ -479,11 +486,14 @@ async function emitPhase(
 
   rmSync(partial, { force: true });
   rmSync(corpusPath, { force: true });
-  const writer = new CorpusGzipWriter(partial);
+  const spool = new HashOrderedSpool(join(work, ".emit-spool"));
+  // Every counter below is keyed by a closed vocabulary (source, split,
+  // population, authorship), never by a row value.
   const emittedBySource = emptySourceCounts();
   const splits = { train: 0, validation: 0, heldout: 0 };
   const populations: Record<Population, number> = { R: 0, H: 0, E: 0 };
   const authorship: Record<string, number> = {};
+  let corpus: Artifact;
 
   try {
     for await (const candidate of completeSourceCandidates(
@@ -498,9 +508,7 @@ async function emitPhase(
         id: `${config.corpusVersion}/${decision.textHash}`,
       };
 
-      const flush = writer.add(record);
-
-      if (flush) await flush;
+      spool.add(decision.textHash, JSON.stringify(record));
       emittedBySource[candidate.source]++;
       splits[record.split]++;
 
@@ -517,19 +525,19 @@ async function emitPhase(
     }
 
     replay.finish();
-    await writer.close();
-    renameSync(partial, corpusPath);
-    const corpus = await artifact(corpusPath);
-
-    if (Object.values(splits).some((count) => count === 0)) {
-      throw new Error(`Complete corpus has an empty split: ${JSON.stringify(splits)}`);
-    }
-
-    state.emit = { corpus, emittedBySource, splits, populations, authorship };
-    writeState(statePath, state);
+    corpus = await writeGzip(partial, spool.chunks());
   } finally {
-    await writer.abort();
+    replay.close();
+    spool.remove();
   }
+
+  if (Object.values(splits).some((count) => count === 0)) {
+    throw new Error(`Complete corpus has an empty split: ${JSON.stringify(splits)}`);
+  }
+
+  renameSync(partial, corpusPath);
+  state.emit = { corpus, emittedBySource, splits, populations, authorship };
+  replaceJson(statePath, state);
 }
 
 async function expectationsPhase(
@@ -557,12 +565,14 @@ async function expectationsPhase(
 
   const expectedShardBytes = Object.values(expectations.splits).reduce(
     (total, split) =>
-      total + Object.values(split.fields).reduce((sum, field) => sum + field.bytes, 0),
+      total +
+      split.sequenceMetadata.bytes +
+      Object.values(split.fields).reduce((sum, field) => sum + field.bytes, 0),
     0,
   );
 
   state.expectations = { artifact: await artifact(path), expectedShardBytes };
-  writeState(statePath, state);
+  replaceJson(statePath, state);
 }
 
 function shardArtifacts(
@@ -577,6 +587,17 @@ function shardArtifacts(
 
       artifacts[`${prefix}.json`] = await artifact(join(work, `${prefix}.json`));
       const expectedSplit = expectations.splits[split]!;
+      const metadataName = `${prefix}${expectedSplit.sequenceMetadata.suffix}`;
+      const metadataArtifact = await artifact(join(work, metadataName));
+
+      if (
+        metadataArtifact.bytes !== expectedSplit.sequenceMetadata.bytes ||
+        metadataArtifact.sha256 !== expectedSplit.sequenceMetadata.sha256
+      ) {
+        throw new Error(`Sequence metadata differs from source expectations: ${metadataName}`);
+      }
+
+      artifacts[metadataName] = metadataArtifact;
 
       for (const [field, format] of Object.entries(SHARD_FORMAT)) {
         const name = `${prefix}${format.suffix}`;
@@ -620,7 +641,7 @@ async function shardsPhase(state: BuildState, statePath: string, work: string): 
   }
 
   state.shards = { artifacts: await shardArtifacts(work, expectations) };
-  writeState(statePath, state);
+  replaceJson(statePath, state);
 }
 
 async function verifyPhase(state: BuildState, statePath: string, work: string): Promise<void> {
@@ -656,7 +677,7 @@ async function verifyPhase(state: BuildState, statePath: string, work: string): 
   }
 
   state.verify = { artifact: await artifact(report) };
-  writeState(statePath, state);
+  replaceJson(statePath, state);
 }
 
 function syncDirectory(path: string): void {
@@ -674,14 +695,13 @@ async function publishPhase(
   statePath: string,
   work: string,
   output: string,
-  configPath: string | URL,
 ): Promise<void> {
   if (!state.plan || !state.emit || !state.expectations || !state.shards || !state.verify) {
     throw new Error("Publish phase requires every prior phase");
   }
 
   const protectedText = loadProtectedText();
-  const currentInputs = await inputHashes(configPath, state.config, protectedText);
+  const currentInputs = await inputHashes(state.config, protectedText);
 
   if (JSON.stringify(currentInputs) !== JSON.stringify(state.inputs)) {
     throw new Error("Production inputs changed since the plan phase");
@@ -704,7 +724,7 @@ async function publishPhase(
 
   const manifest = {
     version: 1,
-    status: "complete-all-eligible-unique-corpus-and-verified-shards",
+    status: "budgeted-unique-corpus-and-verified-shards",
     corpusVersion: state.config.corpusVersion,
     policy: state.config.policy,
     config: state.config,
@@ -728,6 +748,7 @@ async function publishPhase(
       ingestSha256: state.plan.summary.ingestSha256,
       selectedReferencesSha256: state.plan.summary.selectedReferencesSha256,
       identity: "SHA-256 of runtime-normalized text",
+      order: "ascending text hash (source-independent, deterministic)",
       conflictPolicy: "same wording with different model supervision fails",
       winnerPolicy: "source priority, then stable provenance reference",
     },
@@ -743,6 +764,8 @@ async function publishPhase(
         ? ["No accepted real-user rows currently carry explicit consented human provenance"]
         : []),
       "AI-authored constructions are labeled as AI-authored",
+      "Sources are budgeted: config.manual sets generated rows and config.sampling " +
+        "sets deterministic keep rates; unsampled wordings are not training evidence",
       "Corpus verification proves data integrity and loader consumption, not model quality",
     ],
   };
@@ -765,46 +788,15 @@ async function publishPhase(
   rmSync(statePath, { force: true });
 }
 
-export interface ProductionPhaseResult {
-  completed: ProductionPhase | "already-published";
-  next?: ProductionPhase;
-  output: string;
-  work: string;
-}
-
-function clearStaleLock(path: string): void {
-  if (!existsSync(path)) return;
-  let live = false;
-
-  try {
-    const value = JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown };
-
-    if (typeof value.pid === "number" && Number.isInteger(value.pid)) {
-      try {
-        process.kill(value.pid, 0);
-        live = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EPERM") live = true;
-      }
-    }
-  } catch {
-    // A malformed lock cannot identify a live owner and is treated as stale.
-  }
-
-  if (live) throw new Error(`Production build is already running: ${path}`);
-  rmSync(path, { force: true });
-}
-
-/** Run exactly one resumable phase. Reinvoke with `next` until published. */
-export async function runProductionPhase(
-  requested: ProductionPhase | "next" = "next",
-  outputValue = DEFAULT_PRODUCTION_OUTPUT,
-  configPath: string | URL = PRODUCTION_CONFIG_PATH,
-  progress: (phase: string, count?: number) => void = () => {},
-): Promise<ProductionPhaseResult> {
-  const paths = pathsFor(outputValue);
+/** Advance preparation by its next pending phase. */
+async function runProductionPhase(
+  output: string,
+  progress: (phase: string, count?: number) => void,
+): Promise<ProductionPhase | "already-published"> {
+  const paths = pathsFor(output);
 
   mkdirSync(paths.parent, { recursive: true });
+  using _lock = acquirePreparationLock(paths.output);
 
   if (existsSync(paths.output)) {
     if (!existsSync(join(paths.output, "manifest.json"))) {
@@ -813,63 +805,104 @@ export async function runProductionPhase(
 
     rmSync(paths.state, { force: true });
 
-    return { completed: "already-published", output: paths.output, work: paths.work };
+    return "already-published";
   }
 
-  const config = configSchema.parse(JSON.parse(readFileSync(configPath, "utf8")));
+  const config = configSchema.parse(JSON.parse(readFileSync(PRODUCTION_CONFIG_PATH, "utf8")));
+  const state = existsSync(paths.state) ? readState(paths.state) : undefined;
 
-  clearStaleLock(paths.lock);
-  const lockFd = openSync(paths.lock, "wx", 0o600);
+  if (state) assertState(state, paths.output, config);
+  const phase = nextPhase(state);
 
-  try {
-    writeFileSync(lockFd, JSON.stringify({ pid: process.pid, output: paths.output }));
-    fsyncSync(lockFd);
-    let state = existsSync(paths.state) ? readState(paths.state) : undefined;
+  progress(`phase/${phase}`);
 
-    if (state) assertState(state, paths.output, config, configPath);
-    const phase = requested === "next" ? nextPhase(state) : requested;
+  if (phase === "plan") {
+    await planPhase(paths.state, paths.work, paths.output, config, progress);
+  } else {
+    if (!state) throw new Error(`${phase} phase requires a completed plan phase`);
+    if (phase === "emit") await emitPhase(state, paths.state, paths.work, config, progress);
+    else if (phase === "expectations") await expectationsPhase(state, paths.state, paths.work);
+    else if (phase === "shards") await shardsPhase(state, paths.state, paths.work);
+    else if (phase === "verify") await verifyPhase(state, paths.state, paths.work);
+    else await publishPhase(state, paths.state, paths.work, paths.output);
+  }
 
-    progress(`phase/${phase}`);
+  return phase;
+}
 
-    if (phase === "plan") {
-      state = await planPhase(paths.state, paths.work, paths.output, config, configPath, progress);
-    } else {
-      if (!state) throw new Error(`${phase} phase requires a completed plan phase`);
-      if (phase === "emit") await emitPhase(state, paths.state, paths.work, config, progress);
-      else if (phase === "expectations") await expectationsPhase(state, paths.state, paths.work);
-      else if (phase === "shards") await shardsPhase(state, paths.state, paths.work);
-      else if (phase === "verify") await verifyPhase(state, paths.state, paths.work);
-      else await publishPhase(state, paths.state, paths.work, paths.output, configPath);
+/** Complete or resume preparation for the single training workflow.
+ *
+ * Input/code identity owns the directory: changing a source never silently
+ * reuses old shards, and a published corpus is never overwritten.
+ */
+export async function prepareProductionCorpus(
+  progress: (phase: string, count?: number) => void,
+): Promise<string> {
+  const config = configSchema.parse(JSON.parse(readFileSync(PRODUCTION_CONFIG_PATH, "utf8")));
+
+  progress("source-integrity");
+  await publicSourceHashes(config);
+  fileHash(resolveTrainingPath(config.inputs.verifiedLlm));
+  await prepareManualSource(config, progress);
+  progress("corpus-input-integrity");
+  const inputs = await inputHashes(config, loadProtectedText());
+  const implementation = corpusCodeHashes(import.meta.url);
+
+  const identity = createHash("sha256")
+    .update(JSON.stringify({ config, inputs, implementation }))
+    .digest("hex");
+
+  const output = join(training, "data/synth", `${config.corpusVersion}-${identity.slice(0, 16)}`);
+
+  for (;;) {
+    const completed = await runProductionPhase(output, progress);
+
+    if (completed === "publish" || completed === "already-published") break;
+  }
+
+  const manifest = JSON.parse(readFileSync(join(output, "manifest.json"), "utf8")) as {
+    status?: string;
+    inputs?: Record<string, string>;
+    implementation?: Record<string, string>;
+    artifacts?: Record<string, Artifact>;
+  };
+
+  if (
+    manifest.status !== "budgeted-unique-corpus-and-verified-shards" ||
+    JSON.stringify(manifest.inputs) !== JSON.stringify(inputs) ||
+    JSON.stringify(manifest.implementation) !== JSON.stringify(implementation) ||
+    !manifest.artifacts ||
+    Object.keys(manifest.artifacts).length === 0
+  ) {
+    throw new Error("Published training corpus does not match the current source recipe");
+  }
+
+  progress("published-shard-integrity");
+
+  for (const [name, expected] of Object.entries(manifest.artifacts)) {
+    if (basename(name) !== name) throw new Error(`Invalid corpus artifact name: ${name}`);
+    const path = join(output, name);
+
+    if (
+      !existsSync(path) ||
+      statSync(path).size !== expected.bytes ||
+      (await hashArtifact(path)) !== expected.sha256
+    ) {
+      throw new Error(`Published training artifact changed: ${path}`);
     }
-
-    const updated = existsSync(paths.state) ? readState(paths.state) : undefined;
-
-    return {
-      completed: phase,
-      ...(phase === "publish" ? {} : { next: nextPhase(updated) }),
-      output: paths.output,
-      work: paths.work,
-    };
-  } finally {
-    closeSync(lockFd);
-    rmSync(paths.lock, { force: true });
   }
+
+  const verified = JSON.parse(readFileSync(join(output, "python-verification.json"), "utf8")) as {
+    passed?: boolean;
+  };
+
+  if (!verified.passed) {
+    throw new Error("The production corpus has no passing Python consumption verification");
+  }
+
+  return join(output, "corpus");
 }
 
 if (import.meta.main) {
-  const [first, second, ...extra] = process.argv.slice(2);
-
-  if (extra.length) throw new Error("Usage: build.ts [PHASE] [NEW_OUTPUT_DIRECTORY]");
-  const isPhase = first === "next" || PRODUCTION_PHASES.includes(first as ProductionPhase);
-  const phase = isPhase ? (first as ProductionPhase | "next") : "next";
-
-  const output = resolve(
-    isPhase ? (second ?? DEFAULT_PRODUCTION_OUTPUT) : (first ?? DEFAULT_PRODUCTION_OUTPUT),
-  );
-
-  const result = await runProductionPhase(phase, output, PRODUCTION_CONFIG_PATH, (name, n) =>
-    console.error(`${name}${n === undefined ? "" : `: ${n.toLocaleString()}`}`),
-  );
-
-  console.log(JSON.stringify(result, null, 2));
+  throw new Error("Corpus preparation is internal. Run from the repository root: bun run train");
 }

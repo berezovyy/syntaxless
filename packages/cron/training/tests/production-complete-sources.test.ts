@@ -9,12 +9,14 @@ import {
   completeSourceCandidates,
   type CompleteSourceName,
 } from "../src/corpus/production/complete-sources";
+import { type ManualSource } from "../src/corpus/production/manual-source";
 import { ProtectedText } from "../src/corpus/production/protected-text";
 import { sha256Hex } from "../src/fingerprint";
 import { Sentence } from "../src/sentence";
 import { tempDir } from "./helpers/temp-dir";
 
 interface Paths {
+  manualSource?: ManualSource;
   publicCorpusPath: string;
   verifiedLlmPath: string;
   acceptedRealDirectory: string;
@@ -45,30 +47,11 @@ async function collect(
     ...paths,
     sources,
     protectedText,
-    manualRecords: 320,
-    manualKernelsPerKind: 2,
   })) {
     rows.push(row);
   }
 
   return rows;
-}
-
-async function first(paths: Paths, source: CompleteSourceName): Promise<CompleteSourceCandidate> {
-  const generator = completeSourceCandidates({
-    ...paths,
-    sources: [source],
-    protectedText: new ProtectedText([]),
-    manualRecords: 1,
-    manualKernelsPerKind: 1,
-  });
-
-  const result = await generator.next();
-
-  await generator.return(undefined);
-  if (result.done) throw new Error(`No ${source} candidate`);
-
-  return result.value;
 }
 
 function publicNegative(id: string, text: string): CorpusRecord {
@@ -100,50 +83,6 @@ function publicNegative(id: string, text: string): CorpusRecord {
     },
   };
 }
-
-test("manual traversal is deterministic and identifies programmatic versus public rows", async () => {
-  const paths = emptyPaths("complete-sources-manual-");
-  const left = await collect(paths, ["manual"]);
-  const right = await collect(paths, ["manual"]);
-
-  expect(left).toEqual(right);
-  expect(left).toHaveLength(320);
-  expect(left.every((row) => row.source === "manual")).toBe(true);
-
-  expect(
-    left.every((row) =>
-      ["manual-mix-v1", "tatoeba-legacy-manual"].includes(row.record.provenance?.sourceId ?? ""),
-    ),
-  ).toBe(true);
-
-  expect(new Set(left.map((row) => row.record.provenance!.sourceId))).toEqual(
-    new Set(["manual-mix-v1", "tatoeba-legacy-manual"]),
-  );
-
-  expect(left.every((row) => row.union.priority === 40)).toBe(true);
-});
-
-test("authored and systematic traversals expose canonical provenance", async () => {
-  const paths = emptyPaths("complete-sources-generated-");
-  const authored = await first(paths, "authored");
-
-  expect(authored.record.provenance).toMatchObject({
-    authorship: "ai-authored",
-    sourceId: "whole-utterances-v1",
-  });
-
-  expect(authored.union.priority).toBe(20);
-
-  const systematic = await first(paths, "systematic");
-
-  expect(systematic.record.provenance).toMatchObject({
-    authorship: "programmatic",
-    sourceId: "systematic-catalog-v1",
-  });
-
-  expect(systematic.record.split).toBe("train");
-  expect(systematic.union.priority).toBe(50);
-});
 
 test("public and verified LLM inputs are strict, protected, attributed, and ordered deterministically", async () => {
   const paths = emptyPaths("complete-sources-files-");

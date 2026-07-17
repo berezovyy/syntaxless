@@ -1,18 +1,22 @@
 {
   "version": 1,
   "corpusVersion": "production-complete-v1",
-  "policy": "all-eligible-runtime-normalized-texts",
+  "policy": "budgeted-runtime-normalized-texts",
   "manual": {
-    "records": 20000000,
+    "records": 1800000,
     "seed": 20260913,
-    "kernelsPerKind": 2048
+    "kernelsPerKind": 2048,
+    "spellingNoise": 0
+  },
+  "sampling": {
+    "authored": 0.1,
+    "systematic": 0.1,
+    "public": 0.1
   },
   "union": {
     "partitions": 64
   },
   "inputs": {
-    "manualCorpus": "data/synth/production-sources/manual-complete-v1.jsonl.gz",
-    "manualManifest": "data/synth/production-sources/manual-complete-v1.manifest.json",
     "publicCorpus": "data/synth/production-sources/tatoeba-english-v2/corpus.jsonl",
     "publicManifest": "data/synth/production-sources/tatoeba-english-v2/manifest.json",
     "publicManifestSha256": "c99bff996bd44e603076cd74eb18d39ef2508ef6c1ae05b2f5721c0fc4bd4bb2",

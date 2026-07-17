@@ -1,5 +1,6 @@
-/** Same-filesystem staged publication: an existing version is never modified. */
-import { createHash } from "node:crypto";
+/** Immutable directory publication and atomic JSON state/report replacement. */
+import { Database } from "bun:sqlite";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   createReadStream,
@@ -61,6 +62,49 @@ function syncDirectory(path: string): void {
   }
 }
 
+/** Replace owned JSON metadata; callers coordinate writes to the destination. */
+export function replaceJson(path: string, value: unknown): void {
+  const target = resolve(path);
+  const payload = `${JSON.stringify(value, null, 2)}\n`;
+  const parent = dirname(target);
+  const temporary = join(parent, `.${basename(target)}.${randomUUID()}.tmp`);
+  const fd = openSync(temporary, "wx", 0o600);
+
+  using _temporary = {
+    [Symbol.dispose]() {
+      rmSync(temporary, { force: true });
+    },
+  };
+
+  try {
+    writeFileSync(fd, payload);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+
+  renameSync(temporary, target);
+  syncDirectory(parent);
+}
+
+/** Closing the connection or process releases ownership. Keep the inode:
+ * unlinking a lock while another connection holds it would admit two owners. */
+export function acquirePreparationLock(output: string): Disposable {
+  const path = join(dirname(output), `.${basename(output)}.lock.sqlite`);
+  const lock = new Database(path, { create: true });
+
+  try {
+    lock.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE;");
+
+    return lock;
+  } catch (error) {
+    lock.close(true);
+    throw new Error(`Cannot acquire production preparation lock: ${path}`, {
+      cause: error,
+    });
+  }
+}
+
 export async function publishDirectory<T>(
   output: string,
   requiredBytes: number,
@@ -73,40 +117,34 @@ export async function publishDirectory<T>(
 
   mkdirSync(parent, { recursive: true });
   diskPreflight(parent, requiredBytes);
-  const lock = join(parent, `.${basename(target)}.lock`);
-  // O_EXCL prevents cooperating generators from publishing the same version.
-  const lockFd = openSync(lock, "wx", 0o600);
-  let staging: string | undefined;
+  using _lock = acquirePreparationLock(target);
 
-  try {
-    writeFileSync(lockFd, JSON.stringify({ pid: process.pid, target }));
-    fsyncSync(lockFd);
-
-    if (existsSync(target)) {
-      throw new Error(`Published path appeared while taking the lock: ${target}`);
-    }
-
-    staging = mkdtempSync(join(parent, `.${basename(target)}.building-`));
-    const value = await build(staging);
-
-    if (!existsSync(join(staging, "manifest.json"))) {
-      throw new Error("Publication requires a completed manifest.json");
-    }
-
-    if (existsSync(target)) {
-      throw new Error(`Refusing to replace a path created during generation: ${target}`);
-    }
-
-    syncDirectory(staging);
-    renameSync(staging, target);
-    staging = undefined;
-    syncDirectory(parent);
-
-    return value;
-  } finally {
-    // Only our uniquely allocated staging directory is removed on failure.
-    if (staging) rmSync(staging, { recursive: true, force: true });
-    closeSync(lockFd);
-    rmSync(lock);
+  if (existsSync(target)) {
+    throw new Error(`Published path appeared while taking the lock: ${target}`);
   }
+
+  const staging = mkdtempSync(join(parent, `.${basename(target)}.building-`));
+
+  using _staging = {
+    [Symbol.dispose]() {
+      // This name is uniquely ours; after publication it no longer exists.
+      rmSync(staging, { recursive: true, force: true });
+    },
+  };
+
+  const value = await build(staging);
+
+  if (!existsSync(join(staging, "manifest.json"))) {
+    throw new Error("Publication requires a completed manifest.json");
+  }
+
+  if (existsSync(target)) {
+    throw new Error(`Refusing to replace a path created during generation: ${target}`);
+  }
+
+  syncDirectory(staging);
+  renameSync(staging, target);
+  syncDirectory(parent);
+
+  return value;
 }

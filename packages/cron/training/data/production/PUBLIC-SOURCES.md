@@ -1,5 +1,9 @@
 # Public-source investigation
 
+This records the published input's history. Its source-import builders and
+downloader have been retired; `bun run train` consumes the existing pinned JSONL
+and manifest. The artifacts and measured evidence below are preserved.
+
 ## Tatoeba English detailed export, 2026-09-19 snapshot
 
 The production expansion uses the detailed public export so source sentence IDs
@@ -63,9 +67,9 @@ listed owner. Owner names are not proof of original authorship.
 The retired quota-selection implementation previously demonstrated that 208,301
 rows could be selected twice with the same ordered-ID hash under 10% owner and
 opening-word caps and a four-row related-group cap. This remains historical
-diversity evidence, not a production target. The complete-corpus architecture
-keeps every eligible unique public row; training-time sampling controls R/H/E
-exposure without removing source records.
+diversity evidence, not a production target. The budgeted-corpus architecture
+keeps a deterministic hash sample of unique public rows (`sampling.public`) and
+visits each training row once per epoch. The fixed workflow has no training-time population resampling.
 
 Reports: `results/production-tatoeba-v2-readback.json` and
 `results/production-public-selection-feasibility.json`. The published pool's

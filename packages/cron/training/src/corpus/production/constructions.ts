@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { z } from "zod";
 
-import { type Label, LABELS } from "../../../../src/model/labels";
+import { isScheduleLabel, type Label, LABELS } from "../../../../src/model/labels";
 import { SPEECH_ACTS } from "../../../../src/model/speech-acts";
 import type { ScheduleIntent } from "../../../../src/types/intent";
 import { fingerprintExample } from "../../fingerprint";
@@ -199,7 +199,7 @@ export function renderConstruction(
         fragment.text,
         fragment.label,
         fragment.separator ?? " ",
-        request && !piece.discarded && fragment.label !== "O",
+        request && !piece.discarded && isScheduleLabel(fragment.label),
       );
     }
   }

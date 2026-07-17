@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 
@@ -11,20 +11,23 @@ import {
   completeSourceCandidates,
 } from "../src/corpus/production/complete-sources";
 import {
-  buildManualSource,
   MANUAL_SOURCE_VERSION,
+  manualCorpusRecord,
+  type ManualSource,
   manualSourceManifestSchema,
   streamManualSource,
+  writeManualSource,
 } from "../src/corpus/production/manual-source";
 import { ProtectedText } from "../src/corpus/production/protected-text";
+import { publishDirectory } from "../src/corpus/production/publication";
+import { iterateMix } from "../src/mix/draw";
 import { tempDir } from "./helpers/temp-dir";
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
-async function collectManualCandidates(options: {
-  corpusPath?: string;
-  manifestPath?: string;
-}): Promise<CompleteSourceCandidate[]> {
+async function collectManualCandidates(
+  manualSource: ManualSource,
+): Promise<CompleteSourceCandidate[]> {
   const directory = tempDir("complete-manual-inputs-");
   const rows: CompleteSourceCandidate[] = [];
 
@@ -34,15 +37,7 @@ async function collectManualCandidates(options: {
     acceptedRealDirectory: join(directory, "unused-real"),
     sources: ["manual"],
     protectedText: new ProtectedText([]),
-    manualRecords: 320,
-    manualSeed: BACKWARD_SEED,
-    manualKernelsPerKind: 2,
-    ...(options.corpusPath === undefined
-      ? {}
-      : {
-          manualCorpusPath: options.corpusPath,
-          manualManifestPath: options.manifestPath!,
-        }),
+    manualSource,
   })) {
     rows.push(row);
   }
@@ -52,16 +47,27 @@ async function collectManualCandidates(options: {
 
 test("manual source writes one verified gzip and replays exact live records", async () => {
   const directory = tempDir("manual-source-");
-  const corpusPath = join(directory, "manual.jsonl.gz");
-  const manifestPath = join(directory, "manual.manifest.json");
 
-  const manifest = await buildManualSource({
-    outputPath: corpusPath,
-    manifestPath,
+  const source = {
+    directory: join(directory, "manual"),
     records: 320,
     seed: BACKWARD_SEED,
     kernelsPerKind: 2,
+    spellingNoise: 0.25,
+  };
+
+  const manifest = await publishDirectory(source.directory, 1, async (staging) => {
+    const result = await writeManualSource({ ...source, directory: staging });
+
+    expect(existsSync(source.directory)).toBe(false);
+    expect(existsSync(join(staging, "corpus.jsonl.gz"))).toBe(true);
+    expect(existsSync(join(staging, "manifest.json"))).toBe(true);
+
+    return result;
   });
+
+  const corpusPath = join(source.directory, "corpus.jsonl.gz");
+  const manifestPath = join(source.directory, "manifest.json");
 
   expect(manualSourceManifestSchema.parse(manifest)).toEqual(manifest);
 
@@ -71,6 +77,7 @@ test("manual source writes one verified gzip and replays exact live records", as
     records: 320,
     seed: BACKWARD_SEED,
     kernelsPerKind: 2,
+    spellingNoise: 0.25,
   });
 
   const compressed = readFileSync(corpusPath);
@@ -91,16 +98,7 @@ test("manual source writes one verified gzip and replays exact live records", as
 
   const streamed: CorpusRecord[] = [];
 
-  for await (const record of streamManualSource({
-    corpusPath,
-    manifestPath,
-    records: 320,
-    seed: BACKWARD_SEED,
-    kernelsPerKind: 2,
-  })) {
-    streamed.push(record);
-  }
-
+  for await (const record of streamManualSource(source)) streamed.push(record);
   expect(streamed).toHaveLength(320);
 
   expect(streamed[0]).toMatchObject({
@@ -109,80 +107,75 @@ test("manual source writes one verified gzip and replays exact live records", as
     provenance: { sourceId: expect.any(String) },
   });
 
-  const live = await collectManualCandidates({});
-  const replayed = await collectManualCandidates({ corpusPath, manifestPath });
+  const live = Array.from(
+    iterateMix({
+      count: 320,
+      seed: BACKWARD_SEED,
+      perKindKernels: 2,
+      easyNegatives: false,
+      spellingNoise: 0.25,
+    }),
+    (example, ordinal) => manualCorpusRecord(example, ordinal),
+  );
 
-  expect(replayed).toEqual(live);
+  const replayed = await collectManualCandidates(source);
+
+  expect(replayed.map((row) => row.record)).toEqual(live);
+  expect(live.every((record) => record.intent !== null)).toBe(true);
+  const noisy = live.filter((record) => record.template?.includes("/noise-"));
+
+  expect(noisy.length).toBeGreaterThan(40);
+  expect(noisy.length).toBeLessThan(120);
 });
 
 test("manual source refuses mismatched configuration and cleans failed publication", async () => {
   const directory = tempDir("manual-source-failure-");
-  const corpusPath = join(directory, "manual.jsonl.gz");
-  const manifestPath = join(directory, "manual.manifest.json");
 
-  await expect(
-    buildManualSource({
-      outputPath: corpusPath,
-      manifestPath,
-      records: 1,
-      seed: BACKWARD_SEED,
-      kernelsPerKind: 1,
-    }),
-  ).rejects.toThrow("need enough rows to hit all bands");
-
-  expect(existsSync(corpusPath)).toBe(false);
-  expect(existsSync(manifestPath)).toBe(false);
-
-  await buildManualSource({
-    outputPath: corpusPath,
-    manifestPath,
+  const source = {
+    directory: join(directory, "manual"),
     records: 320,
     seed: BACKWARD_SEED,
     kernelsPerKind: 2,
-  });
+    spellingNoise: 0.25,
+  };
+
+  await expect(
+    publishDirectory(source.directory, 1, (staging) =>
+      writeManualSource({
+        ...source,
+        directory: staging,
+        records: 1,
+        kernelsPerKind: 1,
+      }),
+    ),
+  ).rejects.toThrow("need enough rows to hit all bands");
+
+  expect(existsSync(source.directory)).toBe(false);
+  expect(readdirSync(directory)).toEqual([".manual.lock.sqlite"]);
+
+  await publishDirectory(source.directory, 1, (staging) =>
+    writeManualSource({ ...source, directory: staging }),
+  );
 
   const mismatched = async (): Promise<void> => {
     for await (const _ of streamManualSource({
-      corpusPath,
-      manifestPath,
+      ...source,
       records: 321,
-      seed: BACKWARD_SEED,
-      kernelsPerKind: 2,
     })) {
       // Configuration validation runs before the first record.
     }
   };
 
   await expect(mismatched()).rejects.toThrow("configuration mismatch");
+  const corpusPath = join(source.directory, "corpus.jsonl.gz");
+  const prior = readFileSync(corpusPath);
 
   await expect(
-    buildManualSource({
-      outputPath: corpusPath,
-      manifestPath,
-      records: 320,
-      seed: BACKWARD_SEED,
-      kernelsPerKind: 2,
+    publishDirectory(source.directory, 1, () => {
+      throw new Error("Existing published source must not invoke its writer");
     }),
   ).rejects.toThrow("Refusing to overwrite");
-});
 
-test("manual artifact options must be supplied as a pair", async () => {
-  const directory = tempDir("manual-source-path-pair-");
-
-  const run = async (): Promise<void> => {
-    for await (const _ of completeSourceCandidates({
-      publicCorpusPath: join(directory, "unused-public.jsonl"),
-      verifiedLlmPath: join(directory, "unused-llm.jsonl"),
-      acceptedRealDirectory: join(directory, "unused-real"),
-      sources: ["manual"],
-      protectedText: new ProtectedText([]),
-      manualCorpusPath: join(directory, "only.jsonl.gz"),
-    })) {
-      // The missing manifest path is rejected before opening either path.
-    }
-  };
-
-  await expect(run()).rejects.toThrow(
-    "manualCorpusPath and manualManifestPath must be supplied together",
-  );
+  expect(readFileSync(corpusPath)).toEqual(prior);
+  expect(readdirSync(directory).sort()).toEqual([".manual.lock.sqlite", "manual"]);
 });

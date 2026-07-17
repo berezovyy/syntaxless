@@ -1,20 +1,13 @@
 /** Full-stream, disk-indexed corpus audit. No model predictions or eval-derived gold. */
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import {
-  createReadStream,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 import { compile } from "../../../../src/compiler";
-import { valueOf } from "../../../../src/model/labels";
+import { isScheduleLabel, valueOf } from "../../../../src/model/labels";
 import { tokenize } from "../../../../src/model/tokenizer";
 import { decodeIntent, UnsafeScheduleContextError } from "../../../../src/parser/decode";
 import {
@@ -185,7 +178,7 @@ export class CorpusAudit {
     }
 
     const request = act === "request" || act === "correction";
-    const hasSchedule = record.spans.some((span) => span.label !== "O");
+    const hasSchedule = record.spans.some((span) => isScheduleLabel(span.label));
     const population: Population = request ? "R" : hasSchedule ? "H" : "E";
 
     report.populations[population]++;
@@ -234,8 +227,15 @@ export class CorpusAudit {
       cursor = span.end;
       if (typeof span.actionable !== "boolean") this.#fail(id, "missing-actionability");
 
-      if (span.label === "O" && (span.actionable || span.clauseStart)) {
+      if (!isScheduleLabel(span.label) && (span.actionable || span.clauseStart)) {
         this.#fail(id, "actionable-or-boundary-on-prose");
+      }
+
+      if (
+        span.label === "CONTEXT_NUMBER" &&
+        !/^\d+$/.test(record.text.slice(span.start, span.end))
+      ) {
+        this.#fail(id, "invalid-context-number");
       }
 
       if (!request && span.actionable) this.#fail(id, "actionable-negative");
@@ -345,7 +345,10 @@ export class CorpusAudit {
         const inner = {
           ...gold,
           speechAct: "request" as const,
-          spans: spans.map((span) => ({ ...span, actionable: span.label !== "O" })),
+          spans: spans.map((span) => ({
+            ...span,
+            actionable: isScheduleLabel(span.label),
+          })),
         };
 
         if (!oracleAgrees(oracleDecode(inner), record.intent)) {
@@ -372,7 +375,7 @@ export class CorpusAudit {
       value(`interval/${i.frequency.unit}`, i.frequency.interval);
 
       if (i.time) {
-        value("hour", i.time.hour);
+        if (i.time.hour !== undefined) value("hour", i.time.hour);
         value("minute", i.time.minute);
       }
 
@@ -393,7 +396,7 @@ export class CorpusAudit {
 
     if (
       act === "correction" &&
-      spans.some((s) => s.label !== "O" && !s.actionable) &&
+      spans.some((s) => isScheduleLabel(s.label) && !s.actionable) &&
       spans.some((s) => s.actionable)
     ) {
       report.explicitCorrections++;
@@ -534,25 +537,4 @@ export async function auditCorpus(
     audit.close();
     rmSync(scratch, { recursive: true, force: true });
   }
-}
-
-if (import.meta.main) {
-  const args = process.argv.slice(2);
-  const legacy = args.includes("--legacy");
-  const paths = args.filter((arg) => arg !== "--legacy");
-
-  if (paths.length !== 2) throw new Error("usage: audit <corpus.jsonl> <report.json> [--legacy]");
-  const [input, output] = paths as [string, string];
-
-  if (existsSync(output)) throw new Error("Audit report already exists; refusing to overwrite it");
-  const report = await auditCorpus(input, { requireProvenance: !legacy });
-
-  mkdirSync(dirname(output), { recursive: true });
-  writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
-
-  process.stdout.write(
-    `${JSON.stringify({ records: report.records, passed: report.passed, scope: report.scope, violations: report.violations }, null, 2)}\n`,
-  );
-
-  process.exitCode = report.passed ? 0 : 1;
 }

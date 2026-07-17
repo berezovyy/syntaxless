@@ -1,5 +1,5 @@
 import { validateInterval } from "../../../../src/compiler/validate";
-import { valueOf } from "../../../../src/model/labels";
+import { isScheduleLabel, valueOf } from "../../../../src/model/labels";
 /** Coverage evidence is distinct from row integrity and from model acceptance. */
 import specification from "../../../data/production/coverage-v1.json";
 import type { CorpusRecord } from "../merge";
@@ -89,7 +89,7 @@ export class ConstructionCoverage {
     value(`interval/${intent.frequency.unit}`, intent.frequency.interval);
 
     if (intent.time) {
-      value("hour", intent.time.hour);
+      if (intent.time.hour !== undefined) value("hour", intent.time.hour);
       value("minute", intent.time.minute);
 
       if (intent.weekdays?.length === 1) {
@@ -129,7 +129,7 @@ export class ConstructionCoverage {
 
     if (
       row.speechAct === "correction" &&
-      row.spans.some((s) => s.label !== "O" && !s.actionable) &&
+      row.spans.some((s) => isScheduleLabel(s.label) && !s.actionable) &&
       row.spans.some((s) => s.actionable)
     ) {
       increment(current.interactions, "old-and-new-schedule-with-actionability", group);
@@ -294,7 +294,7 @@ export class ConstructionCoverage {
 
       for (const unit of ["minute", "hour", "day", "week", "month"]) {
         for (const n of intervals) {
-          if (validateInterval(unit, n) === null) requireValue(`interval/${unit}`, n);
+          if (validateInterval(n) === null) requireValue(`interval/${unit}`, n);
         }
       }
 
