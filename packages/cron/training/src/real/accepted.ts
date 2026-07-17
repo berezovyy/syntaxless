@@ -1,12 +1,15 @@
 /**
- * Load Track C accepted rows: agree:3, exec:true, roundtrip:true.
+ * Load prepared real-source records with the historical acceptance markers.
  * `rejected.jsonl` and yield/manifest are not training-eligible.
+ * Production integration separately validates spans, intent, provenance,
+ * consent and protected wording; these markers alone do not authorize training.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type { Label } from "../../../src/model/labels";
 import type { ScheduleIntent } from "../../../src/types/intent";
+import { readLinesSync } from "../corpus/jsonl-io";
 import type { CorpusProvenance } from "../corpus/provenance";
 
 /** Explicit consent metadata required before a real row may enter training. */
@@ -54,25 +57,25 @@ export function isAcceptedReal(value: unknown): value is AcceptedRealRecord {
   );
 }
 
-export function loadAcceptedReal(dir: string): AcceptedRealRecord[] {
-  if (!existsSync(dir)) return [];
+/** Stream accepted records file by file, one line at a time. */
+export function* iterateAcceptedReal(dir: string): Generator<AcceptedRealRecord> {
+  if (!existsSync(dir)) return;
 
   const names = readdirSync(dir)
     .filter((name) => name.endsWith(".jsonl") && !SKIP.has(name))
     .sort();
 
-  const records: AcceptedRealRecord[] = [];
-
   for (const name of names) {
-    const text = readFileSync(join(dir, name), "utf8");
-
-    for (const line of text.split("\n")) {
+    for (const line of readLinesSync(join(dir, name))) {
       if (line.trim().length === 0) continue;
       const value = JSON.parse(line) as unknown;
 
-      if (isAcceptedReal(value)) records.push(value);
+      if (isAcceptedReal(value)) yield value;
     }
   }
+}
 
-  return records;
+/** Array form for small tools; corpus preparation streams instead. */
+export function loadAcceptedReal(dir: string): AcceptedRealRecord[] {
+  return Array.from(iterateAcceptedReal(dir));
 }
