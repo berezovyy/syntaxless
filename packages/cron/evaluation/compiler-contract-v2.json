@@ -1,0 +1,806 @@
+{
+  "version": 2,
+  "createdAt": "2026-10-12T01:08:26.843394+00:00",
+  "reason": "Equal recurrence intervals cannot use clock-field steps that produce a shorter interval at the next hour or day. Only exact reviewed historical records receive corrected compiler targets; wording, intents and consumption identities remain unchanged.",
+  "policy": "Minute intervals must divide 60 and hour intervals must divide 24. No new language acceptance or model promotion is established.",
+  "sourceSha256": {
+    "human-calibration-v2.jsonl": "efe269e46330789ed5cc8787fa46b829bbf663ffb9e9a1ed4abb955617f99d25",
+    "human-v1.jsonl": "44166078b7ec3c0547cb0e5efc578ffd2fc7e4e527b51e0bc94fb386d800f6be",
+    "human-v10.jsonl": "58a1380346c8f7c78ec532c2763778101eaa50c306b04ce55b5d4726ca841186",
+    "human-v11.jsonl": "5e8a2ce9fd014e67e781e67a316c7a5e24db593dd648f37da9322272e4613670",
+    "human-v12.jsonl": "5f09f3c5681b0236c78024a1dcf67cd8aa69ec328688a8aadea2eb4f5dbc2e14",
+    "human-v13.jsonl": "f820004ba7aae2df91fc1a2b95bd96150763be82ce4cf4d668e2473a18807bb8",
+    "human-v14.jsonl": "3e82b1d1733d21f3530775948637f08ecb890f97517cd3434717086b8e3d4180",
+    "human-v15.jsonl": "b5173887da94361cf07731f7ac644005297c10de8386f914c1d4f195443c5397",
+    "human-v2.jsonl": "ed3914bb0cd6fbf591e0c49fcd22a67afdf9d04c1c65936d1258b2832efe2ad8",
+    "human-v3.jsonl": "b1247ed94271c743ab1f633a3d0c670872b65f44426412f09f42b284eddae93b",
+    "human-v4.jsonl": "5af1c32e7ff713b3a090f61fbf5abd7ed5cc16622953706a3423e2f0a3ef6a23",
+    "human-v5.jsonl": "989896ccaa1191fa95532281569a562cde630e7317c3a2765a8a0b3820bfd07a",
+    "human-v6.jsonl": "286f1e52a97db5a87813a7a2105b08f392d5b4415f5e99534d290e5a08b1992e",
+    "human-v7.jsonl": "0643782939e913856af7d4f68248b82bfd610360775d05fa2ad467d27bad485d",
+    "human-v8.jsonl": "a4a7b969d91b36bcf50d57658785454a93c38c8fece8f16a956969293ab16911",
+    "human-v9.jsonl": "2f89b818686a6e236b5df1831a0344102b10dd8202be7ed0ffdb0972c24deef7"
+  },
+  "corrections": [
+    {
+      "id": "cal2-positive_cadence-02",
+      "recordSha256": "8c812adf476fed46afeb6da4697cf5691bd77769379be1240e5c36bad70118c8",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */13 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "cal2-positive_cadence-03",
+      "recordSha256": "6528c0adae4dd771b638e497480dfebe5a5151126cbf8a799e3348d01ebe969d",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/25 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "cal2-positive_cadence-05",
+      "recordSha256": "c1019af3afa8083eb94d7b03de094fed09e59de17133ac8cf46b56a1e46b25fb",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */9 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "cal2-positive_cadence-10",
+      "recordSha256": "dd45f69018ea69923fbf49680dff7162cf95fb6cc7b9dca0a85978290d3092b1",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/40 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "acc-interval-01",
+      "recordSha256": "01f4fc5c707f94bc845e1e2d016e968c9af0d754ba5436f2cae1d284886eff07",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/25 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v10-cadence-01",
+      "recordSha256": "33af7298038ccb73d3eb9dd9c90737145f79651a1f575eb846b910c4f1361cfe",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/23 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v10-cadence-08",
+      "recordSha256": "ed0bea86fb43c2434c25941fead2845dea52bba6998eb56bfe62e8eb14e65b89",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */11 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v10-cadence-10",
+      "recordSha256": "e70452e58a7d85385484c574ff8eebf9d5305acdd3f602302d5991d2065c1f3d",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/35 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v10-correction-01",
+      "recordSha256": "846fd5066f9110e7df8e73352e373ce0cba4b935ae947c3cd9fa5563179d34a3",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/19 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v10-correction-07",
+      "recordSha256": "17e5a40ce2042e6c19e2cdcd682bb8f384d091b0904006a3730f384da16f91bd",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */5 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v11-cadence_time-01",
+      "recordSha256": "c81b0c47eafd92bc9aa1f888d4b64205c65c2cdd622f6948eb51386a203b769a",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/11 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v11-cadence_time-03",
+      "recordSha256": "36a0fe49613308753f9aecda8876cdf7b8119c397ac623e5a1eff8725ed238a2",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/42 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v11-cadence_time-04",
+      "recordSha256": "9ab87a1e9dcfcc4edf8d71d6a38585b4fda6788d89f8d8e24d55da96f1810b62",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */7 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v11-noisy-04",
+      "recordSha256": "4027d618cbca55c652b6c231b053144d34a4771e28df8ff892753d52e197e152",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/9 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v11-conversation-01",
+      "recordSha256": "357c87b4d08f3b7a5d0764097567ccaa0ba501b182ab4b9d105f5f548fb3dc6a",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/18 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v11-conversation-06",
+      "recordSha256": "6b2c37d05b4adbbb7d83cf0778f6d414432c77e33720d6444489f4ccc0524563",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/35 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v12-interval_clock-01",
+      "recordSha256": "16e05e1974d5ea05435894fb9f74e253cc0fc9f2d53c455f11377ec9ca2ca697",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/14 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v12-interval_clock-02",
+      "recordSha256": "a97ce7371551a97490439e46db12d1b2b8ad93df785f8c03a0caebf8e030e57e",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */9 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v12-interval_clock-08",
+      "recordSha256": "6ac5ca7be8e768399bafefecfd5c245b1c8eb9e5a977b6438de63eecdf809d78",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/50 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v12-noisy-01",
+      "recordSha256": "38f7b1233373aefaa465202df3956d3f1b8c8b17a23a4b0581c55e46d8ed909d",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/16 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v12-correction-01",
+      "recordSha256": "57e15907ae76ef03c4ec0faf826b87d4be2e3daeee054a14e66630eb72ca5f01",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/27 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v12-correction-07",
+      "recordSha256": "90f1882554da5c8a222631b26886531c467699c2038bc1029465e63be5dce8b8",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/45 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v13-interval-01",
+      "recordSha256": "7669c70b231a91b8a5cf39c891a50f7d374b889f175dc1dd9bd963809a2fc939",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/19 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v13-interval-04",
+      "recordSha256": "9875c51692863ab80cab8d618b36620aff5ca3582c74afebd52b67d0682c8a62",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/47 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v13-interval-09",
+      "recordSha256": "ad9496486a3c30588a37430e582980ab7d958b0c5bf1d8bf188c74a81435598e",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/28 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v13-noisy-01",
+      "recordSha256": "6be7b98e695ab9a8aa95fee38e4e48581510e40e1b959b1b797022d66d6017d2",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/22 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v13-noisy-10",
+      "recordSha256": "fac88e62f325a4b2573e34e690d5e988d890c95398394ce459306b493f593ef2",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/31 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v14-interval-01",
+      "recordSha256": "8c13bfecac432a656e28cabd314c1bbd1e150a6615f78c0a1278954b865bfc5f",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/17 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v14-noisy-01",
+      "recordSha256": "08a4be001140cc2379dfdbf07eb5af1fe4257f766d561dcd9d16f4244e50e8c9",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/26 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v14-noisy-04",
+      "recordSha256": "fe00bd811fe686764f60c28efcfcc20503db3a7e19264fca53c24dce1e15bb2f",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */9 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v14-noisy-08",
+      "recordSha256": "242c4a435f426f9be5d611974f22b694954dcd32f925bbd32b945ce2a5f5e195",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/42 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v14-correction-02",
+      "recordSha256": "4b39b8c627dac9212abc094fc582bc1eb9ea55b6e7c69cfd4c40367ba470c7e4",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/14 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v15-interval-01",
+      "recordSha256": "3d37b31d147c6e937f5568e6a6de46c09955bfe7b33e7f0eb638b373a241f743",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/19 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v15-interval-02",
+      "recordSha256": "464c5bd698f8c58d4caa001f16d1cb01de34d121aa6cdd8519f0f0bc313d3330",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */7 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v15-noisy-01",
+      "recordSha256": "1b5d3707ad6932bfaa852f83d4a45edf24beb42159c2d7abb3271a21536d3088",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/27 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v15-noisy-08",
+      "recordSha256": "92c1a66245135426ac76bff5ee33a72d9c8aaa153b6af594ad5771d50de47894",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/33 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v15-correction-02",
+      "recordSha256": "8372bc9bb90e0e95ba5bb02993834ad5d4367b5c21ebbec8b99e97733761653f",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/13 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v15-correction-06",
+      "recordSha256": "5f4d91c0d318c1dbafe086bbfffd93ad7fdeceba1588cd6910b47e2784312b27",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */7 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v2-interval-01",
+      "recordSha256": "b88c665014e33970fba18568f3d049e730cba64d0e8e264553ddec9900c30273",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/7 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v2-interval-04",
+      "recordSha256": "44e98ba9c621e18f3174341d52ed532c599dd10db6da7f3a245bc4ee1225812e",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/45 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v3-interval-01",
+      "recordSha256": "f41307286d9c359d36bd176d25b21ab659f88b7b5c655548218c936c9cba577c",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/9 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v3-interval-03",
+      "recordSha256": "6e541ceaca602fbe3eb37cdfb0dd12a4950e15ed1ebc3c2384c4b784e5183814",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/25 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v3-correction-01",
+      "recordSha256": "a92717c16f87d530329cb604992a4e743ddaa94f71f57283790ee70cf2f1b4ee",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/14 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v4-interval-01",
+      "recordSha256": "e5a9dd8ef68edfa7f9a6b66a799c4617fb79343c23e998646bfb7ff65e75a396",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/11 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v4-interval-02",
+      "recordSha256": "1bad26aeb927b974952ea90e88ad074a3a627850eda2afa65450179b43b0cbb2",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */5 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v4-interval-05",
+      "recordSha256": "18bd7eb6b18609cb26c59029b4644a35d991987e7587bafbea651b3ad3011d12",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/50 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v4-correction-01",
+      "recordSha256": "a9bb6c4727be1668561739ce16042518aa012e5c15ca535e829a345e37b42c27",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/18 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v5-interval-01",
+      "recordSha256": "cb3791a10794444c40a3388c97d859d678a2049652587418e43d1777b443d609",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/13 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v5-interval-02",
+      "recordSha256": "183c59fee806cb3c08919b2db51649a97506a693e07dceb52d82d2ddc96a7a23",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */7 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v5-correction-01",
+      "recordSha256": "099710a31ad1611d670c8d935f52244a79d1b0ed051055c1bdb63d95740550e5",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/22 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v6-cadence-01",
+      "recordSha256": "c49177d2000d1c8b040430ac7548ba946de72658ffcdef33da459569d5dde629",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/17 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v6-cadence-10",
+      "recordSha256": "defe36bf9845b23183bd551659a23b85e38e0ca3d67c438482584176bf6ef490",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/23 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v6-correction-01",
+      "recordSha256": "b4680307cf46dbe73bda14af88c12e6fe66b6a49c475aa08559123c28f2c1c16",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/26 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v7-cadence-01",
+      "recordSha256": "64323faad14c659cb206665b13f7d9fdebef3c021cfd8866ba6f8d9c27ced08f",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/19 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v7-cadence-02",
+      "recordSha256": "652bccb2902693a3eece0650d8b0fa5f643cb8d62c1dd6514d1f553a3ca25f18",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */5 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v7-cadence-09",
+      "recordSha256": "ca02e08a6317219e83a6ac15d7152f898d9baa13371396a7af15c902d2a9bcf4",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/14 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v7-correction-01",
+      "recordSha256": "11a51b002393e8e986e3a27203d10cb54c89676f8953f58c85a8be6929670098",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/18 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v8-cadence-01",
+      "recordSha256": "a16061b0deabede69c1a54129a8ce653eae1236b1b2069663bbe40b9c2b983ee",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/11 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v8-cadence-02",
+      "recordSha256": "e684db2e1d95b290c05f35fd2357db62d2d1053a44494efed2006fc3ada637ae",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */9 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v8-cadence-10",
+      "recordSha256": "e9895ba912aa27c59440b92b7aad1b6d1ac10ba85eecd563b32b0b767201e504",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/27 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v8-correction-01",
+      "recordSha256": "26a5d89ccd94c9be3384cceb4fe6f825171ec8e805e1779907c88a04844956ea",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/16 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v9-interval_time-01",
+      "recordSha256": "83c7d1e1601f31778f24918e6feed8a93de4e405cf8621a96f28a48b84cb696a",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/13 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v9-interval_time-08",
+      "recordSha256": "0810a1932cc6b1a4d6d51837aea631cd151996e3f92ff5f7b730b9d643d494a6",
+      "originalExpected": {
+        "supported": true,
+        "expression": "0 */7 * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v9-interval_time-10",
+      "recordSha256": "024b24a8fe45aa472378e1687c18dd8e031ff9ed864e8121b121336bbe579ef4",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/42 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    },
+    {
+      "id": "v9-correction-01",
+      "recordSha256": "ff6f57e87502ad481d301f99d68318400783cc53b7afd11febb355772699e7cf",
+      "originalExpected": {
+        "supported": true,
+        "expression": "*/17 * * * *"
+      },
+      "expected": {
+        "supported": false,
+        "code": "non-unit-interval"
+      }
+    }
+  ]
+}

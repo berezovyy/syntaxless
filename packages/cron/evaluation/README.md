@@ -1,8 +1,40 @@
 # Human-style evaluation
 
+## Compiler contract correction
+
+The stage 7 compiler refuses intervals whose cron field steps produce unequal
+gaps at hour or day boundaries. Historical fixtures contain 65 supported targets
+for such intervals. `compiler-contract-v2.json` records corrected compiler
+targets alongside the original targets and exact record and file hashes.
+Historical text, intents and consumption records remain unchanged.
+
+The evaluator applies corrections only to the exact reviewed records and
+reports compiler contract version 2 and the correction manifest digest. New or
+altered records retain their supplied targets and must pass the usual checks.
+The correction establishes no new language accuracy or model promotion, and old
+compiler scores are not directly comparable to the corrected contract.
+
+## Historical wording protection
+
+`historical-acceptance.json` preserves consumed partitions that no longer match
+the current fixtures. Two partitions come directly from Git blobs, and two more
+were restored by reversing documented gold corrections. Each restored partition
+has the exact digest already recorded in `consumed.json`. The restoration proof
+records source Git blobs, changed fields and documentation identities in
+`training/cron/recovery-proof-2026-10-12.json`.
+
+The archive protects wording only. Historical authoring mistakes remain intact
+to preserve consumed identities, and the records aren't valid new training gold
+or fresh acceptance evidence. Current fixtures and the archive account for
+19 of 22 consumed partitions. Earlier v9 and v11 partitions remain unavailable.
+Compact preparation excludes available wording and records the missing identities
+as a historical evidence limitation. Exclusion of unavailable wording cannot be
+verified. Historical reconstruction isn't a training prerequisite, and fresh
+reserved acceptance remains required for promotion. The ledger stays unchanged.
+
 `human-v1.jsonl` is a versioned, evaluation-only behavioral corpus. It is not a
-training corpus and must never be passed to `backward.ts`, `generate.ts`,
-`featurize.ts`, the Python trainer, checkpoint selection, or calibration.
+training corpus and must never enter production corpus preparation, featurization,
+parameter training, checkpoint selection, or export calibration.
 
 The partitions have separate purposes:
 
@@ -11,21 +43,23 @@ The partitions have separate purposes:
 - `acceptance`: reserved final promotion evidence; never use its wording to
   change templates, features, decoding, confidence, or checkpoints.
 
+`bun run train` selects checkpoints on complete synthetic validation and fits
+export thresholds on that validation split. It scores consumed `human-v*` cases
+once after export as regression diagnostics. Human evaluation does not select
+epochs or certify promotion. Fresh acceptance remains separate.
+
 Every record deliberately lacks renderer spans and training split/frame fields,
 and carries `trainingEligible: false`. `human-evaluate.ts` fails closed if the
 file is moved under `training/data`, becomes training-shaped, is referenced by
 a generator, or contains wording copied verbatim into generator source.
 
-Run development diagnostics from the repository root after building:
+The training coordinator calls `evaluateHumanCorpus` directly for the consumed
+regression union and writes `human-regression.json` in the run directory. There
+is no separate evaluation command or training partition flag. Development,
+calibration and fresh acceptance remain explicit evaluation-library operations;
+the fixed training workflow uses regression only.
 
-```sh
-bun run --cwd packages/cron/training evaluate:human
-```
-
-`--partition regression` scores the union of consumed `human-v*` files as
-development evidence (H, H-neg, H-silent). It is never promotion.
-
-Do not run the `acceptance` partition until the candidate is otherwise frozen.
+Do not evaluate the `acceptance` partition until the candidate is otherwise frozen.
 
 The acceptance partition in `human-v1.jsonl` was consumed on 2026-09-15 and is
 now development evidence only. Its acceptance-partition hash is recorded in
