@@ -1,11 +1,4 @@
-/**
- * Easy-no sentence filter. Same job as gpu-time fetch-corpus, plus extra
- * schedule tokens so E cannot smuggle a hole. Pure: no I/O.
- *
- * Length floor is 20 chars / 4 words so the required keep-fixtures
- * ("Please close the window.", "Room 10 contains 8 chairs.") pass.
- * gpu-time used 30 / 5; do not raise this without replacing those fixtures.
- */
+/** Keep ordinary English that is safe to label as an easy negative. */
 import {
   MONTH_ALIASES,
   UNIT_ABBREVIATIONS,
@@ -14,8 +7,6 @@ import {
 } from "../../../src/parser/lexicon.js";
 import { normalize } from "../../../src/parser/normalize";
 import { normalizeText, RESERVED_PHRASES } from "../background";
-
-export const EASY_FILTER_VERSION = "easy-no-v2";
 
 const TIME_SHAPED: readonly RegExp[] = [
   /\d{1,2}\s*:\s*\d{2}/,

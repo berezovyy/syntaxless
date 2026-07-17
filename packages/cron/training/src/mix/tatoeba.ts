@@ -1,43 +1,29 @@
-/**
- * Load pinned Tatoeba easy-no sentences, or empty if not fetched.
- */
-import { existsSync, readFileSync } from "node:fs";
+/** Load the local Tatoeba easy-negative source required by production. */
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { bootstrapEasySentences } from "./bootstrap";
 import { acceptEasyNo, type EasyFilterOptions } from "./filter";
 
-export const TATOEBA_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../data/real/tatoeba");
-export const TATOEBA_SENTENCES = join(TATOEBA_DIR, "sentences.txt");
-export const TATOEBA_MANIFEST = join(TATOEBA_DIR, "manifest.json");
+const directory = join(dirname(fileURLToPath(import.meta.url)), "../../data/real/tatoeba");
 
-export type EasySourceKind = "tatoeba" | "bootstrap";
+export const TATOEBA_SENTENCES = join(directory, "sentences.txt");
+export const TATOEBA_MANIFEST = join(directory, "manifest.json");
 
-export interface EasySource {
-  kind: EasySourceKind;
-  sentences: readonly string[];
-}
-
-export function loadTatoebaSentences(path = TATOEBA_SENTENCES): string[] {
-  if (!existsSync(path)) return [];
-
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
-
-export function loadEasySource(
+export function loadTatoebaSentences(
   options: EasyFilterOptions = {},
   path = TATOEBA_SENTENCES,
-): EasySource {
-  const pinned = loadTatoebaSentences(path).filter((text) => acceptEasyNo(text, options));
+): string[] {
+  const sentences = readFileSync(path, "utf8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && acceptEasyNo(line, options));
 
-  if (pinned.length >= 2000) return { kind: "tatoeba", sentences: pinned };
+  if (sentences.length < 2000) {
+    throw new Error(
+      `Tatoeba source requires at least 2000 eligible sentences: ${path} (${sentences.length})`,
+    );
+  }
 
-  return {
-    kind: "bootstrap",
-    sentences: bootstrapEasySentences().filter((text) => acceptEasyNo(text, options)),
-  };
+  return sentences;
 }
