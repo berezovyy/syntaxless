@@ -118,10 +118,9 @@ function mutateWord(word: string, noise: SpellingNoise, choice: number): string 
 }
 
 /**
- * Produce one reproducible typo for one quarter of positive rows. That is
- * enough to cover every large schedule lattice without doubling the already
- * multi-million-row corpus. The caller keeps the clean row beside this row and
- * pins both to the same split frame.
+ * Produce one reproducible typo for one quarter of inputs by default. Compact
+ * preparation can choose paired rows explicitly with `force`. The caller keeps
+ * the clean and noisy rows in the same construction group.
  */
 export function spellingVariant(
   example: RenderedExample,

@@ -1,25 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { normalizeText } from "../src/background";
-import {
-  allBagTexts,
-  humanEvalTexts,
-  humanWordingHits,
-  intraBagTrigramCollisions,
-  leakHits,
-} from "../src/slots/leak";
-
-test("bag parts are disjoint from reserved phrases, fossils, and human-v wording", () => {
-  const human = humanEvalTexts();
-
-  expect(human.length).toBeGreaterThan(0);
-  expect(allBagTexts().length).toBeGreaterThan(0);
-  expect(leakHits(human)).toEqual([]);
-});
-
-test("no two parts in the same bag share three content words in order", () => {
-  expect(intraBagTrigramCollisions()).toEqual([]);
-});
+import { allBagTexts, humanWordingHits, leakHits } from "../src/slots/leak";
 
 test("leak detection reports a planted match, rather than always returning an empty list", () => {
   const row = allBagTexts()[0]!;

@@ -11,7 +11,7 @@
  * here line up with the tokenizer's `RawToken` offsets.
  */
 import type { Label } from "../../src/model/labels";
-import { isStructural } from "../../src/model/labels";
+import { isScheduleLabel, isStructural } from "../../src/model/labels";
 import { tokenize } from "../../src/model/tokenizer";
 import { normalize } from "../../src/parser/normalize";
 
@@ -26,7 +26,7 @@ export interface Span {
 
 /** 1 iff the token belongs to the schedule the user is asking to run. */
 export function defaultActionable(label: Label): boolean {
-  return label !== "O";
+  return isScheduleLabel(label);
 }
 
 export class Sentence {
@@ -70,7 +70,7 @@ export class Sentence {
 
     this.#text += text;
     const end = this.#text.length;
-    const clauseStart = this.#pendingClause && label !== "O" && !isStructural(label);
+    const clauseStart = this.#pendingClause && isScheduleLabel(label) && !isStructural(label);
 
     if (clauseStart) this.#pendingClause = false;
 

@@ -38,6 +38,7 @@ import {
   sentence as proseSentence,
   suffix as carrierSuffix,
 } from "./background";
+import { requireClock } from "./clock.js";
 import type { Rng } from "./rng";
 import type { Family } from "./sampler";
 import { Sentence, type Span } from "./sentence";
@@ -303,7 +304,7 @@ function renderDayOfMonth(sentence: Sentence, intent: ScheduleIntent, style: str
 }
 
 function renderTimeOfDay(sentence: Sentence, intent: ScheduleIntent, style: string): void {
-  const time = intent.time!;
+  const time = requireClock(intent);
   const hour24 = time.hour;
   const minute = time.minute;
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
@@ -313,9 +314,9 @@ function renderTimeOfDay(sentence: Sentence, intent: ScheduleIntent, style: stri
   switch (style) {
     case "digits":
       sentence.add(WORDS.glue.at, "GLUE");
-      sentence.add(String(hour12), hourLabel(hour24));
+      sentence.add(String(hour12), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(padded, minuteLabel(minute), "");
+      sentence.add(padded, "MINUTE_LIT", "");
       sentence.add(meridiem, meridiemLabel(hour24 >= 12 ? "pm" : "am"));
       break;
 
@@ -338,26 +339,26 @@ function renderTimeOfDay(sentence: Sentence, intent: ScheduleIntent, style: stri
 
     case "qualifier":
       sentence.add(WORDS.glue.at, "GLUE");
-      sentence.add(String(hour12), hourLabel(hour24));
+      sentence.add(String(hour12), "HOUR_LIT");
 
       if (minute !== 0) {
         sentence.add(WORDS.glue.colon, "GLUE", "");
-        sentence.add(padded, minuteLabel(minute), "");
+        sentence.add(padded, "MINUTE_LIT", "");
       }
 
       sentence.add(qualifierFor(hour24), meridiemLabel(hour24 >= 12 ? "pm" : "am"));
       break;
     case "24h":
       sentence.add(WORDS.glue.at, "GLUE");
-      sentence.add(String(hour24), hourLabel(hour24));
+      sentence.add(String(hour24), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(padded, minuteLabel(minute), "");
+      sentence.add(padded, "MINUTE_LIT", "");
       break;
     case "compact":
       sentence.add(WORDS.glue.at, "GLUE");
-      sentence.add(String(hour12), hourLabel(hour24));
+      sentence.add(String(hour12), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(padded, minuteLabel(minute), "");
+      sentence.add(padded, "MINUTE_LIT", "");
       sentence.add(meridiem, meridiemLabel(hour24 >= 12 ? "pm" : "am"), "");
       break;
     default:

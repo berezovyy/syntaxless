@@ -30,7 +30,7 @@ function leadingSeparator(already: string, quoted: boolean, gap: string): string
  * `none` is not a wrap frame. The helper does not invent an intent.
  */
 export function wrapDiscourse(
-  inner: Sentence,
+  inner: Pick<Sentence, "text" | "spans">,
   frame: SpeechAct,
   template: DiscourseWrap,
 ): Sentence {

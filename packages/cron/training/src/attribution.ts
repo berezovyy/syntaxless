@@ -3,9 +3,6 @@
  * CONF / GOLD. No string-matching hacks on the source text beyond the gold
  * schema checks that name GOLD (uninvertible 12h clocks, through-as-shown).
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-
 import type { Label } from "../../src/model/labels.js";
 import type { SpeechAct } from "../../src/model/speech-acts.js";
 import { hourWithoutMeridiemIsInvertible } from "../../src/schedule-semantics.js";
@@ -61,72 +58,13 @@ export interface AttributionInput {
   predictedOracle?: OracleOutcome;
 }
 
-export function emptyHistogram(): AttributionHistogram {
-  return { ROLE: 0, ACT: 0, DECODE: 0, CONF: 0, GOLD: 0 };
-}
-
 export function emptyAttributionReport(): AttributionReport {
-  return { ...emptyHistogram(), records: [] };
+  return { ROLE: 0, ACT: 0, DECODE: 0, CONF: 0, GOLD: 0, records: [] };
 }
 
 export function addAttribution(report: AttributionReport, record: AttributionRecord): void {
   report[record.bucket] += 1;
   report.records.push(record);
-}
-
-export function histogramOf(report: AttributionReport): AttributionHistogram {
-  return {
-    ROLE: report.ROLE,
-    ACT: report.ACT,
-    DECODE: report.DECODE,
-    CONF: report.CONF,
-    GOLD: report.GOLD,
-  };
-}
-
-export async function writeAttributionFile(
-  path: string,
-  source: string,
-  report: AttributionReport,
-): Promise<void> {
-  let existing: {
-    ROLE?: number;
-    ACT?: number;
-    DECODE?: number;
-    CONF?: number;
-    GOLD?: number;
-    sources?: Record<string, AttributionHistogram>;
-  } = {};
-
-  try {
-    existing = JSON.parse(await readFile(path, "utf8")) as typeof existing;
-  } catch {
-    existing = {};
-  }
-
-  const sources = { ...(existing.sources ?? {}) };
-
-  sources[source] = histogramOf(report);
-  const combined = emptyHistogram();
-
-  for (const histogram of Object.values(sources)) {
-    for (const bucket of ATTRIBUTION_BUCKETS) combined[bucket] += histogram[bucket];
-  }
-
-  await mkdir(dirname(path), { recursive: true });
-
-  await writeFile(
-    path,
-    `${JSON.stringify(
-      {
-        ...combined,
-        sources,
-        records: report.records,
-      },
-      null,
-      2,
-    )}\n`,
-  );
 }
 
 /** Gold that the decoder cannot invert even with perfect labels. */
@@ -141,7 +79,12 @@ export function goldViolatesSemantics(input: AttributionInput): boolean {
     if (hourSpan !== undefined && !hasMeridiem) {
       const shown = Number(input.text.slice(hourSpan.start, hourSpan.end));
 
-      if (!hourWithoutMeridiemIsInvertible(shown, intent.time.hour)) return true;
+      if (
+        intent.time.hour === undefined ||
+        !hourWithoutMeridiemIsInvertible(shown, intent.time.hour)
+      ) {
+        return true;
+      }
     }
   }
 

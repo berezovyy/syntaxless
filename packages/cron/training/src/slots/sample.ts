@@ -105,12 +105,3 @@ export function wrapsForKernel(
 
   return out;
 }
-
-export function sampleFingerprints(n: number, seed: number): string[] {
-  const rng = createRng(seed);
-  const out: string[] = [];
-
-  for (let index = 0; index < n; index++) out.push(slotFingerprint(sampleSlotDraw(rng)));
-
-  return out;
-}

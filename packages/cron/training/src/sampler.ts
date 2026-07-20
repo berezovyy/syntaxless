@@ -119,7 +119,11 @@ export function assertValid(intent: ScheduleIntent): void {
   if (intent.time !== undefined) {
     const { hour, minute } = intent.time;
 
-    if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    if (
+      hour === undefined
+        ? intent.frequency.unit !== "hour"
+        : !Number.isInteger(hour) || hour < 0 || hour > 23
+    ) {
       throw new Error(`assertValid: hour out of range: ${String(hour)}`);
     }
 

@@ -26,6 +26,7 @@ import {
 } from "../../src/schedule-semantics.js";
 import type { FrequencyUnit, ScheduleIntent, Weekday } from "../../src/types/intent";
 import { RESERVED_PHRASES } from "./background";
+import { requireClock } from "./clock.js";
 import type { RenderedExample } from "./renderer";
 import type { Rng } from "./rng";
 import { createRng } from "./rng";
@@ -142,7 +143,7 @@ function heldoutDayOfMonth(sentence: Sentence, intent: ScheduleIntent): void {
 }
 
 function heldoutTimeOfDay(sentence: Sentence, intent: ScheduleIntent): void {
-  const time = intent.time!;
+  const time = requireClock(intent);
 
   sentence.add(String(hour12From24(time.hour)), hourLabel(time.hour));
   sentence.add(":", "GLUE", "");
