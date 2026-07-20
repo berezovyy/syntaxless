@@ -5,14 +5,12 @@
  * tokens the runtime already consumes (roles, clauseStart → boundary,
  * actionable, score 1) and asks `decodeIntent` whether they reconstruct gold.
  */
-import { createReadStream } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-import { labelId } from "../../src/model/labels.js";
+import { isScheduleLabel, labelId } from "../../src/model/labels.js";
 import type { Label } from "../../src/model/labels.js";
 import type { SpeechAct } from "../../src/model/speech-acts.js";
 import { tokenize } from "../../src/model/tokenizer.js";
@@ -23,17 +21,8 @@ import { canonicalizeIntent } from "./canonical-intent";
 import { iterateKindOracleSeeds } from "./kinds";
 import type { KindExample } from "./kinds";
 import type { RenderedExample } from "./renderer";
-import { createRng } from "./rng";
 import { defaultActionable, Sentence } from "./sentence";
 import { wrapsForKernel } from "./slots/sample";
-
-function repoRoot(): string {
-  return resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-}
-
-function resolveRepo(path: string): string {
-  return isAbsolute(path) ? path : resolve(repoRoot(), path);
-}
 
 export interface OracleSpan {
   start: number;
@@ -79,8 +68,6 @@ export interface OracleReport {
 }
 
 const KIND_SEED_COUNT = 50;
-const KINDS_SAMPLE = 200_000;
-const KINDS_SAMPLE_SEED = 20260915;
 
 /** Map gold spans onto tokenizer tokens the way featurize does, then label. */
 export function labeledTokensFromGold(
@@ -293,77 +280,8 @@ function kindExampleToRecord(example: KindExample, index: number): OracleRecord 
   };
 }
 
-/** Uniform reservoir sample of non-empty JSONL lines. Does not slurp the file. */
-export async function reservoirSampleJsonl(
-  path: string,
-  k: number,
-  seed = KINDS_SAMPLE_SEED,
-): Promise<string[]> {
-  const chosen = await reservoirSampleLineNumbers(path, k, seed);
-  const sample: string[] = new Array(chosen.size);
-  const wanted = new Map<number, number>();
-  let slot = 0;
-
-  for (const lineNumber of chosen) {
-    wanted.set(lineNumber, slot);
-    slot += 1;
-  }
-
-  const stream = createReadStream(path, { encoding: "utf8" });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  let seen = 0;
-
-  try {
-    for await (const line of rl) {
-      if (line.trim().length === 0) continue;
-      seen += 1;
-      const at = wanted.get(seen);
-
-      if (at !== undefined) sample[at] = line;
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-
-  return sample.filter((line) => line !== undefined);
-}
-
-/** Reservoir of line numbers only so a 200k sample does not retain 200k JSON strings. */
-export async function reservoirSampleLineNumbers(
-  path: string,
-  k: number,
-  seed = KINDS_SAMPLE_SEED,
-): Promise<Set<number>> {
-  const rng = createRng(seed);
-  const sample: number[] = [];
-  const stream = createReadStream(path, { encoding: "utf8" });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  let seen = 0;
-
-  try {
-    for await (const line of rl) {
-      if (line.trim().length === 0) continue;
-      seen += 1;
-
-      if (sample.length < k) {
-        sample.push(seen);
-      } else {
-        const index = rng.int(0, seen - 1);
-
-        if (index < k) sample[index] = seen;
-      }
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-
-  return new Set(sample);
-}
-
 export async function loadGoldOracleRecords(): Promise<OracleRecord[]> {
-  const dir = resolveRepo("packages/cron/training/data/gold");
+  const dir = fileURLToPath(new URL("../data/gold/", import.meta.url));
   const names = (await readdir(dir)).filter((name) => name.endsWith(".jsonl")).sort();
   const records: OracleRecord[] = [];
 
@@ -388,61 +306,6 @@ export async function loadGoldOracleRecords(): Promise<OracleRecord[]> {
   }
 
   return records;
-}
-
-export async function loadKindsSampleOracleRecords(count = KINDS_SAMPLE): Promise<OracleRecord[]> {
-  const path = resolveRepo("packages/cron/training/data/synth/kinds.jsonl");
-  const lines = await reservoirSampleJsonl(path, count);
-
-  return lines.map((line) => {
-    const value = JSON.parse(line) as {
-      id: string;
-      text: string;
-      spans: OracleSpan[];
-      intent: ScheduleIntent | null;
-      speechAct?: SpeechAct;
-      family?: string;
-      template?: string;
-    };
-
-    return asOracleRecord(value, "kinds-sample");
-  });
-}
-
-/** Stream-sample kinds.jsonl and score in place so 200k rows are not retained. */
-export async function scoreKindsJsonlSample(
-  report: OracleReport,
-  count = KINDS_SAMPLE,
-  kindsJsonl = "packages/cron/training/data/synth/kinds.jsonl",
-): Promise<void> {
-  const path = resolveRepo(kindsJsonl);
-  const chosen = await reservoirSampleLineNumbers(path, count);
-  const stream = createReadStream(path, { encoding: "utf8" });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  let seen = 0;
-
-  try {
-    for await (const line of rl) {
-      if (line.trim().length === 0) continue;
-      seen += 1;
-      if (!chosen.has(seen)) continue;
-
-      const value = JSON.parse(line) as {
-        id: string;
-        text: string;
-        spans: OracleSpan[];
-        intent: ScheduleIntent | null;
-        speechAct?: SpeechAct;
-        family?: string;
-        template?: string;
-      };
-
-      recordOracleOutcome(report, asOracleRecord(value, "kinds-sample"));
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
 }
 
 export function loadKindSeedOracleRecords(seedsPerTemplate = KIND_SEED_COUNT): OracleRecord[] {
@@ -479,7 +342,7 @@ export function loadSlottedOracleRecords(limit = 400): OracleRecord[] {
 
   for (const example of iterateKindOracleSeeds(2)) {
     if (example.intent === null) continue;
-    if (!example.example.spans.some((span) => span.label !== "O")) continue;
+    if (!example.example.spans.some((span) => isScheduleLabel(span.label))) continue;
     const hole = sentenceFromRendered(example.example);
     const wraps = wrapsForKernel(hole, ["oracle", example.kind, example.template], 2);
 
@@ -503,29 +366,22 @@ export function loadSlottedOracleRecords(limit = 400): OracleRecord[] {
   return records;
 }
 
-export async function runOracleSuite(options?: {
-  kindsSample?: number;
-  seedsPerTemplate?: number;
-  kindsJsonl?: string;
-}): Promise<OracleReport> {
+/**
+ * Score every oracle record into counters and a capped failure sample. The
+ * inputs are fixed by checked-in gold files and the kind catalog, not by the
+ * training corpus; kind seeds are scored as they are generated.
+ */
+export async function runOracleSuite(): Promise<OracleReport> {
   const report = emptyOracleReport();
 
   for (const record of await loadGoldOracleRecords()) recordOracleOutcome(report, record);
+  let index = 0;
 
-  for (const record of loadKindSeedOracleRecords(options?.seedsPerTemplate ?? KIND_SEED_COUNT)) {
-    recordOracleOutcome(report, record);
+  for (const example of iterateKindOracleSeeds(KIND_SEED_COUNT)) {
+    recordOracleOutcome(report, kindExampleToRecord(example, index++));
   }
 
   for (const record of loadSlottedOracleRecords()) recordOracleOutcome(report, record);
-  const kindsSample = options?.kindsSample ?? 0;
-
-  if (kindsSample > 0) {
-    await scoreKindsJsonlSample(
-      report,
-      kindsSample,
-      options?.kindsJsonl ?? "packages/cron/training/data/synth/kinds.jsonl",
-    );
-  }
 
   return report;
 }
@@ -570,60 +426,6 @@ export function summarizeOracleReport(report: OracleReport): OracleRedSummary {
   };
 }
 
-export interface OracleCliOptions {
-  seeds: number;
-  kindsSample: number;
-  out: string;
-  gate: boolean;
-  kindsJsonl?: string;
-}
-
-export function parseOracleArgs(argv: readonly string[]): OracleCliOptions {
-  const options: OracleCliOptions = {
-    seeds: KIND_SEED_COUNT,
-    kindsSample: 0,
-    out: "packages/cron/training/results/oracle-red.json",
-    gate: false,
-  };
-
-  let kindsSampleExplicit = false;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]!;
-
-    if (arg === "--seeds") {
-      const value = argv[++index];
-
-      if (value === undefined) throw new RangeError("missing value for --seeds");
-      options.seeds = Number(value);
-    } else if (arg === "--kinds-sample") {
-      const value = argv[++index];
-
-      if (value === undefined) throw new RangeError("missing value for --kinds-sample");
-      options.kindsSample = Number(value);
-      kindsSampleExplicit = true;
-    } else if (arg === "--out") {
-      const value = argv[++index];
-
-      if (value === undefined) throw new RangeError("missing value for --out");
-      options.out = value;
-    } else if (arg === "--gate") {
-      options.gate = true;
-    } else if (arg === "--kinds-jsonl") {
-      const value = argv[++index];
-
-      if (value === undefined) throw new RangeError("missing value for --kinds-jsonl");
-      options.kindsJsonl = value;
-    } else {
-      throw new RangeError(`unknown flag: ${arg}`);
-    }
-  }
-
-  if (options.gate && !kindsSampleExplicit) options.kindsSample = KINDS_SAMPLE;
-
-  return options;
-}
-
 export function groupedOracleFailures(
   report: OracleReport,
 ): Record<string, { kind: string; template: string; count: number; examples: OracleFailure[] }> {
@@ -654,32 +456,4 @@ export function groupedOracleFailures(
   }
 
   return grouped;
-}
-
-if (import.meta.main) {
-  const args = parseOracleArgs(process.argv.slice(2));
-
-  const report = await runOracleSuite({
-    seedsPerTemplate: args.seeds,
-    kindsSample: args.kindsSample,
-    ...(args.kindsJsonl === undefined ? {} : { kindsJsonl: args.kindsJsonl }),
-  });
-
-  const summary = summarizeOracleReport(report);
-  const out = resolveRepo(args.out);
-
-  await mkdir(dirname(out), { recursive: true });
-  await writeFile(out, `${JSON.stringify(summary, null, 2)}\n`);
-
-  process.stdout.write(
-    `oracle: ${report.correct}/${report.total} (failures ${report.failureCount})\n`,
-  );
-
-  for (const [kind, stats] of Object.entries(summary.byKind).sort()) {
-    if (stats.failures === 0) continue;
-    process.stdout.write(`  ${kind}: ${stats.failures}/${stats.total}\n`);
-  }
-
-  process.stdout.write(`report -> ${out}\n`);
-  if (args.gate && report.failureCount > 0) process.exit(1);
 }

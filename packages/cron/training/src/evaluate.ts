@@ -1,43 +1,37 @@
 /**
  * Candidate/baseline evaluation over a gold corpus.
  *
- * Baseline numbers come from the *built* `packages/cron/dist/` runtime. When a
- * candidate weight module is supplied, the engine is loaded from a scratch
- * copy of **current `src/`** (typed labels) with that candidate as
- * `weights.gen.ts`. The candidate replaces that copy's weights, so scoring
- * uses the role vocabulary `src/` was built for.
+ * Baselines run the built runtime. Typed candidates run current source with
+ * their own decoded artifact; legacy candidates use the built runtime.
+ * No source copies, generated-module replacement, or scratch trees are needed.
  *
  * The corpus is gold data with rendered spans, an expected AST, and an expected
  * compiled expression. The four contracts (`tokenRoles`, `rawDecode`,
  * `exactAst`, `compiledExpression`) are reported side by side and never summed.
  * Speech-act and actionable accuracy are extra columns, not a fifth contract.
  *
- * Reports are write-only evidence: `results/<set>.json` is never read as an
- * input to another run. The calibration and held-out frame splits are
- * development data and may not gate promotion; every report says so in `scope`.
+ * Scorers return evidence; callers own output files. The calibration and
+ * held-out frame splits are development data and may not gate promotion.
+ * Callers provide the report's evidence scope explicitly.
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import type { CompileResult } from "../../src/compiler/cron";
-import { isStructural, LABEL_COUNT } from "../../src/model/labels";
+import type { WeightsArtifact } from "../../src/model/decode";
+import { createEvaluation } from "../../src/model/evaluation";
+import { isScheduleLabel, isStructural, LABEL_COUNT } from "../../src/model/labels";
 import type { Label } from "../../src/model/labels";
 import { SPEECH_ACTS } from "../../src/model/speech-acts";
 import type { SpeechAct } from "../../src/model/speech-acts";
 import type { RawToken } from "../../src/model/tokenizer";
 import type { ParseResult } from "../../src/parser/parse";
 import type { ScheduleIntent } from "../../src/types/intent";
-import {
-  addAttribution,
-  attributeMiss,
-  emptyAttributionReport,
-  writeAttributionFile,
-} from "./attribution";
+import { addAttribution, attributeMiss, emptyAttributionReport } from "./attribution";
 import type { AttributionReport } from "./attribution";
 import { canonicalizeIntent } from "./canonical-intent";
 import { execEqual } from "./exec-score";
@@ -46,15 +40,9 @@ import { spellingVariant } from "./noise";
 import type { SpellingNoise } from "./noise";
 import { oracleDecode } from "./oracle";
 import type { OracleRecord } from "./oracle";
+import { artifactSha256 } from "./weights-hash";
 
 export { canonicalizeIntent } from "./canonical-intent";
-
-/** Default corpus/report locations, relative to the repository root. */
-export const DEFAULTS = {
-  dist: "packages/cron/dist",
-  corpus: "packages/cron/training/data/gold/reserved-carriers.jsonl",
-  out: "packages/cron/training/results/reserved-carriers.json",
-} as const;
 
 /** Keep a few examples for every complete failure-count bucket. */
 export const MAX_FAILURES_PER_CATEGORY = 3;
@@ -251,167 +239,69 @@ export function assertSameArtifact(reports: readonly { artifactSha256: string }[
   return expected;
 }
 
-interface WeightsArtifact {
-  q: string;
-  roleClasses?: number;
-  labels?: readonly string[];
-}
+type EvaluationRuntime = ReturnType<typeof createEvaluation>;
+type BuiltEvaluation = typeof import("../../src/model/evaluation");
 
-interface DistIndex {
-  parse: (text: string, options?: { overlay?: "on" | "off" }) => Promise<ParseResult>;
-  compile: (intent: ScheduleIntent) => CompileResult;
-}
-
-interface DistTokenizer {
-  tokenize: (text: string) => RawToken[];
-}
-
-interface DistPredictions {
-  labels: Uint8Array;
-  speechAct?: number;
-  actionable?: Uint8Array;
-  logits?: Float32Array;
-  pooled?: Float32Array;
-}
-
-interface DistInference {
-  inferTokens: (tokens: readonly RawToken[]) => DistPredictions;
-}
-
-interface DistLabels {
-  LABELS: readonly string[];
-}
-
-interface DistEvaluation extends DistTokenizer, DistInference, DistLabels {
-  weights: WeightsArtifact;
-  decodeRaw: (
-    text: string,
-    overlay?: "on" | "off",
-  ) => {
-    intent: ScheduleIntent;
-    confidence: number;
-    evidence?: {
-      tokenMargin: number;
-      boundaryMargin: number;
-      scheduleKind?: string;
-      scheduleKindMargin?: number;
-      scheduleKindAgreement: boolean;
-      explicitScheduleEvidence: boolean;
-      lexiconAgreement?: boolean;
-      unconsumedScheduleLikeValues: number;
-      semanticConstraintViolations: number;
-      compilerConsistent: boolean;
-    };
-  };
-}
-
-/** A decoded runtime plus the provenance of the artifact it runs. */
+/** A decoded runtime plus the provenance of the artifact it runs. No resources to close. */
 export interface Engine {
   artifactSha256: string;
-  parse: (text: string, options?: { overlay?: "on" | "off" }) => Promise<ParseResult>;
+  predict: EvaluationRuntime["predict"];
   compile: (intent: ScheduleIntent) => CompileResult;
   tokenize: (text: string) => RawToken[];
-  inferTokens: (tokens: readonly RawToken[]) => DistPredictions;
+  inferTokens: EvaluationRuntime["inferTokens"];
   labelName: (id: number) => string;
-  decodeRaw: DistEvaluation["decodeRaw"];
-  dispose: () => Promise<void>;
 }
+
+export type EvaluationPrediction = ReturnType<Engine["predict"]>;
 
 async function importModule<T>(path: string): Promise<T> {
   return (await import(pathToFileURL(path).href)) as T;
 }
 
-/**
- * Load a scoring engine. With no `weightsModulePath` the built `dist/` module
- * runs as shipped. With a candidate, a scratch copy of current `src/` is
- * loaded so labels/decode match the candidate's roleClasses.
- */
-export async function loadEngine(distDir: string, weightsModulePath?: string): Promise<Engine> {
-  let artifact: WeightsArtifact;
-  let temp: string | null = null;
-  let index: DistIndex;
-  let evaluation: DistEvaluation;
+async function builtEvaluation(distDir: string): Promise<BuiltEvaluation> {
+  const built = resolveRepo(distDir);
 
-  try {
-    if (weightsModulePath === undefined) {
-      const built = resolveRepo(distDir);
-
-      if (!existsSync(join(built, "index.js"))) {
-        throw new Error(`built runtime missing: ${built}/index.js (run the build)`);
-      }
-
-      evaluation = await importModule<DistEvaluation>(join(built, "evaluation.js"));
-      artifact = evaluation.weights;
-      index = await importModule<DistIndex>(join(built, "index.js"));
-    } else {
-      const modulePath = resolveRepo(weightsModulePath);
-
-      if (!existsSync(modulePath)) {
-        throw new Error(`weights module not found: ${modulePath}`);
-      }
-
-      const supplied = await importModule<{ weights: WeightsArtifact }>(modulePath);
-
-      artifact = supplied.weights;
-      const typedCandidate = (artifact.roleClasses ?? artifact.labels?.length) === LABEL_COUNT;
-
-      temp = await mkdtemp(join(tmpdir(), "syntaxless-evaluate-"));
-
-      if (typedCandidate) {
-        const srcRoot = join(temp, "src");
-
-        await cp(resolveRepo("packages/cron/src"), srcRoot, { recursive: true });
-        const candidate = await readFile(modulePath, "utf8");
-
-        await writeFile(join(srcRoot, "model", "weights.gen.ts"), candidate);
-        evaluation = await importModule<DistEvaluation>(join(srcRoot, "model", "evaluation.ts"));
-        index = await importModule<DistIndex>(join(srcRoot, "index.ts"));
-      } else {
-        const built = resolveRepo(distDir);
-
-        if (!existsSync(join(built, "index.js"))) {
-          throw new Error(`built runtime missing: ${built}/index.js (run the build)`);
-        }
-
-        const root = join(temp, "dist");
-
-        await cp(built, root, { recursive: true });
-
-        await writeFile(
-          join(root, "model", "weights.gen.js"),
-          `export const weights = ${JSON.stringify(artifact)};\n`,
-        );
-
-        evaluation = await importModule<DistEvaluation>(join(root, "evaluation.js"));
-        index = await importModule<DistIndex>(join(root, "index.js"));
-      }
-    }
-
-    const artifactSha256 = sha256Hex(artifact.q);
-    const scratch = temp;
-
-    return {
-      artifactSha256,
-      parse: index.parse.bind(index),
-      compile: index.compile.bind(index),
-      tokenize: evaluation.tokenize.bind(evaluation),
-      inferTokens: evaluation.inferTokens.bind(evaluation),
-      labelName: (id: number) => {
-        const label = evaluation.LABELS[id];
-
-        if (label === undefined) throw new RangeError(`label id out of range: ${id}`);
-
-        return label;
-      },
-      decodeRaw: evaluation.decodeRaw.bind(evaluation),
-      dispose: async () => {
-        if (scratch !== null) await rm(scratch, { recursive: true, force: true });
-      },
-    };
-  } catch (error) {
-    if (temp !== null) await rm(temp, { recursive: true, force: true });
-    throw error;
+  if (!existsSync(join(built, "index.js"))) {
+    throw new Error(`built runtime missing: ${built}/index.js (run the build)`);
   }
+
+  return importModule<BuiltEvaluation>(join(built, "evaluation.js"));
+}
+
+/** Baseline: built code/artifact. Typed candidate: current code/supplied artifact. */
+export async function loadEngine(distDir: string, weightsModulePath?: string): Promise<Engine> {
+  let evaluation: EvaluationRuntime;
+
+  if (weightsModulePath === undefined) {
+    const built = await builtEvaluation(distDir);
+
+    evaluation = built.createEvaluation(built.weights);
+  } else {
+    const modulePath = resolveRepo(weightsModulePath);
+
+    if (!existsSync(modulePath)) throw new Error(`weights module not found: ${modulePath}`);
+    const supplied = await importModule<{ weights: WeightsArtifact }>(modulePath);
+
+    evaluation =
+      supplied.weights.roleClasses === LABEL_COUNT || supplied.weights.roleClasses === 77
+        ? createEvaluation(supplied.weights)
+        : (await builtEvaluation(distDir)).createEvaluation(supplied.weights);
+  }
+
+  return {
+    artifactSha256: artifactSha256(evaluation.weights),
+    predict: evaluation.predict,
+    compile: evaluation.compile,
+    tokenize: evaluation.tokenize,
+    inferTokens: evaluation.inferTokens,
+    labelName: (id: number) => {
+      const label = evaluation.LABELS[id];
+
+      if (label === undefined) throw new RangeError(`label id out of range: ${id}`);
+
+      return label;
+    },
+  };
 }
 
 interface Accumulator {
@@ -659,7 +549,7 @@ function scoreParsedGold(
   engine: Engine,
   item: GoldRecord,
   parsed: ParseResult,
-  raw: ReturnType<Engine["decodeRaw"]> | null,
+  raw: ReturnType<EvaluationPrediction["decodeRaw"]> | null,
   rawError: unknown,
   buckets: ParseScoreBuckets,
 ): { astCorrect: boolean } {
@@ -795,7 +685,7 @@ function scoreParsedGold(
 }
 
 /**
- * Score one decoded engine against a corpus. All three contracts share the
+ * Score one decoded engine against a corpus. All four contracts share the
  * engine's `artifactSha256`; the caller may assert that with
  * {@link assertSameArtifact}.
  */
@@ -834,8 +724,15 @@ export async function evaluateCorpus(
   let positiveAccepted = 0;
 
   for (const item of records) {
-    const tokens = engine.tokenize(item.text);
-    const predictions = engine.inferTokens(tokens);
+    const prediction = engine.predict(item.text);
+
+    // Gold spans retain original offsets and features when normalization changes text.
+    const tokens =
+      prediction.normalized === item.text ? prediction.tokens : engine.tokenize(item.text);
+
+    const predictions =
+      prediction.normalized === item.text ? prediction.predictions : engine.inferTokens(tokens);
+
     const cursor = { index: 0 };
     const goldLabels: Label[] = [];
     const predictedLabels: Label[] = [];
@@ -887,22 +784,22 @@ export async function evaluateCorpus(
       speechActCorrect += Number(SPEECH_ACTS[predictions.speechAct] === item.speechAct);
     }
 
-    const parsed = await engine.parse(item.text);
-    let raw: ReturnType<Engine["decodeRaw"]> | null = null;
+    const parsed = prediction.parse();
+    let raw: ReturnType<EvaluationPrediction["decodeRaw"]> | null = null;
     let rawError: unknown;
 
     try {
-      raw = engine.decodeRaw(item.text);
+      raw = prediction.decodeRaw();
     } catch (error) {
       rawError = error;
     }
 
-    const parsedOff = await engine.parse(item.text, { overlay: "off" });
-    let rawOff: ReturnType<Engine["decodeRaw"]> | null = null;
+    const parsedOff = prediction.parse({ overlay: "off" });
+    let rawOff: ReturnType<EvaluationPrediction["decodeRaw"]> | null = null;
     let rawOffError: unknown;
 
     try {
-      rawOff = engine.decodeRaw(item.text, "off");
+      rawOff = prediction.decodeRaw("off");
     } catch (error) {
       rawOffError = error;
     }
@@ -988,7 +885,7 @@ export async function evaluateCorpus(
           ...item,
           spans: item.spans.map((span) => ({
             ...span,
-            actionable: span.label !== "O" && !isStructural(span.label),
+            actionable: isScheduleLabel(span.label) && !isStructural(span.label),
           })),
           template: item.id,
           style: "evaluation",
@@ -999,11 +896,12 @@ export async function evaluateCorpus(
     }
 
     if (noisy !== undefined) {
-      const noisyParsed = await engine.parse(noisy.example.text);
+      const noisyPrediction = engine.predict(noisy.example.text);
+      const noisyParsed = noisyPrediction.parse();
 
       recordTypo(typoInvariance, item, canonicalExpected, astCorrect, noisy, noisyParsed);
 
-      const noisyParsedOff = await engine.parse(noisy.example.text, {
+      const noisyParsedOff = noisyPrediction.parse({
         overlay: "off",
       });
 
@@ -1058,101 +956,4 @@ export async function evaluateCorpus(
       positiveAccepted,
     }).formatted,
   };
-}
-
-export interface EvaluateOptions {
-  dist: string;
-  corpus: string;
-  out: string;
-  weights?: string;
-}
-
-function readOption(argv: readonly string[], index: number): string {
-  const value = argv[index + 1];
-
-  if (value === undefined) throw new RangeError(`missing value for ${argv[index]}`);
-
-  return value;
-}
-
-export function parseArgs(argv: readonly string[]): EvaluateOptions {
-  let dist: string = DEFAULTS.dist;
-  let corpus: string = DEFAULTS.corpus;
-  let out: string = DEFAULTS.out;
-  let weights: string | undefined;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]!;
-
-    switch (arg) {
-      case "--dist":
-        dist = readOption(argv, index);
-        index += 1;
-        break;
-      case "--corpus":
-        corpus = readOption(argv, index);
-        index += 1;
-        break;
-      case "--out":
-        out = readOption(argv, index);
-        index += 1;
-        break;
-      case "--weights":
-        weights = readOption(argv, index);
-        index += 1;
-        break;
-      default:
-        throw new RangeError(`unknown flag: ${arg}`);
-    }
-  }
-
-  return { dist, corpus, out, ...(weights === undefined ? {} : { weights }) };
-}
-
-export const DEFAULT_SCOPE =
-  "Held-out reserved-carrier phrases. Calibration and held-out frame splits " +
-  "are development data and may not gate promotion.";
-
-if (import.meta.main) {
-  const args = parseArgs(process.argv.slice(2));
-  const engine = await loadEngine(args.dist, args.weights);
-
-  try {
-    const result = await evaluateCorpus(engine, args.corpus, DEFAULT_SCOPE);
-
-    assertSameArtifact(result.contracts);
-    const out = resolveRepo(args.out);
-
-    await mkdir(dirname(out), { recursive: true });
-    await writeFile(out, `${JSON.stringify(result, null, 2)}\n`);
-    const attributionPath = resolveRepo("packages/cron/training/results/attribution.json");
-
-    await writeAttributionFile(attributionPath, "reserved", result.attribution);
-    const overlayOnAst = result.contracts.find((contract) => contract.metric === "exactAst");
-
-    const overlayOffAst = result.overlayOff.contracts.find(
-      (contract) => contract.metric === "exactAst",
-    );
-
-    for (const contract of result.contracts) {
-      process.stdout.write(
-        `${contract.metric}: ${contract.correct}/${contract.total} ` +
-          `(${contract.accuracy.toFixed(3)})\n`,
-      );
-    }
-
-    if (overlayOnAst !== undefined && overlayOffAst !== undefined) {
-      process.stdout.write(
-        `overlay-on exactAst: ${overlayOnAst.correct}/${overlayOnAst.total} ` +
-          `(${overlayOnAst.accuracy.toFixed(3)}) overlay-off exactAst: ` +
-          `${overlayOffAst.correct}/${overlayOffAst.total} ` +
-          `(${overlayOffAst.accuracy.toFixed(3)})\n`,
-      );
-    }
-
-    process.stdout.write(`artifact sha256: ${result.artifactSha256}\n`);
-    process.stdout.write(`report -> ${out}\n`);
-  } finally {
-    await engine.dispose();
-  }
 }

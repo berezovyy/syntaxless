@@ -1,129 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { compile } from "../../src/compiler/cron";
-import { LABEL_COUNT, labelId, LABELS } from "../../src/model/labels";
+import { labelId, LABELS } from "../../src/model/labels";
 import { tokenize } from "../../src/model/tokenizer";
+import { weights } from "../../src/model/weights.gen";
+import { normalize } from "../../src/parser/normalize";
 import type { ParseResult } from "../../src/parser/parse";
-import { loadTestEngine } from "../tests/helpers/candidate-engine";
 import { tempDir } from "../tests/helpers/temp-dir";
 import type { ContractReport, Engine, GoldRecord } from "./evaluate";
-import {
-  canonicalizeIntent,
-  evaluateCorpus,
-  lintGoldRecords,
-  loadEngine,
-  parseCorpus,
-  riskCoverage,
-} from "./evaluate";
-
-describe("canonicalizeIntent", () => {
-  test("normalizes semantic sets without mutating the input", () => {
-    const intent = {
-      frequency: { unit: "week" as const, interval: 1 },
-      weekdays: ["friday" as const, "monday" as const],
-      exceptions: {
-        weekdays: ["sunday" as const, "tuesday" as const],
-        dates: ["2026-12-02", "2026-01-01", "2026-12-02"],
-      },
-    };
-
-    expect(canonicalizeIntent(intent)).toEqual({
-      frequency: { unit: "week", interval: 1 },
-      weekdays: ["monday", "friday"],
-      exceptions: {
-        weekdays: ["tuesday", "sunday"],
-        dates: ["2026-01-01", "2026-12-02"],
-      },
-    });
-
-    expect(intent.weekdays).toEqual(["friday", "monday"]);
-  });
-});
-
-describe("parseCorpus does not patch gold semantics", () => {
-  test("leaves 1:30 as 1:30 without inserting a meridiem", () => {
-    const item: GoldRecord = {
-      id: "clock",
-      family: "time-of-day",
-      text: "remind me 1:30 daily",
-      spans: [
-        { start: 0, end: 9, label: "O", clauseStart: false },
-        { start: 10, end: 11, label: "HOUR_9", clauseStart: true },
-        { start: 11, end: 12, label: "GLUE", clauseStart: false },
-        { start: 12, end: 14, label: "MINUTE_30", clauseStart: false },
-        { start: 15, end: 20, label: "RECUR", clauseStart: false },
-      ],
-      intent: {
-        frequency: { unit: "day", interval: 1 },
-        time: { hour: 13, minute: 30 },
-      },
-      expected: { supported: true, expression: "30 13 * * *" },
-    };
-
-    const [parsed] = parseCorpus(`${JSON.stringify(item)}\n`);
-
-    expect(parsed?.text).toBe("remind me 1:30 daily");
-    expect(parsed?.spans.some((span) => span.label.startsWith("MERIDIEM_"))).toBe(false);
-    expect(parsed?.intent?.time).toEqual({ hour: 13, minute: 30 });
-
-    for (const token of tokenize(item.text).filter((value) => value.kind !== 3)) {
-      expect(item.spans.some((span) => token.start >= span.start && token.end <= span.end)).toBe(
-        true,
-      );
-    }
-  });
-
-  test("does not rewrite a through date into an exclusive end", () => {
-    const item: GoldRecord = {
-      id: "bounds",
-      family: "bounds",
-      text: "from 2026-01-01 through 2026-01-31, every day",
-      spans: [],
-      intent: {
-        frequency: { unit: "day", interval: 1 },
-        bounds: { start: "2026-01-01", end: "2026-01-31" },
-      },
-      expected: { supported: false, expression: null },
-    };
-
-    const [parsed] = parseCorpus(`${JSON.stringify(item)}\n`);
-
-    expect(parsed?.intent?.bounds).toEqual({
-      start: "2026-01-01",
-      end: "2026-01-31",
-    });
-  });
-});
-
-describe("lintGoldRecords", () => {
-  test("rejects duplicate ids and overlapping spans", () => {
-    const record: GoldRecord = {
-      id: "same",
-      family: "negative",
-      text: "ordinary prose",
-      spans: [{ start: 0, end: 8, label: "O", clauseStart: false }],
-      intent: null,
-      expected: { supported: false, expression: null },
-    };
-
-    expect(() => lintGoldRecords([record, record])).toThrow(/duplicate/);
-
-    expect(() =>
-      lintGoldRecords([
-        {
-          ...record,
-          spans: [
-            { start: 0, end: 8, label: "O", clauseStart: false },
-            { start: 7, end: 13, label: "O", clauseStart: false },
-          ],
-        },
-      ]),
-    ).toThrow(/span/);
-  });
-});
+import { assertSameArtifact, evaluateCorpus, loadEngine, riskCoverage } from "./evaluate";
 
 describe("riskCoverage", () => {
   test("reports acceptance risk, silent changes, and negative false accepts", () => {
@@ -151,48 +38,33 @@ describe("riskCoverage", () => {
 });
 
 describe("loadEngine candidate uses src labels", () => {
-  test("a candidate is scored against typed LABELS without a dist build", async () => {
-    const engine = await loadTestEngine();
+  test("calibration changes behavior and the identity reported by evaluation", async () => {
+    const directory = tempDir("syntaxless-calibration-identity-");
+    const permissivePath = join(directory, "permissive.ts");
+    const strictPath = join(directory, "strict.ts");
 
-    try {
-      expect(engine.labelName(0)).toBe("O");
-      expect(engine.labelName(5)).toBe("WEEKDAY_MON");
-      expect(LABELS[5]).toBe("WEEKDAY_MON");
-      expect(engine.labelName(LABEL_COUNT - 1)).toBe(LABELS[LABEL_COUNT - 1]!);
-    } finally {
-      await engine.dispose();
+    for (const [path, energyThreshold] of [
+      [permissivePath, 1e9],
+      [strictPath, -1e9],
+    ] as const) {
+      writeFileSync(
+        path,
+        `export const weights = ${JSON.stringify({ ...weights, energyThreshold })};\n`,
+      );
     }
-  });
 
-  test("failed candidate imports remove their scratch source tree", async () => {
-    const directory = tempDir("syntaxless-invalid-candidate-");
-    const path = join(directory, "weights.gen.ts");
+    const permissive = await loadEngine(join(directory, "no-dist"), permissivePath);
+    const strict = await loadEngine(join(directory, "no-dist"), strictPath);
+    const text = "every weekday at 9am";
 
-    // The import in the copied source tree is deliberately invalid. Record that
-    // exact tree rather than inspecting unrelated temporary directories.
-    writeFileSync(
-      path,
-      `import { writeFileSync } from "node:fs";
-       import { dirname, resolve } from "node:path";
-       if (import.meta.dirname !== ${JSON.stringify(directory)}) {
-         writeFileSync(${JSON.stringify(join(directory, "scratch.txt"))}, resolve(dirname(import.meta.path), "../.."));
-         throw new Error("invalid candidate fixture");
-       }
-       export const weights = { q: "f", roleClasses: ${LABEL_COUNT} };\n`,
-    );
-
-    await expect(loadEngine(join(directory, "no-dist"), path)).rejects.toThrow(
-      "invalid candidate fixture",
-    );
-
-    const scratch = await Bun.file(join(directory, "scratch.txt")).text();
-
-    expect(scratch.startsWith(join(tmpdir(), "syntaxless-evaluate-"))).toBe(true);
-    expect(() => readdirSync(scratch)).toThrow();
+    expect(permissive.predict(text).parse().ok).toBe(true);
+    expect(strict.predict(text).parse().ok).toBe(false);
+    expect(permissive.artifactSha256).not.toBe(strict.artifactSha256);
+    expect(() => assertSameArtifact([permissive, strict])).toThrow("artifact mismatch");
   });
 });
 
-test("evaluation keeps overlay-on and overlay-off scores separate and counts false accepts", async () => {
+test("evaluation preserves original gold offsets, independent policies and false accepts", async () => {
   const intent = { frequency: { unit: "hour" as const, interval: 1 } };
   const wrong = { frequency: { unit: "day" as const, interval: 1 } };
 
@@ -200,9 +72,9 @@ test("evaluation keeps overlay-on and overlay-off scores separate and counts fal
     {
       id: "hourly",
       family: "interval",
-      text: "hourly",
+      text: "   HOURLY",
       speechAct: "request",
-      spans: [{ start: 0, end: 6, label: "UNIT_HOUR", clauseStart: true, actionable: true }],
+      spans: [{ start: 3, end: 9, label: "UNIT_HOUR", clauseStart: true, actionable: true }],
       intent,
       expected: { supported: true, expression: "0 * * * *" },
     },
@@ -238,24 +110,48 @@ test("evaluation keeps overlay-on and overlay-off scores separate and counts fal
     diagnostics: [],
   };
 
+  const inferTokens: Engine["inferTokens"] = (tokens) => ({
+    labels: Uint8Array.from(tokens, (token) => (token.start === 3 ? labelId.UNIT_HOUR : labelId.O)),
+    boundaries: new Uint8Array(tokens.length),
+    scores: new Float32Array(tokens.length),
+    boundaryScores: new Float32Array(tokens.length),
+  });
+
   const engine: Engine = {
     artifactSha256: "a".repeat(64),
     compile,
     tokenize,
-    inferTokens: (tokens) => ({
-      labels: Uint8Array.from(tokens, (token) =>
-        token.text === "hourly" ? labelId.UNIT_HOUR : labelId.O,
-      ),
-    }),
+    inferTokens,
     labelName: (id) => LABELS[id]!,
-    parse: async (text, options) =>
-      (text === "hourly") !== (options?.overlay === "off") ? accepted : rejected,
-    decodeRaw: (text, overlay) => {
-      if (text !== "hourly") throw new RangeError("fixture negative");
+    predict: (text) => {
+      const normalized = normalize(text);
+      const tokens = tokenize(normalized);
 
-      return { intent: overlay === "off" ? wrong : intent, confidence: 0.9 };
+      return {
+        normalized,
+        tokens,
+        predictions: inferTokens(tokens),
+        parse: (options) =>
+          (normalized === "hourly") !== (options?.overlay === "off") ? accepted : rejected,
+        decodeRaw: (overlay) => {
+          if (normalized !== "hourly") throw new RangeError("fixture negative");
+
+          return {
+            intent: overlay === "off" ? wrong : intent,
+            confidence: 0.9,
+            evidence: {
+              tokenMargin: 0.9,
+              boundaryMargin: 0.9,
+              scheduleKindAgreement: true,
+              explicitScheduleEvidence: true,
+              unconsumedScheduleLikeValues: 0,
+              semanticConstraintViolations: 0,
+              compilerConsistent: true,
+            },
+          };
+        },
+      };
     },
-    dispose: async () => {},
   };
 
   const result = await evaluateCorpus(engine, corpus, "unit");

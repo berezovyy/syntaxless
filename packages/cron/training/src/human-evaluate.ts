@@ -3,30 +3,28 @@
  *
  * This corpus is intentionally not a RenderedExample: it has no spans, frame,
  * style, or training split, and every row is marked trainingEligible=false.
- * The evaluator runs the built package and scores public parse -> intent ->
+ * The evaluator runs the selected artifact and scores public parse -> intent ->
  * compile behavior. Development and calibration rows are diagnostic only;
  * only a fresh acceptance partition can produce a promotion decision.
- * `--partition regression` scores consumed `human-v*` as development evidence.
+ * The training coordinator scores consumed `human-v*` as regression evidence.
  * Promotion uses overlay-off against the existing bars; overlay-on is
- * diagnostic. After `assertAcceptanceFresh` records the hash, further 100%
+ * diagnostic. After the hash is recorded in the consumption ledger, further 100%
  * on that file is regression, not promotion. Using those failures to write
  * decoder regex is forbidden; using them to name a generator kind is the loop.
  */
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
+import { join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import type { CompileFailureCode } from "../../src/compiler/cron";
 import type { Label } from "../../src/model/labels";
 import { SPEECH_ACTS } from "../../src/model/speech-acts";
+import type { SpeechAct } from "../../src/model/speech-acts";
 import type { ScheduleIntent } from "../../src/types/intent";
-import {
-  addAttribution,
-  attributeMiss,
-  emptyAttributionReport,
-  writeAttributionFile,
-} from "./attribution";
+import { addAttribution, attributeMiss, emptyAttributionReport } from "./attribution";
 import type { AttributionReport } from "./attribution";
+import { compileExpectation, COMPILER_CONTRACT } from "./compile-expectation.js";
 import {
   canonicalizeIntent,
   loadEngine,
@@ -35,7 +33,7 @@ import {
   riskCoverage,
   sha256Hex,
 } from "./evaluate";
-import type { Engine, RiskCoveragePoint, SelectiveOutcome } from "./evaluate";
+import type { Engine, EvaluationPrediction, RiskCoveragePoint, SelectiveOutcome } from "./evaluate";
 import { faAtCoverage } from "./fa-at-cov";
 
 export const HUMAN_CORPUS_VERSION = 1;
@@ -71,6 +69,23 @@ interface Counts {
   correct: number;
 }
 
+interface CapabilitySafetyCounts extends Counts {
+  positiveTotal: number;
+  positiveCorrect: number;
+  negativeTotal: number;
+  negativeFalseAccepts: number;
+  positiveSilentMeaningChanges: number;
+}
+
+interface CaseOutcome {
+  id: string;
+  capabilities: readonly string[];
+  positive: boolean;
+  correct: boolean;
+  falseAccept: boolean;
+  silentMeaningChange: boolean;
+}
+
 export interface HumanFailure {
   id: string;
   partition: HumanPartition;
@@ -84,6 +99,7 @@ export interface HumanFailure {
 
 export interface HumanEvaluationReport {
   version: 1;
+  compilerContract: typeof COMPILER_CONTRACT;
   artifactSha256: string;
   corpusSha256: string;
   /** Stable semantic hash recorded in the consumption ledger after first use. */
@@ -144,6 +160,11 @@ export interface HumanEvaluationReport {
     failures: HumanFailure[];
     /** FA on H-neg at coverage on H-pos after F abstention. */
     faAtCov: string;
+    /** Uncapped counts and critical ids for development checkpoint selection. */
+    capabilitySafety: Record<string, CapabilitySafetyCounts>;
+    criticalFailures: string[];
+    /** Complete paired outcomes; failures[] is intentionally only a small sample. */
+    caseOutcomes: CaseOutcome[];
   };
   /**
    * Calibration-only signal for phase 10. Never true for development.
@@ -281,7 +302,7 @@ export async function assertAcceptanceFresh(
   }
 }
 
-type RawEvidence = NonNullable<NonNullable<ReturnType<Engine["decodeRaw"]>>["evidence"]>;
+type RawEvidence = ReturnType<EvaluationPrediction["decodeRaw"]>["evidence"];
 
 function numericSummary(values: readonly number[]) {
   if (values.length === 0) return null;
@@ -362,11 +383,36 @@ const GENERATOR_SOURCES = [
   "packages/cron/training/src/correction.ts",
   "packages/cron/training/src/discourse.ts",
   "packages/cron/training/src/featurize.ts",
-  "packages/cron/training/src/generate.ts",
+  "packages/cron/training/src/featurize-kinds.ts",
+  "packages/cron/training/src/sequence-metadata.ts",
   "packages/cron/training/src/kinds.ts",
   "packages/cron/training/src/renderer.ts",
   "packages/cron/training/src/sampler.ts",
 ] as const;
+
+async function generatorSourceNames(): Promise<string[]> {
+  const sources: string[] = [...GENERATOR_SOURCES];
+
+  async function walk(directory: string): Promise<void> {
+    for (const entry of await readdir(resolveRepo(directory), {
+      withFileTypes: true,
+    })) {
+      const path = `${directory}/${entry.name}`;
+
+      if (entry.isDirectory()) {
+        await walk(path);
+      } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+        sources.push(path);
+      }
+    }
+  }
+
+  for (const directory of ["corpus", "mix", "llm", "real"]) {
+    await walk(`packages/cron/training/src/${directory}`);
+  }
+
+  return [...new Set(sources)].sort();
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -424,9 +470,11 @@ function assertHumanIntent(value: Record<string, unknown>, id: string): void {
     if (
       !isObject(value.time) ||
       !hasOnlyKeys(value.time, ["hour", "minute"]) ||
-      !Number.isInteger(value.time.hour) ||
-      Number(value.time.hour) < 0 ||
-      Number(value.time.hour) > 23 ||
+      (value.time.hour === undefined
+        ? !(isObject(value.frequency) && value.frequency.unit === "hour")
+        : !Number.isInteger(value.time.hour) ||
+          Number(value.time.hour) < 0 ||
+          Number(value.time.hour) > 23) ||
       !Number.isInteger(value.time.minute) ||
       Number(value.time.minute) < 0 ||
       Number(value.time.minute) > 59
@@ -615,7 +663,7 @@ export async function assertHumanIsolation(
 
   const corpusReference = relative(root, corpus).replaceAll("\\", "/");
 
-  for (const sourceName of GENERATOR_SOURCES) {
+  for (const sourceName of await generatorSourceNames()) {
     const source = await readFile(resolve(root, sourceName), "utf8");
 
     if (source.includes(corpusReference)) {
@@ -685,14 +733,11 @@ function differentIntentFields(expected: ScheduleIntent, actual: ScheduleIntent)
     .join("+");
 }
 
-export interface HumanEvaluateOptions {
+export type HumanEvaluateOptions = {
   dist: string;
-  corpus: string;
-  out: string;
-  partition: HumanEvaluatePartition;
   /** Optional exported candidate module; never changes the active artifact. */
   weights?: string;
-}
+} & ({ partition: "regression" } | { partition: HumanPartition; corpus: string });
 
 interface HumanOverlayScore {
   correct: number;
@@ -717,215 +762,283 @@ interface HumanOverlayScore {
     negative: boolean;
   }>;
   positiveSilentMeaningChanges: number;
+  capabilitySafety: Record<string, CapabilitySafetyCounts>;
+  caseOutcomes: CaseOutcome[];
   attribution: AttributionReport;
 }
 
-async function scoreHumanOverlay(
+async function speechNamesFor(weights?: string): Promise<readonly string[]> {
+  if (weights === undefined) return SPEECH_ACTS;
+
+  const loaded = (await import(pathToFileURL(resolveRepo(weights)).href)) as {
+    weights?: { speechActLabels?: string[] };
+  };
+
+  const labels = loaded.weights?.speechActLabels;
+
+  return labels !== undefined && labels.length > 0 ? labels : SPEECH_ACTS;
+}
+
+function speechActFromHead(
+  names: readonly string[],
+  id: number | undefined,
+): SpeechAct | undefined {
+  if (id === undefined) return undefined;
+  const name = names[id];
+
+  if (name === undefined) return undefined;
+  if (name === "other") return "none";
+
+  return (SPEECH_ACTS as readonly string[]).includes(name) ? (name as SpeechAct) : undefined;
+}
+
+function emptyHumanScore(): HumanOverlayScore {
+  return {
+    correct: 0,
+    negativeTotal: 0,
+    negativeFalseAccepts: 0,
+    positiveTotal: 0,
+    positiveAccepted: 0,
+    positiveCorrect: 0,
+    silentMeaningChanges: 0,
+    positiveSilentMeaningChanges: 0,
+    byFamily: {},
+    byCapability: {},
+    failureCounts: {},
+    failureCountsByFamily: {},
+    failureCountsByCapability: {},
+    failures: [],
+    incorrectIds: new Set(),
+    selectiveOutcomes: [],
+    rawSelectiveOutcomes: [],
+    rawEvidence: [],
+    capabilitySafety: {},
+    caseOutcomes: [],
+    attribution: emptyAttributionReport(),
+  };
+}
+
+function scoreHumanCorpus(
   engine: Engine,
   records: readonly HumanEvaluationRecord[],
-  overlay: "on" | "off",
-): Promise<HumanOverlayScore> {
-  const byFamily: Record<string, Counts> = {};
-  const byCapability: Record<string, Counts> = {};
-  const failureCounts: Record<string, number> = {};
-  const failureCountsByFamily: Record<string, Record<string, number>> = {};
-  const failureCountsByCapability: Record<string, Record<string, number>> = {};
-  const failures: HumanFailure[] = [];
-  const incorrectIds = new Set<string>();
-  let correctTotal = 0;
-  let negativeTotal = 0;
-  let negativeFalseAccepts = 0;
-  let positiveTotal = 0;
-  let positiveAccepted = 0;
-  let positiveCorrect = 0;
-  let silentMeaningChanges = 0;
-  let positiveSilentMeaningChanges = 0;
-  const attribution = emptyAttributionReport();
-  const selectiveOutcomes: SelectiveOutcome[] = [];
-  const rawSelectiveOutcomes: SelectiveOutcome[] = [];
-  const rawEvidence: HumanOverlayScore["rawEvidence"] = [];
+  speechNames: readonly string[],
+) {
+  const overlayOn = emptyHumanScore();
+  const overlayOff = emptyHumanScore();
 
   for (const item of records) {
-    const parsed =
-      overlay === "on"
-        ? await engine.parse(item.text)
-        : await engine.parse(item.text, { overlay: "off" });
+    const prediction = engine.predict(item.text);
 
-    let raw: ReturnType<typeof engine.decodeRaw> | null = null;
+    for (const [overlay, score] of [
+      ["on", overlayOn],
+      ["off", overlayOff],
+    ] as const) {
+      const parsed = overlay === "on" ? prediction.parse() : prediction.parse({ overlay: "off" });
+      let raw: ReturnType<typeof prediction.decodeRaw> | null = null;
 
-    try {
-      raw = overlay === "on" ? engine.decodeRaw(item.text) : engine.decodeRaw(item.text, "off");
-    } catch {
-      // Decoder rejection is a safe abstention in the raw policy curve.
-    }
-
-    let correct = false;
-    let category = "correct";
-    let actual: unknown = parsed;
-
-    if (item.intent === null) {
-      negativeTotal += 1;
-      correct = !parsed.ok;
-
-      if (!correct) {
-        category = "negative-false-accept";
-        negativeFalseAccepts += 1;
-        silentMeaningChanges += 1;
+      try {
+        raw = overlay === "on" ? prediction.decodeRaw() : prediction.decodeRaw("off");
+      } catch {
+        // Decoder rejection is a safe abstention in the raw policy curve.
       }
-    } else if (!parsed.ok) {
-      positiveTotal += 1;
-      category = `parse:${parsed.code}`;
-    } else {
-      positiveTotal += 1;
-      positiveAccepted += 1;
-      const expectedIntent = canonicalizeIntent(item.intent);
-      const actualIntent = canonicalizeIntent(parsed.intent);
 
-      if (!isDeepStrictEqual(expectedIntent, actualIntent)) {
-        category = `intent:${differentIntentFields(expectedIntent, actualIntent)}`;
-        silentMeaningChanges += 1;
-        positiveSilentMeaningChanges += 1;
-        actual = actualIntent;
+      let correct = false;
+      let category = "correct";
+      let actual: unknown = parsed;
+
+      if (item.intent === null) {
+        score.negativeTotal += 1;
+        correct = !parsed.ok;
+
+        if (!correct) {
+          category = "negative-false-accept";
+          score.negativeFalseAccepts += 1;
+          score.silentMeaningChanges += 1;
+        }
+      } else if (!parsed.ok) {
+        score.positiveTotal += 1;
+        category = `parse:${parsed.code}`;
       } else {
-        const compiled = engine.compile(parsed.intent);
+        score.positiveTotal += 1;
+        score.positiveAccepted += 1;
+        const expectedIntent = canonicalizeIntent(item.intent);
+        const actualIntent = canonicalizeIntent(parsed.intent);
 
-        actual = { intent: actualIntent, compiled };
-
-        if ("parse" in item.expected) {
-          throw new Error(`${item.id}: impossible positive rejection expectation`);
-        } else if (item.expected.supported) {
-          correct = compiled.supported && compiled.expression === item.expected.expression;
-          if (!correct) category = "compile:expression";
+        if (!isDeepStrictEqual(expectedIntent, actualIntent)) {
+          category = `intent:${differentIntentFields(expectedIntent, actualIntent)}`;
+          score.silentMeaningChanges += 1;
+          score.positiveSilentMeaningChanges += 1;
+          actual = actualIntent;
         } else {
-          correct = !compiled.supported && compiled.code === item.expected.code;
-          if (!correct) category = "compile:failure-code";
+          const compiled = engine.compile(parsed.intent);
+          const expected = compileExpectation(item);
+
+          actual = { intent: actualIntent, compiled };
+
+          if ("parse" in expected) {
+            throw new Error(`${item.id}: impossible positive rejection expectation`);
+          } else if (expected.supported) {
+            correct = compiled.supported && compiled.expression === expected.expression;
+            if (!correct) category = "compile:expression";
+          } else {
+            correct = !compiled.supported && compiled.code === expected.code;
+            if (!correct) category = "compile:failure-code";
+          }
         }
       }
-    }
 
-    correctTotal += Number(correct);
-    if (item.intent !== null && correct) positiveCorrect += 1;
+      score.correct += Number(correct);
+      if (item.intent !== null && correct) score.positiveCorrect += 1;
 
-    selectiveOutcomes.push({
-      accepted: parsed.ok,
-      correct,
-      confidence: parsed.confidence,
-      negative: item.intent === null,
-    });
-
-    const rawCorrect =
-      item.intent === null
-        ? raw === null
-        : raw !== null &&
-          isDeepStrictEqual(canonicalizeIntent(raw.intent), canonicalizeIntent(item.intent));
-
-    rawSelectiveOutcomes.push({
-      accepted: raw !== null,
-      correct: rawCorrect,
-      confidence: raw?.confidence ?? 0,
-      negative: item.intent === null,
-    });
-
-    if (raw?.evidence !== undefined) {
-      rawEvidence.push({
-        evidence: raw.evidence,
-        correct: rawCorrect,
+      score.selectiveOutcomes.push({
+        accepted: parsed.ok,
+        correct,
+        confidence: parsed.confidence,
         negative: item.intent === null,
       });
-    }
 
-    addCount(byFamily, item.family, correct);
-    for (const capability of item.capabilities) addCount(byCapability, capability, correct);
+      const rawCorrect =
+        item.intent === null
+          ? raw === null
+          : raw !== null &&
+            isDeepStrictEqual(canonicalizeIntent(raw.intent), canonicalizeIntent(item.intent));
 
-    if (!correct && overlay === "off") {
-      const tokens = engine.tokenize(item.text);
-      const predictions = engine.inferTokens(tokens);
-      const predictedLabels: Label[] = [];
-
-      for (let index = 0; index < tokens.length; index += 1) {
-        if (tokens[index]!.kind === 3) continue;
-        predictedLabels.push(engine.labelName(predictions.labels[index]!) as Label);
-      }
-
-      const predictedSpeechAct =
-        predictions.speechAct === undefined ? undefined : SPEECH_ACTS[predictions.speechAct];
-
-      addAttribution(attribution, {
-        id: item.id,
-        source: "human",
-        family: item.family,
-        bucket: attributeMiss({
-          text: item.text,
-          expectedIntent: item.intent,
-          accepted: parsed.ok,
-          actualIntent: parsed.ok ? parsed.intent : null,
-          predictedLabels,
-          ...(predictedSpeechAct === undefined ? {} : { predictedSpeechAct }),
-          predictedOracle:
-            raw === null
-              ? { ok: false, error: "raw-decode-null" }
-              : { ok: true, intent: raw.intent },
-        }),
+      score.rawSelectiveOutcomes.push({
+        accepted: raw !== null,
+        correct: rawCorrect,
+        confidence: raw?.confidence ?? 0,
+        negative: item.intent === null,
       });
-    }
 
-    if (!correct) {
-      incorrectIds.add(item.id);
-      const count = (failureCounts[category] ?? 0) + 1;
-
-      failureCounts[category] = count;
-      addFailureCount(failureCountsByFamily, item.family, category);
-
-      for (const capability of item.capabilities) {
-        addFailureCount(failureCountsByCapability, capability, category);
+      if (raw?.evidence !== undefined) {
+        score.rawEvidence.push({
+          evidence: raw.evidence,
+          correct: rawCorrect,
+          negative: item.intent === null,
+        });
       }
 
-      if (count <= MAX_FAILURES_PER_CATEGORY) {
-        failures.push({
-          id: item.id,
-          partition: item.partition,
-          family: item.family,
-          capabilities: item.capabilities,
-          category,
-          text: item.text,
-          expected: item.intent === null ? item.expected : item.intent,
-          actual,
+      addCount(score.byFamily, item.family, correct);
+
+      score.caseOutcomes.push({
+        id: item.id,
+        capabilities: item.capabilities,
+        positive: item.intent !== null,
+        correct,
+        falseAccept: category === "negative-false-accept",
+        silentMeaningChange: category.startsWith("intent:"),
+      });
+
+      for (const capability of new Set(item.capabilities)) {
+        addCount(score.byCapability, capability, correct);
+
+        const counts = (score.capabilitySafety[capability] ??= {
+          total: 0,
+          correct: 0,
+          positiveTotal: 0,
+          positiveCorrect: 0,
+          negativeTotal: 0,
+          negativeFalseAccepts: 0,
+          positiveSilentMeaningChanges: 0,
         });
+
+        counts.total++;
+        counts.correct += Number(correct);
+        counts.positiveTotal += Number(item.intent !== null);
+        counts.positiveCorrect += Number(item.intent !== null && correct);
+        counts.negativeTotal += Number(item.intent === null);
+        counts.negativeFalseAccepts += Number(category === "negative-false-accept");
+        counts.positiveSilentMeaningChanges += Number(category.startsWith("intent:"));
+      }
+
+      if (!correct && overlay === "off") {
+        const tokens =
+          prediction.normalized === item.text ? prediction.tokens : engine.tokenize(item.text);
+
+        const predictions =
+          prediction.normalized === item.text ? prediction.predictions : engine.inferTokens(tokens);
+
+        const predictedLabels: Label[] = [];
+
+        for (let index = 0; index < tokens.length; index += 1) {
+          if (tokens[index]!.kind === 3) continue;
+          predictedLabels.push(engine.labelName(predictions.labels[index]!) as Label);
+        }
+
+        const predictedSpeechAct = speechActFromHead(speechNames, predictions.speechAct);
+
+        addAttribution(score.attribution, {
+          id: item.id,
+          source: "human",
+          family: item.family,
+          bucket: attributeMiss({
+            text: item.text,
+            expectedIntent: item.intent,
+            accepted: parsed.ok,
+            actualIntent: parsed.ok ? parsed.intent : null,
+            predictedLabels,
+            ...(predictedSpeechAct === undefined ? {} : { predictedSpeechAct }),
+            predictedOracle:
+              raw === null
+                ? { ok: false, error: "raw-decode-null" }
+                : { ok: true, intent: raw.intent },
+          }),
+        });
+      }
+
+      if (!correct) {
+        score.incorrectIds.add(item.id);
+        const count = (score.failureCounts[category] ?? 0) + 1;
+
+        score.failureCounts[category] = count;
+        addFailureCount(score.failureCountsByFamily, item.family, category);
+
+        for (const capability of item.capabilities) {
+          addFailureCount(score.failureCountsByCapability, capability, category);
+        }
+
+        if (count <= MAX_FAILURES_PER_CATEGORY) {
+          score.failures.push({
+            id: item.id,
+            partition: item.partition,
+            family: item.family,
+            capabilities: item.capabilities,
+            category,
+            text: item.text,
+            expected: item.intent === null ? item.expected : item.intent,
+            actual,
+          });
+        }
       }
     }
   }
 
-  return {
-    correct: correctTotal,
-    negativeTotal,
-    negativeFalseAccepts,
-    positiveTotal,
-    positiveAccepted,
-    positiveCorrect,
-    silentMeaningChanges,
-    byFamily,
-    byCapability,
-    failureCounts,
-    failureCountsByFamily,
-    failureCountsByCapability,
-    failures,
-    incorrectIds,
-    selectiveOutcomes,
-    rawSelectiveOutcomes,
-    rawEvidence,
-    positiveSilentMeaningChanges,
-    attribution,
-  };
+  return { overlayOn, overlayOff };
 }
 
 export async function evaluateHumanCorpus(
   options: HumanEvaluateOptions,
 ): Promise<HumanEvaluationReport> {
-  const regression = options.partition === "regression" ? await loadRegressionRecords() : undefined;
-  const corpus = regression?.corpus ?? resolveRepo(options.corpus);
-  const contents = regression?.contents ?? (await readFile(resolveRepo(options.corpus), "utf8"));
-  const corpusSha256 = regression?.corpusSha256 ?? sha256Hex(contents);
-  const allRecords = regression?.records ?? parseHumanCorpus(contents);
+  let corpus: string;
+  let contents: string;
+  let allRecords: HumanEvaluationRecord[];
+  let isolationPath: string;
+
+  if (options.partition === "regression") {
+    const regression = await loadRegressionRecords();
+
+    corpus = regression.corpus;
+    contents = regression.contents;
+    allRecords = regression.records;
+    isolationPath = (await regressionCorpusPaths())[0]!;
+  } else {
+    corpus = resolveRepo(options.corpus);
+    contents = await readFile(corpus, "utf8");
+    allRecords = parseHumanCorpus(contents);
+    isolationPath = corpus;
+  }
+
+  const corpusSha256 = sha256Hex(contents);
 
   const acceptancePartitionSha256 = sha256Hex(
     `${allRecords
@@ -935,12 +1048,6 @@ export async function evaluateHumanCorpus(
   );
 
   await assertAcceptanceFresh(options.partition, acceptancePartitionSha256);
-
-  const isolationPath =
-    options.partition === "regression"
-      ? (await regressionCorpusPaths())[0]!
-      : resolveRepo(options.corpus);
-
   const isolation = await assertHumanIsolation(isolationPath, allRecords);
 
   const records =
@@ -950,39 +1057,32 @@ export async function evaluateHumanCorpus(
 
   if (records.length === 0) throw new Error(`human corpus has no ${options.partition} records`);
   const engine = await loadEngine(options.dist, options.weights);
-  let overlayOn!: HumanOverlayScore;
-  let overlayOff!: HumanOverlayScore;
+  const speechNames = await speechNamesFor(options.weights);
 
-  try {
-    // Lint every partition's gold contract without parsing reserved acceptance
-    // wording. This catches fixture mistakes while keeping acceptance inputs
-    // untouched until the final gate.
-    for (const item of allRecords) {
-      if (item.intent !== null) {
-        if ("parse" in item.expected) {
-          throw new Error(`${item.id}: schedule has a rejection expectation`);
-        }
+  // Lint every partition's gold contract without parsing reserved acceptance
+  // wording. This catches fixture mistakes while keeping acceptance inputs
+  // untouched until the final gate.
+  for (const item of allRecords) {
+    if (item.intent !== null) {
+      const expected = compileExpectation(item);
 
-        const goldCompiled = engine.compile(canonicalizeIntent(item.intent));
+      if ("parse" in expected) throw new Error(`${item.id}: schedule has a rejection expectation`);
+      const goldCompiled = engine.compile(canonicalizeIntent(item.intent));
 
-        const validGold = item.expected.supported
-          ? goldCompiled.supported && goldCompiled.expression === item.expected.expression
-          : !goldCompiled.supported && goldCompiled.code === item.expected.code;
+      const validGold = expected.supported
+        ? goldCompiled.supported && goldCompiled.expression === expected.expression
+        : !goldCompiled.supported && goldCompiled.code === expected.code;
 
-        if (!validGold) {
-          throw new Error(
-            `${item.id}: invalid compiler expectation ${JSON.stringify(item.expected)} ` +
-              `for ${JSON.stringify(goldCompiled)}`,
-          );
-        }
+      if (!validGold) {
+        throw new Error(
+          `${item.id}: invalid compiler expectation ${JSON.stringify(expected)} ` +
+            `for ${JSON.stringify(goldCompiled)}`,
+        );
       }
     }
-
-    overlayOn = await scoreHumanOverlay(engine, records, "on");
-    overlayOff = await scoreHumanOverlay(engine, records, "off");
-  } finally {
-    await engine.dispose();
   }
+
+  const { overlayOn, overlayOff } = scoreHumanCorpus(engine, records, speechNames);
 
   const total = records.length;
   const accuracy = overlayOn.correct / total;
@@ -1026,6 +1126,7 @@ export async function evaluateHumanCorpus(
 
   return {
     version: HUMAN_CORPUS_VERSION,
+    compilerContract: COMPILER_CONTRACT,
     artifactSha256: engine.artifactSha256,
     corpusSha256,
     acceptancePartitionSha256,
@@ -1073,6 +1174,12 @@ export async function evaluateHumanCorpus(
       silentMeaningChangeRate: overlayOff.silentMeaningChanges / total,
       failureCounts: overlayOff.failureCounts,
       failures: overlayOff.failures,
+      capabilitySafety: overlayOff.capabilitySafety,
+      caseOutcomes: overlayOff.caseOutcomes,
+      criticalFailures: records
+        .filter((item) => item.critical && overlayOff.incorrectIds.has(item.id))
+        .map((item) => item.id)
+        .sort(),
       faAtCov: faAtCoverage({
         negativeTotal: overlayOff.negativeTotal,
         negativeAccepted: overlayOff.negativeFalseAccepts,
@@ -1084,81 +1191,4 @@ export async function evaluateHumanCorpus(
     positiveSilentMeaningChanges: overlayOff.positiveSilentMeaningChanges,
     attribution: overlayOff.attribution,
   };
-}
-
-function readOption(argv: readonly string[], index: number): string {
-  const value = argv[index + 1];
-
-  if (value === undefined) throw new Error(`missing value for ${argv[index]}`);
-
-  return value;
-}
-
-export function parseArgs(argv: readonly string[]): HumanEvaluateOptions {
-  const options: HumanEvaluateOptions = {
-    dist: "packages/cron/dist",
-    corpus: "packages/cron/evaluation/human-v1.jsonl",
-    out: "packages/cron/training/results/human-v1-development.json",
-    partition: "development",
-  };
-
-  let outSet = false;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]!;
-
-    if (arg === "--dist") {
-      options.dist = readOption(argv, index++);
-    } else if (arg === "--weights") {
-      options.weights = readOption(argv, index++);
-    } else if (arg === "--corpus") {
-      options.corpus = readOption(argv, index++);
-    } else if (arg === "--out") {
-      options.out = readOption(argv, index++);
-      outSet = true;
-    } else if (arg === "--partition") {
-      const partition = readOption(argv, index++);
-
-      if (!["development", "calibration", "acceptance", "regression"].includes(partition)) {
-        throw new Error(`invalid human partition: ${partition}`);
-      }
-
-      options.partition = partition as HumanEvaluatePartition;
-    } else {
-      throw new Error(`unknown option: ${arg}`);
-    }
-  }
-
-  if (options.partition === "regression" && !outSet) {
-    options.out = "packages/cron/training/results/human-regression.json";
-  }
-
-  return options;
-}
-
-if (import.meta.main) {
-  const options = parseArgs(process.argv.slice(2));
-  const report = await evaluateHumanCorpus(options);
-  const out = resolveRepo(options.out);
-
-  await mkdir(dirname(out), { recursive: true });
-  await writeFile(out, `${JSON.stringify(report, null, 2)}\n`);
-
-  await writeAttributionFile(
-    resolveRepo("packages/cron/training/results/attribution.json"),
-    "human",
-    report.attribution,
-  );
-
-  const off = report.overlayOff;
-
-  process.stdout.write(
-    `${report.partition}: H-pos ${off.positiveCorrect}/${off.positiveTotal} ` +
-      `(${(off.positiveCorrect / Math.max(off.positiveTotal, 1)).toFixed(3)})  ` +
-      `H-negOK ${off.negativeCorrect}/${off.negativeTotal} ` +
-      `(${(off.negativeCorrect / Math.max(off.negativeTotal, 1)).toFixed(3)})  ` +
-      `H-silent ${report.positiveSilentMeaningChanges}  FA@cov ${off.faAtCov}\n` +
-      `  composite: ${off.correct}/${off.total} (${off.accuracy.toFixed(3)}) — ` +
-      `not a decision metric\nreport -> ${out}\n`,
-  );
 }
