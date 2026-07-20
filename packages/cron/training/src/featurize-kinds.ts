@@ -1,43 +1,38 @@
 /**
- * Streaming featurizer for the deterministic backward corpus.
+ * Write production binary shards and metadata in one streaming pass.
  *
- * `kinds.jsonl` is several gigabytes, so the eager Phase 13 helper is not an
- * appropriate entry point. This module reads one JSONL record at a time and
- * writes all three split shards in one pass. Binary output is byte-for-byte the
- * same contract consumed by `training/cron/dataset.py`.
+ * Read one JSONL record at a time and write all three split shards with bounded
+ * buffers. The shard contract is consumed by `training/cron/dataset.py`.
  */
-import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
-import { createInterface } from "node:readline";
+import { closeSync, mkdirSync, openSync, writeFileSync, writeSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { LABEL_COUNT, LABELS } from "../../src/model/labels.js";
 import { SPEECH_ACT_COUNT, SPEECH_ACTS } from "../../src/model/speech-acts.js";
 import { EMBEDDING_ROWS, FEATURE_COUNT, tokenize } from "../../src/model/tokenizer.js";
-import { createJsonlReadStream } from "./corpus/jsonl-io.js";
+import { jsonlByteChunks, jsonlReader } from "./corpus/jsonl-io.js";
 import { corpusRecordSchema } from "./corpus/merge.js";
-import type { CorpusRecord } from "./corpus/merge.js";
+import type { CorpusRecord, Split } from "./corpus/merge.js";
 import { featurizeRecord, MAX_TOKENS, POPULATION_IDS, SHARD_FORMAT } from "./featurize.js";
 import type { FeaturizeManifest, PerRecord } from "./featurize.js";
-import type { Split } from "./generate.js";
 import { classifyPopulation } from "./mix/quotas.js";
+import { METADATA_SUFFIX, sequenceMetadata, SequenceMetadataWriter } from "./sequence-metadata.js";
 
 const SPLITS: readonly Split[] = ["train", "validation", "heldout"];
+const repo = fileURLToPath(new URL("../../../../", import.meta.url));
 // Keep one fixed buffer per output file.  Retaining thousands of small typed
 // array backing stores until Buffer.concat() was cheap for small corpora, but
 // caused Bun's RSS to grow until Linux killed production featurization.
 const WRITE_BUFFER_BYTES = 1024 * 1024;
 
 class BufferedWriter {
-  readonly path: string;
   readonly #fd: number;
   readonly #buffer = Buffer.allocUnsafe(WRITE_BUFFER_BYTES);
   #offset = 0;
 
-  constructor(path: string) {
-    this.path = path;
-    mkdirSync(dirname(path), { recursive: true });
-    this.#fd = openSync(path, "w");
+  constructor(fd: number) {
+    this.#fd = fd;
   }
 
   append(view: ArrayBufferView): void {
@@ -64,28 +59,13 @@ class BufferedWriter {
 
     this.#offset = 0;
   }
-
-  close(): void {
-    this.flush();
-    closeSync(this.#fd);
-  }
 }
 
 interface SplitState {
+  metadata: SequenceMetadataWriter;
   split: Split;
   prefix: string;
-  writers: {
-    rows: BufferedWriter;
-    labels: BufferedWriter;
-    boundaries: BufferedWriter;
-    kinds: BufferedWriter;
-    neighbors: BufferedWriter;
-    offsets: BufferedWriter;
-    frames: BufferedWriter;
-    speech: BufferedWriter;
-    actionable: BufferedWriter;
-    populations: BufferedWriter;
-  };
+  writers: Record<keyof typeof SHARD_FORMAT, BufferedWriter>;
   sequences: number;
   tokens: number;
   skippedEmpty: number;
@@ -116,58 +96,29 @@ export interface StreamingFeaturizeSummary {
   splits: Record<Split, StreamingSplitSummary>;
 }
 
-function repoRoot(): string {
-  let directory = dirname(fileURLToPath(import.meta.url));
-
-  for (;;) {
-    const manifest = join(directory, "package.json");
-
-    try {
-      const parsed = JSON.parse(readFileSync(manifest, "utf8")) as {
-        workspaces?: unknown;
-      };
-
-      if (Array.isArray(parsed.workspaces)) return directory;
-    } catch {
-      // Keep walking until the workspace package is found.
-    }
-
-    const parent = dirname(directory);
-
-    if (parent === directory) return process.cwd();
-    directory = parent;
-  }
-}
-
-function resolvePath(path: string): string {
-  return isAbsolute(path) ? path : join(repoRoot(), path);
-}
-
-function shardPath(prefix: string, key: keyof typeof SHARD_FORMAT): string {
-  return `${prefix}${SHARD_FORMAT[key].suffix}`;
-}
-
-function createState(outputBase: string, split: Split): SplitState {
+function createState(outputBase: string, split: Split, files: number[]): SplitState {
   const prefix = `${outputBase}-${split}`;
-  const offsets = new BufferedWriter(shardPath(prefix, "offsets"));
 
-  offsets.append(Uint32Array.of(0));
+  mkdirSync(dirname(prefix), { recursive: true });
+  const writers = {} as SplitState["writers"];
+
+  for (const key of Object.keys(SHARD_FORMAT) as Array<keyof typeof SHARD_FORMAT>) {
+    const fd = openSync(`${prefix}${SHARD_FORMAT[key].suffix}`, "w");
+
+    files.push(fd);
+    writers[key] = new BufferedWriter(fd);
+  }
+
+  const metadataFile = openSync(`${prefix}${METADATA_SUFFIX}`, "w");
+
+  files.push(metadataFile);
+  writers.offsets.append(Uint32Array.of(0));
 
   return {
     split,
     prefix,
-    writers: {
-      rows: new BufferedWriter(shardPath(prefix, "rows")),
-      labels: new BufferedWriter(shardPath(prefix, "labels")),
-      boundaries: new BufferedWriter(shardPath(prefix, "boundaries")),
-      kinds: new BufferedWriter(shardPath(prefix, "kinds")),
-      neighbors: new BufferedWriter(shardPath(prefix, "neighbors")),
-      offsets,
-      frames: new BufferedWriter(shardPath(prefix, "frames")),
-      speech: new BufferedWriter(shardPath(prefix, "speech")),
-      actionable: new BufferedWriter(shardPath(prefix, "actionable")),
-      populations: new BufferedWriter(shardPath(prefix, "populations")),
-    },
+    metadata: new SequenceMetadataWriter(metadataFile),
+    writers,
     sequences: 0,
     tokens: 0,
     skippedEmpty: 0,
@@ -180,10 +131,6 @@ function createState(outputBase: string, split: Split): SplitState {
     actionableCounts: { 0: 0, 1: 0 },
     populationCounts: { R: 0, H: 0, E: 0 },
   };
-}
-
-function closeState(state: SplitState): void {
-  for (const writer of Object.values(state.writers)) writer.close();
 }
 
 function appendRecord(state: SplitState, record: CorpusRecord): void {
@@ -213,12 +160,13 @@ function appendRecord(state: SplitState, record: CorpusRecord): void {
 
   const population = classifyPopulation({
     intent: record.intent,
-    speechAct: record.speechAct ?? "none",
+    speechAct: SPEECH_ACTS[shard.speech[0]!]!,
     spans: record.spans,
   });
 
   state.writers.populations.append(Uint8Array.of(POPULATION_IDS[population]));
   state.populationCounts[population]++;
+  state.metadata.append(sequenceMetadata(record, shard, state.sequences, population));
 
   for (let index = 0; index < shard.tokenCount; index++) {
     if (shard.kinds[index] === 3) continue;
@@ -285,8 +233,11 @@ function parseBackwardRecord(line: string, lineNumber: number): CorpusRecord {
   return parsed.data as CorpusRecord;
 }
 
-function writeManifest(state: SplitState): void {
-  const manifest: FeaturizeManifest = {
+function finishState(state: SplitState): FeaturizeManifest {
+  for (const writer of Object.values(state.writers)) writer.flush();
+
+  return {
+    sequenceMetadata: state.metadata.finish(),
     fingerprints: [],
     roleClasses: LABEL_COUNT,
     rowsPerToken: FEATURE_COUNT,
@@ -300,55 +251,71 @@ function writeManifest(state: SplitState): void {
     populationCounts: state.populationCounts,
     format: SHARD_FORMAT,
   };
-
-  writeFileSync(`${state.prefix}.json`, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 export async function featurizeKindsStreaming(
   inputValue: string,
   outputBaseValue: string,
 ): Promise<StreamingFeaturizeSummary> {
-  const input = resolvePath(inputValue);
-  const outputBase = resolvePath(outputBaseValue);
-
-  const states = Object.fromEntries(
-    SPLITS.map((split) => [split, createState(outputBase, split)]),
-  ) as Record<Split, SplitState>;
-
+  const input = resolve(repo, inputValue);
+  const outputBase = resolve(repo, outputBaseValue);
+  const states = {} as Record<Split, SplitState>;
+  const files: number[] = [];
+  const failures: unknown[] = [];
+  const manifests: Array<readonly [string, FeaturizeManifest]> = [];
   let records = 0;
 
   try {
-    const lines = createInterface({
-      input: createJsonlReadStream(input),
-      crlfDelay: Number.POSITIVE_INFINITY,
-    });
+    for (const split of SPLITS) states[split] = createState(outputBase, split, files);
 
-    for await (const line of lines) {
-      if (line.trim().length === 0) continue;
-      records++;
-      const record = parseBackwardRecord(line, records);
+    {
+      await using reader = jsonlReader(jsonlByteChunks(input));
 
-      appendRecord(states[record.split], record);
+      for await (const line of reader.lines) {
+        if (line.trim().length === 0) continue;
+        records++;
+        const record = parseBackwardRecord(line, records);
 
-      if (records % 100_000 === 0) {
-        // Force collection of short-lived tokenizer/feature arrays.  Bun's
-        // automatic collection can lag far behind a multi-hour, allocation-
-        // heavy stream on machines without swap.
-        Bun.gc(true);
-        const rssGiB = process.memoryUsage.rss() / 1024 ** 3;
+        appendRecord(states[record.split], record);
 
-        process.stdout.write(
-          `featurized ${records.toLocaleString()} records (${rssGiB.toFixed(2)} GiB RSS)\r`,
-        );
+        if (records % 100_000 === 0) {
+          // Force collection of short-lived tokenizer/feature arrays. Bun's
+          // automatic collection can lag behind multi-hour allocation-heavy streams.
+          Bun.gc(true);
+          const rssGiB = process.memoryUsage.rss() / 1024 ** 3;
+
+          process.stdout.write(
+            `featurized ${records.toLocaleString()} records (${rssGiB.toFixed(2)} GiB RSS)\r`,
+          );
+        }
       }
     }
+
     // Split disjointness is enforced by the generator. Do not retain all
     // fingerprints here: streaming corpora can contain tens of millions of rows.
+    for (const state of Object.values(states)) manifests.push([state.prefix, finishState(state)]);
+  } catch (error) {
+    failures.push(error);
   } finally {
-    for (const state of Object.values(states)) closeState(state);
+    for (const fd of files) {
+      try {
+        closeSync(fd);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
   }
 
-  for (const state of Object.values(states)) writeManifest(state);
+  if (failures.length === 1) throw failures[0];
+
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Shard preparation and cleanup failed");
+  }
+
+  for (const [prefix, manifest] of manifests) {
+    writeFileSync(`${prefix}.json`, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+
   process.stdout.write("\n");
 
   return {
@@ -374,16 +341,4 @@ export async function featurizeKindsStreaming(
       }),
     ) as Record<Split, StreamingSplitSummary>,
   };
-}
-
-if (import.meta.main) {
-  const [input, outputBase, ...extra] = process.argv.slice(2);
-
-  if (input === undefined || outputBase === undefined || extra.length > 0) {
-    throw new RangeError("usage: featurize-kinds <kinds.jsonl[.gz]> <output-prefix>");
-  }
-
-  const summary = await featurizeKindsStreaming(input, outputBase);
-
-  process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }

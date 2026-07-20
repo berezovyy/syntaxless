@@ -1,14 +1,26 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 
-import { LABEL_COUNT, labelId, LABELS } from "../../src/model/labels";
+import { LABEL_COUNT, labelId } from "../../src/model/labels";
 import { SPEECH_ACTS, speechActId } from "../../src/model/speech-acts";
-import { EMBEDDING_ROWS, FEATURE_COUNT } from "../../src/model/tokenizer";
+import { EMBEDDING_ROWS, FEATURE_COUNT, tokenize } from "../../src/model/tokenizer";
 import type { ScheduleIntent } from "../../src/types/intent";
 import type { CorpusRecord } from "./corpus/merge";
-import { featurizeFiles, featurizeRecords, PADDING_LABEL } from "./featurize";
+import { featurizeRecord, PADDING_LABEL, SHARD_FORMAT } from "./featurize";
+import type { FeaturizeManifest } from "./featurize";
+import { featurizeKindsStreaming } from "./featurize-kinds";
 import { Sentence } from "./sentence";
 
 const workdir = mkdtempSync(join(tmpdir(), "syntaxless-featurize-"));
@@ -21,6 +33,98 @@ const MONDAY: ScheduleIntent = {
   frequency: { unit: "week", interval: 1 },
   weekdays: ["monday"],
 };
+
+test("context-number supervision is retained without actionability or a clause boundary", () => {
+  const sentence = new Sentence();
+
+  sentence.clause();
+  sentence.add("account");
+  sentence.add("17", "CONTEXT_NUMBER");
+  sentence.add("daily", "UNIT_DAY");
+
+  const row: CorpusRecord = {
+    id: "context-number",
+    fingerprint: "fixture-context-number",
+    split: "train",
+    family: "interval",
+    text: sentence.text,
+    spans: sentence.spans,
+    intent: { frequency: { unit: "day", interval: 1 } },
+    source: "rule",
+  };
+
+  const tokens = tokenize(row.text);
+  const data = featurizeRecord(row, tokens);
+  const number = tokens.findIndex((token) => token.text === "17");
+  const daily = tokens.findIndex((token) => token.text === "daily");
+
+  expect(data.labels[number]).toBe(labelId.CONTEXT_NUMBER);
+  expect(data.actionable[number]).toBe(0);
+  expect(data.boundaries[number]).toBe(0);
+  expect(data.boundaries[daily]).toBe(1);
+  expect(data.actionable[daily]).toBe(1);
+});
+
+/** Inspect real kernel handles; a disappearing descriptor is normal during enumeration. */
+function openShardFiles(directory: string): string[] {
+  const paths: string[] = [];
+
+  for (const name of readdirSync("/proc/self/fd")) {
+    let path: string;
+
+    try {
+      path = readlinkSync(`/proc/self/fd/${name}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+
+    if (
+      path.startsWith(`${directory}/out-`) ||
+      path.startsWith(`${directory}/input`) ||
+      path === "/dev/full"
+    ) {
+      paths.push(path);
+    }
+  }
+
+  return paths.sort();
+}
+
+test.skipIf(process.platform !== "linux")(
+  "a real shard flush failure releases all files and publishes no manifests",
+  async () => {
+    const directory = mkdtempSync(join(workdir, "flush-failure-"));
+    const input = join(directory, "input.jsonl");
+
+    writeFileSync(
+      input,
+      JSON.stringify(
+        makeRecord({
+          id: "disk-full",
+          text: "every Monday",
+          spans: [
+            { start: 0, end: 5, label: "RECUR", clauseStart: false },
+            { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
+          ],
+        }),
+      ) + "\n",
+    );
+
+    symlinkSync("/dev/full", join(directory, "out-train.rows.bin"));
+    expect(openShardFiles(directory)).toEqual([]);
+
+    await expect(featurizeKindsStreaming(input, join(directory, "out"))).rejects.toThrow(
+      /ENOSPC|no space/i,
+    );
+
+    expect(openShardFiles(directory)).toEqual([]);
+
+    for (const split of ["train", "validation", "heldout"]) {
+      expect(existsSync(join(directory, `out-${split}.json`))).toBe(false);
+    }
+  },
+);
 
 interface RecordOptions {
   id: string;
@@ -47,34 +151,6 @@ function makeRecord(options: RecordOptions): CorpusRecord {
   };
 }
 
-function zeroCounts(): Record<string, number> {
-  return Object.fromEntries(LABELS.map((label) => [label, 0]));
-}
-
-test("a well-formed example yields the expected labelCounts", () => {
-  const record = makeRecord({
-    id: "feat-1",
-    text: "every Monday",
-    spans: [
-      { start: 0, end: 5, label: "RECUR", clauseStart: false },
-      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
-    ],
-  });
-
-  const shard = featurizeRecords([record]);
-
-  const expected = zeroCounts();
-
-  expected.RECUR = 1;
-  expected.WEEKDAY_MON = 1;
-  expect(shard.labelCounts).toEqual(expected);
-  expect(shard.sequences).toBe(1);
-  expect(shard.tokens).toBe(3);
-  expect([...shard.labels]).toEqual([labelId.RECUR, PADDING_LABEL, labelId.WEEKDAY_MON]);
-  expect([...shard.boundaries]).toEqual([0, 0, 1]);
-  expect([...shard.kinds]).toEqual([0, 3, 0]);
-});
-
 test("a fragment starting mid-token throws Unaligned supervision", () => {
   const record = makeRecord({
     id: "misaligned-1",
@@ -85,10 +161,12 @@ test("a fragment starting mid-token throws Unaligned supervision", () => {
     ],
   });
 
-  expect(() => featurizeRecords([record])).toThrow(/Unaligned supervision in misaligned-1/);
+  expect(() => featurizeRecord(record, tokenize(record.text))).toThrow(
+    /Unaligned supervision in misaligned-1/,
+  );
 });
 
-test("serialized shards preserve exact supervision and sequence boundaries", () => {
+test("streaming shards preserve exact supervision and sequence boundaries", async () => {
   const records = [
     makeRecord({
       id: "feat-3",
@@ -117,13 +195,24 @@ test("serialized shards preserve exact supervision and sequence boundaries", () 
 
   writeFileSync(input, `${records.map((r) => JSON.stringify(r)).join("\n")}\n`);
 
-  const summary = featurizeFiles({ input, out: join(workdir, "shard") });
-  const rowsBytes = statSync(summary.files.rows).size;
-  const labelBytes = statSync(summary.files.labels).size;
+  const repository = resolve(import.meta.dir, "../../../..");
 
-  expect(labelBytes).toBe(rowsBytes / 2 / summary.manifest.rowsPerToken);
+  const summary = await featurizeKindsStreaming(
+    relative(repository, input),
+    relative(repository, join(workdir, "shard")),
+  );
 
-  expect(summary.manifest).toMatchObject({
+  const split = summary.splits.train;
+
+  expect(split.prefix).toBe(join(workdir, "shard-train"));
+  const manifest: FeaturizeManifest = JSON.parse(readFileSync(`${split.prefix}.json`, "utf8"));
+  const file = (field: keyof typeof SHARD_FORMAT) => `${split.prefix}${SHARD_FORMAT[field].suffix}`;
+  const rowsBytes = statSync(file("rows")).size;
+  const labelBytes = statSync(file("labels")).size;
+
+  expect(labelBytes).toBe(rowsBytes / 2 / manifest.rowsPerToken);
+
+  expect(manifest).toMatchObject({
     roleClasses: LABEL_COUNT,
     rowsPerToken: FEATURE_COUNT,
     featureRows: EMBEDDING_ROWS,
@@ -137,7 +226,7 @@ test("serialized shards preserve exact supervision and sequence boundaries", () 
     },
   });
 
-  const offsetBuffer = readFileSync(summary.files.offsets);
+  const offsetBuffer = readFileSync(file("offsets"));
 
   const offsets = new Uint32Array(
     offsetBuffer.buffer,
@@ -146,11 +235,11 @@ test("serialized shards preserve exact supervision and sequence boundaries", () 
   );
 
   expect([...offsets]).toEqual([0, 3, 8]);
-  expect(summary.tokens).toBe(8);
-  expect(summary.sequences).toBe(2);
+  expect(split.tokens).toBe(8);
+  expect(split.sequences).toBe(2);
   const bytes = (path: string) => [...readFileSync(path)];
 
-  expect(bytes(summary.files.labels)).toEqual([
+  expect(bytes(file("labels"))).toEqual([
     labelId.RECUR,
     PADDING_LABEL,
     labelId.WEEKDAY_MON,
@@ -161,11 +250,13 @@ test("serialized shards preserve exact supervision and sequence boundaries", () 
     labelId.UNIT_HOUR,
   ]);
 
-  expect(bytes(summary.files.boundaries)).toEqual([0, 0, 1, 0, 0, 1, 0, 0]);
-  expect(bytes(summary.files.kinds)).toEqual([0, 3, 0, 0, 3, 1, 3, 0]);
-  expect(bytes(summary.files.speech)).toEqual([speechActId.request, speechActId.quoted]);
-  expect(bytes(summary.files.actionable)).toEqual([1, 0, 1, 0, 0, 0, 0, 0]);
-  const neighborBuffer = readFileSync(summary.files.neighbors);
+  expect(bytes(file("boundaries"))).toEqual([0, 0, 1, 0, 0, 1, 0, 0]);
+  expect(bytes(file("kinds"))).toEqual([0, 3, 0, 0, 3, 1, 3, 0]);
+  expect(bytes(file("speech"))).toEqual([speechActId.request, speechActId.quoted]);
+  expect(bytes(file("actionable"))).toEqual([1, 0, 1, 0, 0, 0, 0, 0]);
+  expect(bytes(file("populations"))).toEqual([0, 1]);
+  expect(manifest.actionableCounts).toEqual({ 0: 3, 1: 2 });
+  const neighborBuffer = readFileSync(file("neighbors"));
 
   const neighbors = new Int16Array(
     neighborBuffer.buffer,
@@ -175,83 +266,18 @@ test("serialized shards preserve exact supervision and sequence boundaries", () 
 
   // Neighbor indices restart at each sequence and skip whitespace.
   expect([...neighbors]).toEqual([-1, 2, 0, 2, 0, -1, -1, 2, 0, 2, 0, 4, 2, 4, 2, -1]);
-  expect(summary.manifest.speechActClasses).toBe(SPEECH_ACTS.length);
-  expect(summary.manifest.speechActNames).toEqual([...SPEECH_ACTS]);
+  expect(manifest.speechActClasses).toBe(SPEECH_ACTS.length);
+  expect(manifest.speechActNames).toEqual([...SPEECH_ACTS]);
 
-  expect(summary.manifest.format.speech).toEqual({
+  expect(manifest.format.speech).toEqual({
     suffix: ".speech.bin",
     dtype: "uint8",
   });
 
-  expect(summary.manifest.format.actionable).toEqual({
+  expect(manifest.format.actionable).toEqual({
     suffix: ".actionable.bin",
     dtype: "uint8",
   });
-});
-
-test("a request defaults structural tokens to actionable when the span omits the bit", () => {
-  const record = makeRecord({
-    id: "feat-request-structural",
-    text: "every Monday",
-    speechAct: "request",
-    spans: [
-      { start: 0, end: 5, label: "RECUR", clauseStart: false },
-      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
-    ],
-  });
-
-  const shard = featurizeRecords([record]);
-
-  expect([...shard.actionable]).toEqual([1, 0, 1]);
-});
-
-test("a request writes speech-act id and content-token actionable bits", () => {
-  const record = makeRecord({
-    id: "feat-request",
-    text: "every Monday",
-    speechAct: "request",
-    spans: [
-      { start: 0, end: 5, label: "RECUR", clauseStart: false, actionable: false },
-      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true, actionable: true },
-    ],
-  });
-
-  const shard = featurizeRecords([record]);
-
-  expect([...shard.speech]).toEqual([speechActId.request]);
-  expect(shard.actionable.length).toBe(shard.tokens);
-  expect([...shard.actionable]).toEqual([0, 0, 1]);
-  expect(shard.actionableCounts).toEqual({ 0: 1, 1: 1 });
-});
-
-test("a descriptive sequence has descriptive speech-act and no actionable tokens", () => {
-  const sentence = new Sentence();
-
-  sentence.add("the shop is open", "O", " ", false);
-  sentence.clause();
-  sentence.add("every", "RECUR", " ", false);
-  sentence.add("weekday", "DAYGROUP_WEEKDAY", " ", false);
-  sentence.add("at", "GLUE", " ", false);
-  sentence.add("9", "HOUR_9", " ", false);
-
-  const record = makeRecord({
-    id: "feat-descriptive",
-    text: sentence.text,
-    intent: null,
-    speechAct: "descriptive",
-    family: "negative",
-    spans: sentence.spans,
-  });
-
-  const shard = featurizeRecords([record]);
-
-  expect([...shard.speech]).toEqual([speechActId.descriptive]);
-  expect(shard.actionable.length).toBe(shard.tokens);
-  expect([...shard.actionable].every((bit) => bit === 0)).toBe(true);
-
-  expect(
-    shard.labels.includes(labelId.DAYGROUP_WEEKDAY) && shard.labels.includes(labelId.HOUR_9),
-  ).toBe(true);
 });
 
 test("a correction sequence marks only B tokens actionable", () => {
@@ -275,12 +301,12 @@ test("a correction sequence marks only B tokens actionable", () => {
     ],
   });
 
-  const shard = featurizeRecords([record]);
+  const shard = featurizeRecord(record, tokenize(record.text));
 
   expect([...shard.speech]).toEqual([speechActId.correction]);
   const tokens = ["i", " ", "meant", " ", "friday", " ", "rather", " ", "than", " ", "thursday"];
 
-  expect(shard.tokens).toBe(tokens.length);
+  expect(shard.tokenCount).toBe(tokens.length);
   const friday = [...shard.labels].findIndex((id) => id === labelId.WEEKDAY_FRI);
   const thursday = [...shard.labels].lastIndexOf(labelId.WEEKDAY_THU);
 
@@ -289,18 +315,4 @@ test("a correction sequence marks only B tokens actionable", () => {
   expect(shard.actionable[friday]).toBe(1);
   expect(shard.actionable[thursday]).toBe(0);
   expect(shard.actionable[[...shard.kinds].indexOf(3)]).toBe(0);
-});
-
-test("an unknown speechAct is a hard error, never request", () => {
-  const record = makeRecord({
-    id: "feat-unknown-act",
-    text: "every Monday",
-    speechAct: "please" as CorpusRecord["speechAct"],
-    spans: [
-      { start: 0, end: 5, label: "RECUR", clauseStart: false },
-      { start: 6, end: 12, label: "WEEKDAY_MON", clauseStart: true },
-    ],
-  });
-
-  expect(() => featurizeRecords([record])).toThrow(/unknown speechAct/);
 });

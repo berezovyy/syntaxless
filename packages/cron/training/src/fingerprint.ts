@@ -3,7 +3,7 @@
  *
  * A fingerprint coarsens one rendered example to its frame: value slots become
  * `"slot"`, structural filler keeps its label and normalized literal, and
- * carrier prose (`O`) is hashed so wording still separates otherwise identical
+ * carrier prose (`O` and context numbers) is hashed so wording separates otherwise identical
  * frames. Paraphrases of one frame therefore collide, which is what lets the
  * held-out split exclude whole frames rather than renamed strings.
  *
@@ -12,14 +12,14 @@
  */
 import { createHash } from "node:crypto";
 
-import { isStructural } from "../../src/model/labels";
+import { isScheduleLabel, isStructural } from "../../src/model/labels";
 import type { SpeechAct } from "../../src/model/speech-acts";
 import type { Span } from "./sentence";
 
 /** The one token a value slot contributes to a pattern. */
 export const SLOT = "slot";
 
-/** The pattern entry for an example with no content label (all `O`). */
+/** The pattern entry for an example with no scheduling role. */
 export const NEGATIVE = "negative";
 
 /** SHA-256 as lowercase hex. */
@@ -39,16 +39,16 @@ export function coarseText(text: string): string {
  * Build the ordered structural pattern for a rendered example. Carrier spans
  * contribute `sha256(coarse).slice(0, 12)`; structural spans contribute
  * `"LABEL:coarse literal"`; content spans contribute {@link SLOT}. An example
- * with no non-`O` span is a single {@link NEGATIVE} entry.
+ * with no scheduling role is a single {@link NEGATIVE} entry.
  */
 export function fingerprintPattern(text: string, spans: readonly Span[]): string[] {
-  if (!spans.some((span) => span.label !== "O")) return [NEGATIVE];
+  if (!spans.some((span) => isScheduleLabel(span.label))) return [NEGATIVE];
   const pattern: string[] = [];
 
   for (const span of spans) {
     const literal = text.slice(span.start, span.end);
 
-    if (span.label === "O") {
+    if (!isScheduleLabel(span.label)) {
       pattern.push(sha256Hex(coarseText(literal)).slice(0, 12));
     } else if (isStructural(span.label)) {
       pattern.push(`${span.label}:${coarseText(literal)}`);
@@ -62,7 +62,7 @@ export function fingerprintPattern(text: string, spans: readonly Span[]): string
 
 /**
  * Structural pattern with carrier text erased: `O` collapses to a single
- * placeholder. Two examples that differ only by carrier wording share a
+ * placeholder, including context numbers. Two examples that differ only by carrier wording share a
  * frame pattern; this is the view used to assert split disjointness.
  */
 export function structuralPattern(text: string, spans: readonly Span[]): string[] {
@@ -77,7 +77,7 @@ export function fingerprintSpans(text: string, spans: readonly Span[]): string {
 }
 
 function inferLegacySpeechAct(spans: readonly Span[]): SpeechAct {
-  return spans.every((span) => span.label === "O") ? "none" : "request";
+  return spans.some((span) => isScheduleLabel(span.label)) ? "request" : "none";
 }
 
 /**

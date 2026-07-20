@@ -62,6 +62,7 @@ import {
   shiftIsoDate,
 } from "../../src/schedule-semantics.js";
 import type { FrequencyUnit, ScheduleIntent, TimeOfDay, Weekday } from "../../src/types/intent";
+import { requireClock } from "./clock.js";
 import { CORRECTION_FRAMES, correctionPairs, wrapCorrection } from "./correction";
 import { copySentence, wrapDiscourse } from "./discourse";
 import type { DiscourseWrap } from "./discourse";
@@ -209,7 +210,7 @@ const MONTH_RANGES_2026: readonly { start: string; end: string }[] = integers(1,
  * Ordinary all-O leftovers. Schedule-bearing groups (quoted, temporal,
  * conversational, ambiguous, …) used to paint `every Monday` as `O` and are
  * gone. Hard-no is a labeled hole + non-request wrap from `src/mix`. Easy-no
- * mass is Tatoeba (or bootstrap). This list is retired as E mass once Tatoeba
+ * mass comes from pinned Tatoeba. This list is retired as E mass once Tatoeba
  * is on; kept so the `negative` kind still has ≥3 frames.
  */
 const NEGATIVE_GROUPS = {
@@ -538,6 +539,7 @@ type ClockStyle =
   | "hour-meridiem"
   | "spoken"
   | "24h"
+  | "hour-unqualified"
   | "compact"
   | "military"
   | "named"
@@ -592,16 +594,21 @@ function addClock(
   switch (style) {
     case "digits":
       sentence.add(prefix, "GLUE");
-      sentence.add(String(hour12(hour)), hourTok);
+      sentence.add(String(hour12(hour)), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(paddedMinute(minute), minuteTok, "");
+      sentence.add(paddedMinute(minute), "MINUTE_LIT", "");
       sentence.add(meridiem(hour), merTok);
       break;
     case "hour-meridiem":
       if (minute !== 0) return;
       sentence.add(prefix, "GLUE");
-      sentence.add(String(hour12(hour)), hourTok);
+      sentence.add(String(hour12(hour)), "HOUR_LIT");
       sentence.add(meridiem(hour), merTok);
+      break;
+    case "hour-unqualified":
+      if (minute !== 0) return;
+      sentence.add(prefix, "GLUE");
+      sentence.add(String(hour), "HOUR_LIT");
       break;
     case "spoken":
       sentence.add(prefix, "GLUE");
@@ -611,15 +618,15 @@ function addClock(
       break;
     case "24h":
       sentence.add(prefix, "GLUE");
-      sentence.add(String(hour), hourTok);
+      sentence.add(String(hour), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(paddedMinute(minute), minuteTok, "");
+      sentence.add(paddedMinute(minute), "MINUTE_LIT", "");
       break;
     case "compact":
       sentence.add(prefix, "GLUE");
-      sentence.add(String(hour12(hour)), hourTok);
+      sentence.add(String(hour12(hour)), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(paddedMinute(minute), minuteTok, "");
+      sentence.add(paddedMinute(minute), "MINUTE_LIT", "");
       sentence.add(meridiem(hour), merTok, "");
       break;
     case "military":
@@ -734,23 +741,23 @@ function addClock(
 
     case "dotted-meridiem":
       sentence.add(prefix, "GLUE");
-      sentence.add(String(hour12(hour)), hourTok);
+      sentence.add(String(hour12(hour)), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(paddedMinute(minute), minuteTok, "");
+      sentence.add(paddedMinute(minute), "MINUTE_LIT", "");
       sentence.add(meridiem(hour) === "am" ? "a.m." : "p.m.", merTok);
       break;
     case "compact-dotted-meridiem":
       sentence.add(prefix, "GLUE");
-      sentence.add(String(hour12(hour)), hourTok);
+      sentence.add(String(hour12(hour)), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(paddedMinute(minute), minuteTok, "");
+      sentence.add(paddedMinute(minute), "MINUTE_LIT", "");
       sentence.add(meridiem(hour) === "am" ? "a.m." : "p.m.", merTok, "");
       break;
     case "spaced-dotted-meridiem":
       sentence.add(prefix, "GLUE");
-      sentence.add(String(hour12(hour)), hourTok);
+      sentence.add(String(hour12(hour)), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(paddedMinute(minute), minuteTok, "");
+      sentence.add(paddedMinute(minute), "MINUTE_LIT", "");
       sentence.add(meridiem(hour) === "am" ? "a. m." : "p. m.", merTok);
       break;
     case "oclock":
@@ -762,9 +769,9 @@ function addClock(
       break;
     case "sharp":
       sentence.add(prefix, "GLUE");
-      sentence.add(String(hour12(hour)), hourTok);
+      sentence.add(String(hour12(hour)), "HOUR_LIT");
       sentence.add(WORDS.glue.colon, "GLUE", "");
-      sentence.add(paddedMinute(minute), minuteTok, "");
+      sentence.add(paddedMinute(minute), "MINUTE_LIT", "");
       sentence.add(meridiem(hour), merTok);
       sentence.add(CLOCK_EXACT_SUFFIXES[0], "EDGE");
       break;
@@ -796,6 +803,7 @@ function addClock(
 }
 
 function clockCanRender(time: TimeOfDay, style: ClockStyle): boolean {
+  if (style === "hour-unqualified") return time.minute === 0;
   if (style === "hour-meridiem") return time.minute === 0;
   if (style === "named") return time.minute === 0 && (time.hour === 0 || time.hour === 12);
   if (style === "quarter-past") return time.minute === 15;
@@ -1606,7 +1614,7 @@ function renderEveryOtherAtTime(
   templateId: string,
 ): boolean {
   const weekday = intent.weekdays![0]!;
-  const time = intent.time!;
+  const time = requireClock(intent);
 
   switch (templateId) {
     case "every-other-at":
@@ -1644,7 +1652,7 @@ function renderEveryOtherAtTime(
 }
 
 function renderTimeOfDay(sentence: Sentence, intent: ScheduleIntent, templateId: string): boolean {
-  const time = intent.time!;
+  const time = requireClock(intent);
   const [styleText, prefixText] = templateId.split("|");
   const style = styleText as ClockStyle;
 
@@ -1653,6 +1661,7 @@ function renderTimeOfDay(sentence: Sentence, intent: ScheduleIntent, templateId:
     "hour-meridiem",
     "spoken",
     "24h",
+    "hour-unqualified",
     "compact",
     "military",
     "named",
@@ -1685,7 +1694,7 @@ function renderTimeOfDay(sentence: Sentence, intent: ScheduleIntent, templateId:
 }
 
 function renderDayAtTime(sentence: Sentence, intent: ScheduleIntent, templateId: string): boolean {
-  const time = intent.time!;
+  const time = requireClock(intent);
 
   switch (templateId) {
     case "every-day-at":
@@ -1807,7 +1816,7 @@ function renderIntervalAtTime(
   templateId: string,
 ): boolean {
   const { interval, unit } = intent.frequency;
-  const time = intent.time!;
+  const time = requireClock(intent);
 
   const addInterval = (prefix: string, words = false): void => {
     sentence.add(prefix, "RECUR");
@@ -1862,8 +1871,12 @@ function renderDaygroupAtTime(
   templateId: string,
 ): boolean {
   const weekdays = intent.weekdays!;
-  const time = intent.time!;
-  const dynamic = /^(expression|time-expression|qualified-expression)-(\d+)$/.exec(templateId);
+  const time = requireClock(intent);
+
+  const dynamic =
+    /^(expression|time-expression|qualified-expression|unqualified-expression)-(\d+)$/.exec(
+      templateId,
+    );
 
   if (dynamic !== null) {
     const expression = DAYGROUP_EXPRESSIONS[Number(dynamic[2])];
@@ -1883,6 +1896,11 @@ function renderDaygroupAtTime(
     if (dynamic[1] === "qualified-expression") {
       if (!clockCanRender(time, "qualified")) return false;
       addClock(sentence, time, "qualified");
+    }
+
+    if (dynamic[1] === "unqualified-expression") {
+      if (!clockCanRender(time, "hour-unqualified")) return false;
+      addClock(sentence, time, "hour-unqualified");
     }
 
     return true;
@@ -1940,7 +1958,7 @@ function renderWeekdayAtTime(
   templateId: string,
 ): boolean {
   const weekdays = intent.weekdays!;
-  const time = intent.time!;
+  const time = requireClock(intent);
 
   switch (templateId) {
     case "every-day-at":
@@ -2105,7 +2123,7 @@ function renderDayOfMonthAtTime(
   templateId: string,
 ): boolean {
   const day = intent.dayOfMonth!;
-  const time = intent.time!;
+  const time = requireClock(intent);
 
   switch (templateId) {
     case "word-at":
@@ -2254,7 +2272,7 @@ function renderOrdinalWeekdayAtTime(
   templateId: string,
 ): boolean {
   const { ordinal, weekday } = intent.ordinalWeekday!;
-  const time = intent.time!;
+  const time = requireClock(intent);
   const ordinalSurface = ordinal === "last" && templateId.includes("final") ? "final" : ordinal;
 
   switch (templateId) {
@@ -2516,7 +2534,7 @@ function renderBoundsAtTime(
 
     const addBase = (): boolean => {
       if (!addScheduleSelector(sentence, intent)) return false;
-      addClock(sentence, intent.time!, naturalClockStyle(intent.time!));
+      addClock(sentence, requireClock(intent), naturalClockStyle(requireClock(intent)));
 
       return true;
     };
@@ -2544,7 +2562,7 @@ function renderBoundsAtTime(
 
   const addBase = (): boolean => {
     if (!addScheduleSelector(sentence, intent)) return false;
-    addClock(sentence, intent.time!, naturalClockStyle(intent.time!));
+    addClock(sentence, requireClock(intent), naturalClockStyle(requireClock(intent)));
 
     return true;
   };
@@ -2851,7 +2869,7 @@ function renderExceptionDateAtTime(
 
   const addBase = (): boolean => {
     if (!addScheduleSelector(sentence, intent)) return false;
-    addClock(sentence, intent.time!, naturalClockStyle(intent.time!));
+    addClock(sentence, requireClock(intent), naturalClockStyle(requireClock(intent)));
 
     return true;
   };
@@ -2881,7 +2899,7 @@ function renderExceptionAtTime(
   intent: ScheduleIntent,
   templateId: string,
 ): boolean {
-  const time = intent.time!;
+  const time = requireClock(intent);
   const excluded = intent.exceptions!.weekdays!;
   const match = /^(before|after|tail)-(\d+)$/.exec(templateId);
 
@@ -2905,7 +2923,7 @@ function renderSelectorExceptionAtTime(
   intent: ScheduleIntent,
   templateId: string,
 ): boolean {
-  const time = intent.time!;
+  const time = requireClock(intent);
   const excluded = intent.exceptions!.weekdays!;
   const match = /^(before|after|tail)-(\d+)$/.exec(templateId);
 
@@ -3016,7 +3034,7 @@ function renderDayRuleAtTime(
   }
 
   if (templateId.startsWith("time-")) {
-    addClock(sentence, intent.time!, naturalClockStyle(intent.time!));
+    addClock(sentence, requireClock(intent), naturalClockStyle(requireClock(intent)));
   }
 
   sentence.add("on the", "GLUE");
@@ -3024,7 +3042,7 @@ function renderDayRuleAtTime(
   sentence.add("of every month", "RECUR");
 
   if (templateId.startsWith("rule-")) {
-    addClock(sentence, intent.time!, naturalClockStyle(intent.time!));
+    addClock(sentence, requireClock(intent), naturalClockStyle(requireClock(intent)));
   }
 
   return true;
@@ -3301,6 +3319,7 @@ export const KINDS: readonly KindDef[] = [
       "hour-meridiem",
       "spoken",
       "24h",
+      "hour-unqualified",
       "compact",
       "military",
       "named",
@@ -3377,6 +3396,7 @@ export const KINDS: readonly KindDef[] = [
       { id: `expression-${index}`, split: "train" as const },
       { id: `time-expression-${index}`, split: "train" as const },
       { id: `qualified-expression-${index}`, split: "train" as const },
+      { id: `unqualified-expression-${index}`, split: "train" as const },
     ]),
     intents: DAYGROUPS.flatMap((group) =>
       COMPOUND_CLOCKS.map((time) => weekly(group.weekdays, time)),

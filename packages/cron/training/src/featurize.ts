@@ -1,42 +1,25 @@
 /**
- * Featurizer: merged JSONL corpus in, binary training shards out.
+ * Convert aligned corpus records to binary features and supervision.
  *
  * The corpus records recorded spans with UTF-16 offsets; the tokenizer turns
  * the same text into UTF-16-offset tokens. This module maps one onto the other
- * and screams if a span does not cover a whole number of tokens — the Phase 07
- * alignment contract. It never guesses a label and never falls back to a
- * parser: a misaligned fragment is a generator bug, not a runtime condition.
+ * and rejects a span that does not cover a complete token. It never guesses
+ * a label or falls back to a parser: misalignment is a generator bug.
  *
  * Rule and LLM records take the identical path. The shard contract is owned
  * here and is authoritative for the Python reader: `uint16` sparse feature rows
- * token), `uint8` labels/boundaries/kinds/speech/actionable, `int16` neighbour
+ * per token, `uint8` labels/boundaries/kinds/speech/actionable, `int16` neighbour
  * pairs, a `uint32` sequence-offset table of length `N + 1`, and one `uint32`
  * wording frame id per sequence. Speech-act is one uint8 per sequence;
  * actionable is one uint8 per token.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-import { LABEL_COUNT, labelId, LABELS } from "../../src/model/labels.js";
+import { isScheduleLabel, LABEL_COUNT, labelId, LABELS } from "../../src/model/labels.js";
 import type { Label } from "../../src/model/labels.js";
-import { SPEECH_ACT_COUNT, SPEECH_ACTS, speechActId } from "../../src/model/speech-acts.js";
+import { SPEECH_ACTS, speechActId } from "../../src/model/speech-acts.js";
 import type { SpeechAct } from "../../src/model/speech-acts.js";
-import {
-  EMBEDDING_ROWS,
-  FEATURE_COUNT,
-  featureRows,
-  PADDING_ROW,
-  tokenize,
-} from "../../src/model/tokenizer.js";
-import {
-  assertDisjoint,
-  corpusRecordSchema,
-  heldoutFingerprintsOf,
-  readJsonl,
-} from "./corpus/merge.js";
+import { FEATURE_COUNT, featureRows, PADDING_ROW, tokenize } from "../../src/model/tokenizer.js";
 import type { CorpusRecord } from "./corpus/merge.js";
-import { classifyPopulation } from "./mix/quotas.js";
+import type { SequenceMetadataManifest } from "./sequence-metadata.js";
 
 /** Longest sequence the model will see; longer examples are skipped. */
 export const MAX_TOKENS = 128;
@@ -64,13 +47,9 @@ export const SHARD_FORMAT = {
 /** Sequence-level corpus population. Must match training/cron/dataset.py. */
 export const POPULATION_IDS = { R: 0, H: 1, E: 2 } as const;
 
-export type ShardFormat = typeof SHARD_FORMAT;
-
-export type ManifestShardFormat = Omit<ShardFormat, "populations"> &
-  Partial<Pick<ShardFormat, "populations">>;
-
 /** The manifest layout contract, including sequence-level wording frames. */
 export interface FeaturizeManifest {
+  sequenceMetadata: SequenceMetadataManifest;
   fingerprints: string[];
   roleClasses: number;
   rowsPerToken: number;
@@ -81,50 +60,8 @@ export interface FeaturizeManifest {
   speechActClasses: number;
   speechActNames: readonly SpeechAct[];
   actionableCounts: Record<0 | 1, number>;
-  /** Absent on legacy shards created before complete-corpus sampling support. */
-  populationCounts?: Record<"R" | "H" | "E", number>;
-  format: ManifestShardFormat;
-}
-
-export interface FeaturizeOptions {
-  input: string;
-  out: string;
-}
-
-/** The in-memory shard, before it is flattened to disk. */
-export interface FeaturizedShard {
-  rows: Uint16Array;
-  labels: Uint8Array;
-  boundaries: Uint8Array;
-  kinds: Uint8Array;
-  neighbors: Int16Array;
-  offsets: Uint32Array;
-  frames: Uint32Array;
-  sequences: number;
-  tokens: number;
-  skippedEmpty: number;
-  skippedLong: number;
-  labelCounts: Record<string, number>;
-  fingerprints: string[];
-  frameNames: string[];
-  frameCounts: number[];
-  speech: Uint8Array;
-  actionable: Uint8Array;
-  populations: Uint8Array;
-  actionableCounts: Record<0 | 1, number>;
   populationCounts: Record<"R" | "H" | "E", number>;
-}
-
-export interface FeaturizeSummary {
-  input: string;
-  out: string;
-  sequences: number;
-  tokens: number;
-  skippedEmpty: number;
-  skippedLong: number;
-  labelCounts: Record<string, number>;
-  manifest: FeaturizeManifest;
-  files: Record<keyof ShardFormat, string> & { manifest: string };
+  format: typeof SHARD_FORMAT;
 }
 
 export interface PerRecord {
@@ -159,7 +96,7 @@ function speechActForRecord(record: CorpusRecord): SpeechAct {
 function defaultActionableBit(label: Label, speechAct: SpeechAct): boolean {
   if (speechAct !== "request") return false;
 
-  return label !== "O";
+  return isScheduleLabel(label);
 }
 
 export function featurizeRecord(
@@ -230,315 +167,4 @@ export function featurizeRecord(
     speech: Uint8Array.of(speechActId[speechAct]),
     actionable,
   };
-}
-
-function concatUint16(chunks: readonly Uint16Array[]): Uint16Array {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Uint16Array(total);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  return merged;
-}
-
-function concatUint8(chunks: readonly Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Uint8Array(total);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  return merged;
-}
-
-function concatInt16(chunks: readonly Int16Array[]): Int16Array {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Int16Array(total);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  return merged;
-}
-
-/**
- * Featurize a batch of records into one flat shard. The leak gate is re-run
- * here; a failed re-check aborts rather than emitting a corpus that would
- * silently inflate validation scores.
- */
-export function featurizeRecords(records: readonly CorpusRecord[]): FeaturizedShard {
-  const heldout = new Set(heldoutFingerprintsOf(records));
-
-  assertDisjoint(records, heldout);
-
-  const rowChunks: Uint16Array[] = [];
-  const labelChunks: Uint8Array[] = [];
-  const boundaryChunks: Uint8Array[] = [];
-  const kindChunks: Uint8Array[] = [];
-  const neighborChunks: Int16Array[] = [];
-  const speechChunks: Uint8Array[] = [];
-  const actionableChunks: Uint8Array[] = [];
-  const populations: number[] = [];
-  const offsets: number[] = [0];
-  const frames: number[] = [];
-  const actionableCounts: Record<0 | 1, number> = { 0: 0, 1: 0 };
-
-  const populationCounts: Record<"R" | "H" | "E", number> = {
-    R: 0,
-    H: 0,
-    E: 0,
-  };
-
-  const frameIds = new Map<string, number>();
-  const frameNames: string[] = [];
-  const frameCounts: number[] = [];
-  const labelCounts: Record<string, number> = {};
-
-  for (const label of LABELS) labelCounts[label] = 0;
-
-  let sequences = 0;
-  let tokens = 0;
-  let skippedEmpty = 0;
-  let skippedLong = 0;
-
-  for (const record of records) {
-    const recordTokens = tokenize(record.text);
-
-    if (recordTokens.length === 0) {
-      skippedEmpty++;
-      continue;
-    }
-
-    if (recordTokens.length > MAX_TOKENS) {
-      skippedLong++;
-      continue;
-    }
-
-    const shard = featurizeRecord(record, recordTokens);
-
-    rowChunks.push(shard.rows);
-    labelChunks.push(shard.labels);
-    boundaryChunks.push(shard.boundaries);
-    kindChunks.push(shard.kinds);
-    neighborChunks.push(shard.neighbors);
-    speechChunks.push(shard.speech);
-    actionableChunks.push(shard.actionable);
-
-    const population = classifyPopulation({
-      intent: record.intent,
-      speechAct: speechActForRecord(record),
-      spans: record.spans,
-    });
-
-    populations.push(POPULATION_IDS[population]);
-    populationCounts[population]++;
-
-    for (let index = 0; index < shard.tokenCount; index++) {
-      if (shard.kinds[index] === 3) continue;
-      const bit = shard.actionable[index]! === 1 ? 1 : 0;
-
-      actionableCounts[bit] += 1;
-    }
-
-    const frameName = record.template ?? `${record.family}/unspecified`;
-    let frameId = frameIds.get(frameName);
-
-    if (frameId === undefined) {
-      frameId = frameNames.length;
-      frameIds.set(frameName, frameId);
-      frameNames.push(frameName);
-      frameCounts.push(0);
-    }
-
-    frames.push(frameId);
-    frameCounts[frameId]!++;
-    sequences++;
-    tokens += shard.tokenCount;
-    offsets.push(offsets.at(-1)! + shard.tokenCount);
-
-    for (const label of LABELS) {
-      labelCounts[label]! += shard.labelCounts[label]!;
-    }
-  }
-
-  return {
-    rows: concatUint16(rowChunks),
-    labels: concatUint8(labelChunks),
-    boundaries: concatUint8(boundaryChunks),
-    kinds: concatUint8(kindChunks),
-    neighbors: concatInt16(neighborChunks),
-    offsets: Uint32Array.from(offsets),
-    frames: Uint32Array.from(frames),
-    sequences,
-    tokens,
-    skippedEmpty,
-    skippedLong,
-    labelCounts,
-    fingerprints: [...new Set(records.map((record) => record.fingerprint))].sort(),
-    frameNames,
-    frameCounts,
-    speech: concatUint8(speechChunks),
-    actionable: concatUint8(actionableChunks),
-    populations: Uint8Array.from(populations),
-    actionableCounts,
-    populationCounts,
-  };
-}
-
-function shardPath(prefix: string, key: keyof ShardFormat): string {
-  return `${prefix}${SHARD_FORMAT[key].suffix}`;
-}
-
-function writeBinary(path: string, view: ArrayBufferView): void {
-  writeFileSync(path, Buffer.from(view.buffer, view.byteOffset, view.byteLength));
-}
-
-function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-/** Read a corpus JSONL, featurize it, and write the shards and manifest. */
-export function featurizeFiles(options: FeaturizeOptions): FeaturizeSummary {
-  const input = resolvePath(options.input);
-  const out = resolvePath(options.out);
-
-  const records = readJsonl(input).map((value, index) => {
-    const parsed = corpusRecordSchema.safeParse(value);
-
-    if (!parsed.success) {
-      throw new Error(
-        `${input} record ${index + 1}: invalid corpus record: ${parsed.error.issues
-          .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
-          .join("; ")}`,
-      );
-    }
-
-    return parsed.data as CorpusRecord;
-  });
-
-  const shard = featurizeRecords(records);
-
-  mkdirSync(dirname(out), { recursive: true });
-
-  const files: FeaturizeSummary["files"] = {
-    rows: shardPath(out, "rows"),
-    labels: shardPath(out, "labels"),
-    boundaries: shardPath(out, "boundaries"),
-    kinds: shardPath(out, "kinds"),
-    neighbors: shardPath(out, "neighbors"),
-    offsets: shardPath(out, "offsets"),
-    frames: shardPath(out, "frames"),
-    speech: shardPath(out, "speech"),
-    actionable: shardPath(out, "actionable"),
-    populations: shardPath(out, "populations"),
-    manifest: `${out}.json`,
-  };
-
-  writeBinary(files.rows, shard.rows);
-  writeBinary(files.labels, shard.labels);
-  writeBinary(files.boundaries, shard.boundaries);
-  writeBinary(files.kinds, shard.kinds);
-  writeBinary(files.neighbors, shard.neighbors);
-  writeBinary(files.offsets, shard.offsets);
-  writeBinary(files.frames, shard.frames);
-  writeBinary(files.speech, shard.speech);
-  writeBinary(files.actionable, shard.actionable);
-  writeBinary(files.populations, shard.populations);
-
-  const manifest: FeaturizeManifest = {
-    fingerprints: shard.fingerprints,
-    roleClasses: LABEL_COUNT,
-    rowsPerToken: FEATURE_COUNT,
-    featureRows: EMBEDDING_ROWS,
-    labelCounts: shard.labelCounts,
-    frameNames: shard.frameNames,
-    frameCounts: shard.frameCounts,
-    speechActClasses: SPEECH_ACT_COUNT,
-    speechActNames: SPEECH_ACTS,
-    actionableCounts: shard.actionableCounts,
-    populationCounts: shard.populationCounts,
-    format: SHARD_FORMAT,
-  };
-
-  writeJson(files.manifest, manifest);
-
-  return {
-    input,
-    out,
-    sequences: shard.sequences,
-    tokens: shard.tokens,
-    skippedEmpty: shard.skippedEmpty,
-    skippedLong: shard.skippedLong,
-    labelCounts: shard.labelCounts,
-    manifest,
-    files,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// CLI
-// ---------------------------------------------------------------------------
-
-/** Walk up to the workspace root (the package.json that lists `workspaces`). */
-function repoRoot(): string {
-  let dir = dirname(fileURLToPath(import.meta.url));
-
-  for (;;) {
-    const manifest = join(dir, "package.json");
-
-    if (existsSync(manifest)) {
-      try {
-        const pkg = JSON.parse(readFileSync(manifest, "utf8")) as {
-          workspaces?: unknown;
-        };
-
-        if (Array.isArray(pkg.workspaces)) return dir;
-      } catch {
-        // Not a readable manifest; keep walking up.
-      }
-    }
-
-    const parent = dirname(dir);
-
-    if (parent === dir) return process.cwd();
-    dir = parent;
-  }
-}
-
-/** Resolve a CLI path against the repo root so `--filter` cwd does not matter. */
-function resolvePath(value: string): string {
-  return isAbsolute(value) ? value : join(repoRoot(), value);
-}
-
-/** Parse the two positional arguments: `<input.jsonl> <prefix>`. */
-export function parseArgs(argv: readonly string[]): FeaturizeOptions {
-  const positional = argv.filter((arg) => !arg.startsWith("--"));
-
-  if (positional.length !== 2) {
-    throw new RangeError(
-      `usage: featurize <input.jsonl> <prefix> (got ${positional.length} arguments)`,
-    );
-  }
-
-  return { input: positional[0]!, out: positional[1]! };
-}
-
-if (import.meta.main) {
-  const options = parseArgs(process.argv.slice(2));
-  const summary = featurizeFiles(options);
-
-  process.stdout.write(
-    `${summary.sequences} sequences, ${summary.tokens} tokens ` +
-      `(${summary.skippedEmpty} empty, ${summary.skippedLong} too long) -> ${summary.out}\n`,
-  );
 }
