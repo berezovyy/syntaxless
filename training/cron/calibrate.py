@@ -63,36 +63,66 @@ def boundary_f1(
     return 2 * precision * recall / max(precision + recall, 1e-12)
 
 
-def collect_logits(
+@dataclass(slots=True)
+class BoundaryCounts:
+    """Confusion counts for every grid threshold: O(grid), not O(tokens)."""
+
+    true_positive: np.ndarray
+    false_positive: np.ndarray
+    false_negative: np.ndarray
+    tokens: int = 0
+    positives: int = 0
+
+    def f1(self, index: int) -> float:
+        true_positive = int(self.true_positive[index])
+        precision = true_positive / max(true_positive + int(self.false_positive[index]), 1)
+        recall = true_positive / max(true_positive + int(self.false_negative[index]), 1)
+        return 2 * precision * recall / max(precision + recall, 1e-12)
+
+
+def count_boundaries(
     model: torch.nn.Module,
     dataset,
     batch_size: int,
     device: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Run `model` once and return flattened boundary logits, targets, and mask.
+    grid: Sequence[float],
+) -> BoundaryCounts:
+    """Run `model` once and accumulate per-threshold boundary counts.
 
     The mask matches the training harness: a token is supervised only when its
     label is not the cross-entropy ignore index, so whitespace and unsupervised
-    tokens never influence the fit.
+    tokens never influence the fit. Each batch is reduced to counts and
+    dropped, so the validation split's logits are never all held at once.
     """
     model.eval()
-    logits: list[np.ndarray] = []
-    targets: list[np.ndarray] = []
-    masks: list[np.ndarray] = []
+    thresholds = np.asarray(grid, dtype=np.float64)
+    counts = BoundaryCounts(
+        true_positive=np.zeros(len(grid), dtype=np.int64),
+        false_positive=np.zeros(len(grid), dtype=np.int64),
+        false_negative=np.zeros(len(grid), dtype=np.int64),
+    )
     with torch.no_grad():
         for indices in dataset.batches(batch_size):
             batch = dataset.batch(indices, device)
             _, boundary, _, _, _ = model(
-                batch["rows"], batch["valid"], batch["neighbors"]
+                batch["rows"],
+                batch["valid"],
+                batch["neighbors"],
+                batch.get("lexical_ids"),
+                batch.get("lexicon_ids"),
             )
-            logits.append(boundary.detach().cpu().numpy().reshape(-1))
-            targets.append(batch["boundaries"].detach().cpu().numpy().reshape(-1))
-            masks.append((batch["labels"] != -100).detach().cpu().numpy().reshape(-1))
-    return (
-        np.concatenate(logits),
-        np.concatenate(targets),
-        np.concatenate(masks),
-    )
+            mask = (batch["labels"] != -100).detach().cpu().numpy().reshape(-1)
+            logits = boundary.detach().cpu().numpy().reshape(-1)[mask]
+            truth = batch["boundaries"].detach().cpu().numpy().reshape(-1)[mask] >= 0.5
+            # (grid, supervised tokens in this batch): bounded by batch size.
+            # Compare in the logits' dtype, as `boundary_f1` does with a scalar.
+            predicted = logits[None, :] >= thresholds.astype(logits.dtype)[:, None]
+            counts.true_positive += (predicted & truth).sum(axis=1)
+            counts.false_positive += (predicted & ~truth).sum(axis=1)
+            counts.false_negative += (~predicted & truth).sum(axis=1)
+            counts.tokens += int(mask.sum())
+            counts.positives += int(truth.sum())
+    return counts
 
 
 def calibrate(
@@ -104,8 +134,8 @@ def calibrate(
 ) -> Calibration:
     """Choose the threshold maximizing the worst boundary F1 across `datasets`.
 
-    `datasets` are development splits in a fixed order (validation first, then
-    reordered held-out). A threshold is scored on every split; the split with
+    `datasets` contain validation/calibration data, never heldout data. A
+    threshold is scored on every supplied development split; the split with
     the lowest F1 bounds the worst case. Ties break toward the threshold with
     the smallest magnitude, then the earliest in the grid, so the result is
     deterministic.
@@ -113,20 +143,17 @@ def calibrate(
     if not datasets:
         raise ValueError("calibrate requires at least one development dataset")
 
+    grid = [float(value) for value in grid]
     collected = [
-        collect_logits(model, dataset, batch_size, device) for dataset in datasets
+        count_boundaries(model, dataset, batch_size, device, grid) for dataset in datasets
     ]
 
-    grid = [float(value) for value in grid]
     best_threshold = grid[0]
     best_worst = -1.0
     best_index = 0
     scores_by_threshold: list[list[float]] = []
-    for threshold in grid:
-        scores = [
-            boundary_f1(logits, targets, mask, threshold)
-            for logits, targets, mask in collected
-        ]
+    for index, threshold in enumerate(grid):
+        scores = [counts.f1(index) for counts in collected]
         scores_by_threshold.append(scores)
         worst = min(scores)
         if worst > best_worst or (
@@ -134,18 +161,16 @@ def calibrate(
         ):
             best_threshold = threshold
             best_worst = worst
-            best_index = len(scores_by_threshold) - 1
+            best_index = index
 
     per_dataset = [
         {
             "threshold": best_threshold,
             "f1": scores_by_threshold[best_index][index],
-            "tokens": int(collected[index][2].sum()),
-            "positives": int(
-                ((collected[index][1] >= 0.5) & collected[index][2]).sum()
-            ),
+            "tokens": counts.tokens,
+            "positives": counts.positives,
         }
-        for index in range(len(datasets))
+        for index, counts in enumerate(collected)
     ]
     return Calibration(
         threshold=best_threshold,
