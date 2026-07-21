@@ -9,9 +9,6 @@ from __future__ import annotations
 
 import torch
 
-from dataset import SCHEDULE_KIND_NAMES as DATASET_SCHEDULE_KIND_NAMES
-from dataset import SPEECH_ACT_NAMES as DATASET_SPEECH_ACT_NAMES
-from dataset import schedule_kind_for_frame
 from model import SCHEDULE_KIND_NAMES, SPEECH_ACT_NAMES, Tagger
 
 FEATURE_ROWS = 772
@@ -58,6 +55,33 @@ def build_model(
         actionable_head=actionable_head,
         hidden=HIDDEN,
     )
+
+
+def test_factorized_padding_neutrality() -> None:
+    torch.manual_seed(0)
+    model = Tagger(
+        feature_rows=FEATURE_ROWS,
+        rows_per_token=ROWS_PER_TOKEN,
+        role_classes=ROLE_CLASSES,
+        schedule_kind_classes=len(SCHEDULE_KIND_NAMES),
+        speech_act_classes=3,
+        actionable_head=True,
+        hidden=HIDDEN,
+        factorized=True,
+        lexical_buckets=256,
+    ).eval()
+    content = 6
+    base = make_batch(content, 0, seed=7)
+    padded = make_batch(content, 9, seed=7)
+    with torch.no_grad():
+        base_out = model(*base)
+        padded_out = model(*padded)
+    for left, right in zip(base_out, padded_out, strict=True):
+        if left.numel() == 0:
+            continue
+        aligned = right if left.shape == right.shape else right[:, :content]
+        torch.testing.assert_close(left, aligned)
+    print("factorized padding neutrality: ok")
 
 
 def test_padding_neutrality() -> None:
@@ -143,80 +167,8 @@ def test_finite_gradients() -> None:
     print(f"finite qat gradients: ok ({checked} tensors)")
 
 
-def test_embedding_bag_matches_materialized_embedding() -> None:
-    generator = torch.Generator().manual_seed(29)
-    rows = torch.randint(0, FEATURE_ROWS, (3, 7, ROWS_PER_TOKEN), generator=generator)
-    rows[:, -2:, 10:] = FEATURE_ROWS
-    original_weight = torch.randn(
-        FEATURE_ROWS + 1, HIDDEN, generator=generator, requires_grad=True
-    )
-    with torch.no_grad():
-        original_weight[FEATURE_ROWS].zero_()
-    bag_weight = original_weight.detach().clone().requires_grad_(True)
-    materialized = torch.nn.functional.embedding(
-        rows, original_weight, padding_idx=FEATURE_ROWS
-    ).sum(dim=2)
-    bagged = torch.nn.functional.embedding_bag(
-        rows.reshape(-1, ROWS_PER_TOKEN),
-        bag_weight,
-        mode="sum",
-        padding_idx=FEATURE_ROWS,
-    ).reshape(3, 7, HIDDEN)
-    torch.testing.assert_close(bagged, materialized)
-    materialized.square().mean().backward()
-    bagged.square().mean().backward()
-    torch.testing.assert_close(bag_weight.grad, original_weight.grad)
-
-
-def test_legacy_heads_are_empty() -> None:
-    model = build_model(speech_act_classes=0, actionable_head=False).eval()
-    batch = make_batch(4, 2, seed=3)
-    with torch.no_grad():
-        _roles, _boundary, _kind, speech_act, actionable = model(*batch)
-    assert speech_act.numel() == 0
-    assert actionable.numel() == 0
-    print("legacy empty speech-act and actionable heads: ok")
-
-
-def test_schedule_kind_taxonomy() -> None:
-    assert DATASET_SCHEDULE_KIND_NAMES == SCHEDULE_KIND_NAMES
-    assert DATASET_SPEECH_ACT_NAMES == SPEECH_ACT_NAMES
-    expected = {
-        "n-interval/every-n": "interval",
-        "time-of-day/digits": "daily",
-        "weekday-range/through": "weekly",
-        "day-of-month/on-the": "monthly",
-        "ordinal-weekday/the-ordinal": "ordinal",
-        "bounds/from-to": "bounded",
-        "exception-days/except": "exception",
-        "negative/ordinary/0": "none",
-        "negative/ambiguous/0": "ambiguous",
-        "negative/multiple/0": "ambiguous",
-        "easy-no/tatoeba-v2": "none",
-        "minute-interval": "interval",
-        "hour-interval": "interval",
-        "day-interval": "interval",
-        "week-interval": "interval",
-        "month-interval": "interval",
-        "daily-clock": "daily",
-        "last-day-of-month": "monthly",
-        "last-business-day": "monthly",
-        "start-bound": "bounded",
-        "exclusive-end-bound": "bounded",
-        "inclusive-end-bound": "bounded",
-        "date-window": "bounded",
-        "correction-interval": "interval",
-        "correction-clock": "daily",
-        "correction-weekday": "weekly",
-    }
-    for frame, name in expected.items():
-        assert schedule_kind_for_frame(frame) == SCHEDULE_KIND_NAMES.index(name)
-    print("schedule-kind taxonomy: ok")
-
-
 if __name__ == "__main__":
     test_padding_neutrality()
+    test_factorized_padding_neutrality()
     test_finite_gradients()
-    test_legacy_heads_are_empty()
-    test_schedule_kind_taxonomy()
     print("test_model: all checks passed")

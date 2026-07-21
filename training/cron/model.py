@@ -1,10 +1,12 @@
-"""Tiny tagger with one trunk and two heads, plus quantization-aware training.
+"""Tiny tagger with a shared trunk and quantization-aware prediction heads.
 
 The trunk is sparse embedding row-sum, a depthwise temporal convolution with
 neighbour injection, a bidirectional gated linear recurrence (a sequential
-scan), masked global context pooling, and a gated head. It predicts one role per
-token and one clause-boundary logit. Feature dimensions come from the Phase 13
-manifest, never from a hardcoded label order.
+scan), masked global context pooling, and a gated head. Production predicts token
+roles, clause boundaries, schedule kinds, speech acts, and token actionability.
+Feature dimensions come from the shard manifest. Optional heads and factorized
+features support existing artifact decoding; the sole trainer enables all five
+production heads.
 
 QAT is symmetric per-tensor integer quantization with a straight-through
 estimator over 2-D parameters. The forward graph is identical apart from the
@@ -44,6 +46,24 @@ SPEECH_ACT_NAMES = (
     "incomplete",
 )
 
+# 3-way decision the decoder actually branches on. Corpus labels collapse into this.
+DECISION_ACT_NAMES = ("request", "correction", "other")
+# Index in SPEECH_ACT_NAMES -> decision id.
+DECISION_FROM_SPEECH = (2, 0, 2, 2, 2, 1, 2, 2, 2)
+
+# Must match packages/cron/src/model/tokenizer.ts row ranges.
+WORD_HASH_ROW0 = 140
+WORD_HASH_COUNT = 256
+CONSONANT_HASH_ROW0 = 396
+CONSONANT_HASH_COUNT = 128
+NUMBER_BUCKET_ROW0 = 564
+NUMBER_BUCKET_COUNT = 16
+WORD_SLOT = 4
+CONSONANT_SLOT = 5
+NUMBER_SLOT = 8
+LEXICAL_BUCKETS = 4096
+LEXICON_CLASSES = 12
+
 
 def fake_quantize(weight: torch.Tensor, bits: int) -> torch.Tensor:
     """Symmetric per-tensor int-`bits` quantization with a straight-through pass.
@@ -77,6 +97,34 @@ class QLinear(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         weight = fake_quantize(self.weight, self.bits) if self.qat else self.weight
         return F.linear(inputs, weight, self.bias)
+
+
+class StatefulRecurrence(nn.Module):
+    """Gated scan whose proposal and gate both read the previous state.
+
+    `h` carries a running mix, and the gate can stay open or shut because of
+    what it has already seen. Padding freezes the state, same as the input-only
+    scan.
+    """
+
+    def __init__(self, hidden: int, bits: int = 6):
+        super().__init__()
+        self.proposal = QLinear(hidden * 2, hidden, bits)
+        self.gate = QLinear(hidden * 2, hidden, bits)
+
+    def forward(self, inputs: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+        state = inputs.new_zeros(inputs.shape[0], inputs.shape[2])
+        mask = valid.to(inputs.dtype)
+        outputs: list[torch.Tensor] = []
+        for step in range(inputs.shape[1]):
+            step_mask = mask[:, step].unsqueeze(-1)
+            mixed = torch.cat((inputs[:, step], state), dim=-1)
+            proposal = torch.tanh(self.proposal(mixed))
+            gate = torch.sigmoid(self.gate(mixed))
+            candidate = (1.0 - gate) * state + gate * proposal
+            state = state + step_mask * (candidate - state)
+            outputs.append(state)
+        return torch.stack(outputs, dim=1)
 
 
 class GatedRecurrence(nn.Module):
@@ -120,6 +168,9 @@ class Tagger(nn.Module):
         hidden: int = 32,
         kernel_size: int = 3,
         quantization_bits: int = 6,
+        factorized: bool = False,
+        lexical_buckets: int = WORD_HASH_COUNT,
+        lexicon_classes: int = 0,
     ):
         super().__init__()
         self.feature_rows = feature_rows
@@ -131,15 +182,30 @@ class Tagger(nn.Module):
         self.hidden = hidden
         self.kernel_size = kernel_size
         self.quantization_bits = quantization_bits
+        self.factorized = bool(factorized)
+        self.lexical_buckets = lexical_buckets if factorized else 0
+        self.lexicon_classes = lexicon_classes if factorized else 0
         self.last_pooled: torch.Tensor | None = None
 
         self.embedding = nn.Embedding(feature_rows + 1, hidden, padding_idx=feature_rows)
+        conv_groups = 1 if factorized else hidden
         self.depthwise = nn.Conv1d(
-            hidden, hidden, kernel_size, padding=kernel_size // 2, groups=hidden
+            hidden,
+            hidden,
+            kernel_size,
+            padding=kernel_size // 2,
+            groups=conv_groups,
         )
         self.neighbor = QLinear(hidden, hidden, quantization_bits)
-        self.forward_recurrence = GatedRecurrence(hidden, quantization_bits)
-        self.backward_recurrence = GatedRecurrence(hidden, quantization_bits)
+        recurrence = StatefulRecurrence if factorized else GatedRecurrence
+        self.forward_recurrence = recurrence(hidden, quantization_bits)
+        self.backward_recurrence = recurrence(hidden, quantization_bits)
+        if factorized:
+            self.word_lexical = nn.Embedding(lexical_buckets, hidden)
+            self.consonant_lexical = nn.Embedding(CONSONANT_HASH_COUNT, hidden)
+            self.number_lexical = nn.Embedding(NUMBER_BUCKET_COUNT, hidden)
+            if lexicon_classes > 0:
+                self.lexicon_class = nn.Embedding(lexicon_classes, hidden)
         self.combine = QLinear(2 * hidden, hidden, quantization_bits)
         self.context_norm = nn.LayerNorm(hidden)
         self.head_gate = QLinear(2 * hidden, hidden, quantization_bits)
@@ -185,8 +251,97 @@ class Tagger(nn.Module):
         present = (neighbors >= 0).unsqueeze(-1).to(states.dtype)
         return (gathered * present).sum(dim=2)
 
+    def _dedicated(
+        self,
+        table: nn.Embedding,
+        index: torch.Tensor,
+        present: torch.Tensor,
+    ) -> torch.Tensor:
+        weight = table.weight
+        if self.qat:
+            weight = fake_quantize(weight, self.quantization_bits)
+        looked = F.embedding(index, weight)
+        return looked * present.unsqueeze(-1)
+
+    def _add_identity(
+        self,
+        rows: torch.Tensor,
+        states: torch.Tensor,
+        shared: torch.Tensor,
+        lexical_ids: torch.Tensor | None,
+        lexicon_ids: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Remove identity rows from the shared sum and add full-width vectors."""
+
+        def peel(slot: int, start: int, count: int) -> tuple[torch.Tensor, torch.Tensor]:
+            row = rows[:, :, slot]
+            present = (row >= start) & (row < start + count)
+            looked = F.embedding(
+                row.clamp(0, self.feature_rows), shared, padding_idx=self.feature_rows
+            )
+            return present, looked
+
+        word_present, word_shared = peel(WORD_SLOT, WORD_HASH_ROW0, WORD_HASH_COUNT)
+        consonant_present, consonant_shared = peel(
+            CONSONANT_SLOT, CONSONANT_HASH_ROW0, CONSONANT_HASH_COUNT
+        )
+        number_present, number_shared = peel(
+            NUMBER_SLOT, NUMBER_BUCKET_ROW0, NUMBER_BUCKET_COUNT
+        )
+        states = states - word_shared * word_present.unsqueeze(-1)
+        states = states - consonant_shared * consonant_present.unsqueeze(-1)
+        states = states - number_shared * number_present.unsqueeze(-1)
+
+        if lexical_ids is None:
+            word_index = (rows[:, :, WORD_SLOT] - WORD_HASH_ROW0).clamp(0, WORD_HASH_COUNT - 1)
+            states = states + self._dedicated(self.word_lexical, word_index, word_present)
+        else:
+            buckets = self.word_lexical.num_embeddings
+            states = states + self._dedicated(
+                self.word_lexical,
+                lexical_ids.clamp(0, buckets - 1),
+                torch.ones_like(word_present),
+            )
+        consonant_index = (rows[:, :, CONSONANT_SLOT] - CONSONANT_HASH_ROW0).clamp(
+            0, CONSONANT_HASH_COUNT - 1
+        )
+        number_index = (rows[:, :, NUMBER_SLOT] - NUMBER_BUCKET_ROW0).clamp(
+            0, NUMBER_BUCKET_COUNT - 1
+        )
+        states = states + self._dedicated(
+            self.consonant_lexical, consonant_index, consonant_present
+        )
+        states = states + self._dedicated(self.number_lexical, number_index, number_present)
+        if lexicon_ids is not None and self.lexicon_classes > 0:
+            present = torch.ones_like(word_present)
+            states = states + self._dedicated(
+                self.lexicon_class,
+                lexicon_ids.clamp(0, self.lexicon_classes - 1),
+                present,
+            )
+        return states
+
+    def _carrier_pool(
+        self, combined: torch.Tensor, roles: torch.Tensor, rows: torch.Tensor, valid: torch.Tensor
+    ) -> torch.Tensor:
+        """Pool non-space tokens by detached P(O), so the schedule span does not vote."""
+        kind = rows[:, :, 0]
+        not_space = valid & (kind != 3)
+        outside = torch.softmax(roles.detach(), dim=-1)[..., 0]
+        weights = not_space.to(combined.dtype) * outside
+        denom = weights.sum(dim=1, keepdim=True)
+        fallback = not_space.to(combined.dtype)
+        weights = torch.where(denom < 1e-4, fallback, weights)
+        denom = weights.sum(dim=1, keepdim=True).clamp(min=1.0)
+        return (combined * weights.unsqueeze(-1)).sum(dim=1) / denom
+
     def forward(
-        self, rows: torch.Tensor, valid: torch.Tensor, neighbors: torch.Tensor
+        self,
+        rows: torch.Tensor,
+        valid: torch.Tensor,
+        neighbors: torch.Tensor,
+        lexical_ids: torch.Tensor | None = None,
+        lexicon_ids: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         batch, width, _ = rows.shape
         embedding_weight = self.embedding.weight
@@ -201,6 +356,10 @@ class Tagger(nn.Module):
             mode="sum",
             padding_idx=self.feature_rows,
         ).reshape(batch, width, self.hidden)
+        if self.factorized:
+            states = self._add_identity(
+                rows, states, embedding_weight, lexical_ids, lexicon_ids
+            )
         states = states + self.neighbor(self._gather_neighbors(states, neighbors))
 
         mask = valid.unsqueeze(-1).to(states.dtype)
@@ -232,8 +391,14 @@ class Tagger(nn.Module):
             if self.schedule_kind_head is not None
             else pooled.new_empty((batch, 0))
         )
+        if self.speech_act_head is None:
+            speech_context = pooled[:, 0, :]
+        elif self.factorized:
+            speech_context = self._carrier_pool(combined, roles, rows, valid)
+        else:
+            speech_context = pooled[:, 0, :]
         speech_act = (
-            self.speech_act_head(pooled[:, 0, :])
+            self.speech_act_head(speech_context)
             if self.speech_act_head is not None
             else pooled.new_empty((batch, 0))
         )

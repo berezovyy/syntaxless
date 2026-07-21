@@ -1,25 +1,23 @@
-"""Shard loader, length-bucketed batching, and split regeneration.
+"""Shard loader and one-pass, length-bucketed production batching.
 
 The shard contract is owned by TypeScript (`packages/cron/training/src/featurize.ts`):
 a `<prefix>.json` manifest plus `<prefix>.<field>.bin` files for rows, labels,
-boundaries, kinds, neighbors, offsets, frames, speech, and actionable. Nothing
-here parses cron text: the loader reads labels and discourse supervision that
-the generator recorded, and the regenerator drives the committed TypeScript
-tools.
+boundaries, kinds, neighbors, offsets, frames, speech, actionable, and populations.
+The loader reads labels and discourse supervision that the generator recorded.
+Corpus preparation belongs to the training coordinator.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import math
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 #: dtype spellings used by the manifest's `format` block.
-#: Old shards stay readable: the manifest `format` names the dtype per field.
+#: The manifest `format` names the dtype for every required field.
 NUMPY_DTYPES: dict[str, type[np.generic]] = {
     "uint8": np.uint8,
     "int8": np.int8,
@@ -45,11 +43,9 @@ SCHEDULE_KIND_NAMES = (
 )
 SCHEDULE_KIND_INDEX = {name: index for index, name in enumerate(SCHEDULE_KIND_NAMES)}
 
-# Must match the production featurizer. This is corpus population, not a model
-# target: it exists only so a complete, unique corpus can be mixed at training
-# time without deleting rows while the corpus is built.
+# Must match the production featurizer. Population is reporting metadata, not a
+# model target or a sampling policy. Training visits every unique row once.
 POPULATION_NAMES = ("R", "H", "E")
-POPULATION_INDEX = {name: index for index, name in enumerate(POPULATION_NAMES)}
 
 # Must match packages/cron/src/model/speech-acts.ts. Never reorder.
 SPEECH_ACT_NAMES = (
@@ -63,7 +59,6 @@ SPEECH_ACT_NAMES = (
     "cancel",
     "incomplete",
 )
-SPEECH_ACT_INDEX = {name: index for index, name in enumerate(SPEECH_ACT_NAMES)}
 
 # Must match packages/cron/src/model/labels.ts. Never reorder.
 ROLE_LABELS = (
@@ -144,6 +139,7 @@ ROLE_LABELS = (
     "INTERVAL_12",
     "INTERVAL_LIT",
     "DOM_LIT",
+    "CONTEXT_NUMBER",
 )
 STRUCTURAL_LABELS = {
     "RECUR",
@@ -156,16 +152,56 @@ STRUCTURAL_LABELS = {
     "EXCEPT",
 }
 CONTENT_LABELS = {
-    name for name in ROLE_LABELS if name != "O" and name not in STRUCTURAL_LABELS
+    name for name in ROLE_LABELS
+    if name not in {"O", "CONTEXT_NUMBER"} and name not in STRUCTURAL_LABELS
 }
 CONTENT_LABEL_IDS = {
     index for index, name in enumerate(ROLE_LABELS) if name in CONTENT_LABELS
 }
 
-#: Per-epoch validation cap (Track S.1). Full validation is scored at run end.
-VAL_MAX_SEQUENCES = 20_000
-#: `--fresh-each-epoch` draw from the pool.
-FRESH_EPOCH_SIZE = 300_000
+#: Bound working indices and memmap reads to nearby sequences. This is also
+#: the largest per-sequence array any loader pass builds: memory scales with
+#: this constant, never with the split size.
+LOCALITY_BLOCK_SIZE = 262_144
+
+
+class SequenceLengths:
+    """Token count per sequence, read from the offsets memmap on demand.
+
+    A materialized int64 array costs 8 bytes per sequence (1.6 GB at 200M
+    rows). Indexing computes `offsets[i + 1] - offsets[i]` only for the
+    requested sequences, so callers keep their `lengths[...]` code while the
+    split stays on disk. Whole-split conversion (`np.asarray`, `list`, `for`)
+    raises instead of silently materializing it.
+    """
+
+    __slots__ = ("_offsets", "_count")
+
+    def __init__(self, offsets: np.ndarray):
+        self._offsets = offsets
+        self._count = int(offsets.shape[0]) - 1
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __array__(self, *args, **kwargs):
+        raise TypeError("SequenceLengths would materialize a whole split; index a block")
+
+    def __iter__(self):
+        raise TypeError("SequenceLengths would materialize a whole split; index a block")
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            start, stop, step = key.indices(self._count)
+            if step != 1:
+                raise ValueError("SequenceLengths supports only unit-step slices")
+            bounds = np.asarray(self._offsets[start : max(start, stop) + 1], dtype=np.int64)
+            return bounds[1:] - bounds[:-1]
+        index = np.asarray(key, dtype=np.int64)
+        if index.size and (int(index.min()) < 0 or int(index.max()) >= self._count):
+            raise IndexError("sequence index out of range")
+        lengths = self._offsets[index + 1].astype(np.int64) - self._offsets[index].astype(np.int64)
+        return int(lengths) if index.ndim == 0 else lengths
 
 
 def schedule_kind_for_frame(frame_name: str) -> int:
@@ -233,67 +269,6 @@ def length_bucket(length: int) -> int:
     return length
 
 
-def group_frame_members(frames: np.ndarray, frame_count: int) -> list[np.ndarray]:
-    """Group sequence indices by frame with one vectorized ordering pass.
-
-    Scanning the complete frame shard once per frame is quadratic in practice:
-    the schedule lattice has millions of rows and tens of thousands of wording
-    frames. A stable argsort touches the shard once and keeps member indices in
-    their original sequence order.
-    """
-    frame_ids = np.asarray(frames)
-    if frame_ids.ndim != 1:
-        raise ValueError("frames must be a one-dimensional array")
-    if frame_count < 1 or int(frame_ids.max(initial=0)) >= frame_count:
-        raise ValueError("invalid frame ids or names")
-    counts = np.bincount(frame_ids, minlength=frame_count)
-    order = np.argsort(frame_ids, kind="stable")
-    stops = np.cumsum(counts, dtype=np.int64)
-    starts = np.concatenate((np.zeros(1, dtype=np.int64), stops[:-1]))
-    return [order[start:stop] for start, stop in zip(starts, stops, strict=True)]
-
-
-def population_draw_counts(
-    counts: np.ndarray,
-    weights: np.ndarray,
-    draw_total: int | None,
-    *,
-    cover_all: bool,
-) -> np.ndarray:
-    """Allocate an exact population mix, optionally retaining every member."""
-    counts = np.asarray(counts, dtype=np.int64)
-    weights = np.asarray(weights, dtype=np.float64)
-    if counts.shape != weights.shape or counts.ndim != 1:
-        raise ValueError("population counts and weights must be matching vectors")
-    if np.any(counts < 0) or not np.all(np.isfinite(weights)) or np.any(weights < 0):
-        raise ValueError("invalid population counts or weights")
-    total_weight = float(weights.sum())
-    if total_weight <= 0:
-        raise ValueError("population mix must have positive total weight")
-    weights = weights / total_weight
-    if cover_all:
-        if np.any((counts > 0) & (weights == 0)):
-            raise ValueError("cover-all population mix cannot assign zero weight")
-        total = max(
-            int(counts.sum()),
-            math.ceil(max(float(count) / float(weight) for count, weight in zip(counts, weights, strict=True) if count)),
-        )
-    else:
-        if draw_total is None:
-            draw_total = int(counts.sum())
-        total = int(draw_total)
-    while True:
-        raw = weights * total
-        allocated = np.floor(raw).astype(np.int64)
-        remainder = total - int(allocated.sum())
-        if remainder:
-            order = np.argsort(-(raw - allocated), kind="stable")
-            allocated[order[:remainder]] += 1
-        if not cover_all or bool(np.all(allocated >= counts)):
-            return allocated
-        total += 1
-
-
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -304,7 +279,7 @@ def _sha256(path: Path) -> str:
 
 @dataclass(slots=True)
 class ShardManifest:
-    """The featurizer manifest: roles, frames, and optional discourse heads."""
+    """The featurizer manifest for the published production supervision."""
 
     fingerprints: list[str]
     role_classes: int
@@ -318,11 +293,13 @@ class ShardManifest:
     speech_act_names: list[str]
     actionable_counts: dict[str, int]
     population_counts: dict[str, int]
+    sequence_metadata: dict | None = None
 
     @classmethod
     def load(cls, prefix: Path) -> "ShardManifest":
         parsed = json.loads(Path(f"{prefix}.json").read_text())
         return cls(
+            sequence_metadata=parsed.get("sequenceMetadata"),
             fingerprints=list(parsed["fingerprints"]),
             role_classes=int(parsed["roleClasses"]),
             rows_per_token=int(parsed["rowsPerToken"]),
@@ -345,7 +322,13 @@ class ShardManifest:
 
 
 class Dataset:
-    """One featurized split, indexed by sequence."""
+    """One featurized split, indexed by sequence.
+
+    Every per-token and per-sequence field is a read-only memmap. Nothing here
+    copies a whole field into process memory: batches gather their own rows,
+    and whole-split checks walk `LOCALITY_BLOCK_SIZE` sequences at a time.
+    Keep it that way (no `astype` over a full field, no full-split masks).
+    """
 
     def __init__(self, prefix: str | Path):
         self.prefix = Path(prefix)
@@ -362,14 +345,13 @@ class Dataset:
         self.kinds = self._load("kinds")
         self.neighbors = self._load("neighbors")
         self.offsets = self._load("offsets")
-        self.frames = self._load("frames") if "frames" in self.manifest.format else None
-        self.populations = (
-            self._load("populations")
-            if "populations" in self.manifest.format
-            else None
-        )
-        self.speech = None
-        self.actionable = None
+        self.frames = self._load("frames")
+        self.populations = self._load("populations")
+        # Stored as uint8 memmaps; `batch` widens only the gathered rows.
+        self.speech = self._load("speech")
+        self.actionable = self._load("actionable")
+        self.lexical = None
+        self.lexicon = None
 
         self.sequences = int(self.offsets.shape[0]) - 1
         self.token_count = int(self.offsets[-1])
@@ -380,108 +362,71 @@ class Dataset:
             )
         self.rows = self.rows.reshape(self.token_count, self.rows_per_token)
         self.neighbors = self.neighbors.reshape(self.token_count, 2)
-        self.lengths = (self.offsets[1:] - self.offsets[:-1]).astype(np.int64)
-        self.frame_members: list[np.ndarray] | None = None
+        self.lengths = SequenceLengths(self.offsets)
         self.frame_schedule_kinds = np.asarray(
             [schedule_kind_for_frame(name) for name in self.manifest.frame_names],
             dtype=np.int64,
         )
-        if self.frames is not None:
-            if self.frames.size != self.sequences:
+        for name, values, expected in (
+            ("frames", self.frames, self.sequences),
+            ("populations", self.populations, self.sequences),
+            ("speech", self.speech, self.sequences),
+            ("actionable", self.actionable, self.token_count),
+        ):
+            if values.size != expected:
                 raise ValueError(
-                    f"{self.prefix}: frames has {self.frames.size} values, "
-                    f"expected {self.sequences}"
+                    f"{self.prefix}: {name} has {values.size} values, expected {expected}"
                 )
-        if self.populations is not None:
-            if self.populations.size != self.sequences:
-                raise ValueError(
-                    f"{self.prefix}: populations has {self.populations.size} values, "
-                    f"expected {self.sequences}"
-                )
-            invalid = np.asarray(self.populations) >= len(POPULATION_NAMES)
-            if bool(np.any(invalid)):
-                value = int(np.asarray(self.populations)[np.flatnonzero(invalid)[0]])
+        for start in range(0, self.sequences, LOCALITY_BLOCK_SIZE):
+            block = np.asarray(self.populations[start : start + LOCALITY_BLOCK_SIZE])
+            invalid = np.flatnonzero(block >= len(POPULATION_NAMES))
+            if invalid.size:
+                value = int(block[invalid[0]])
                 raise ValueError(f"{self.prefix}: invalid population id {value}")
-        self._load_discourse()
+        self._load_factor_channels()
+
+    def population_counts(self) -> dict[str, int]:
+        """Rows per population, counted one locality block at a time."""
+        counts = np.zeros(len(POPULATION_NAMES), dtype=np.int64)
+        for start in range(0, self.sequences, LOCALITY_BLOCK_SIZE):
+            block = np.asarray(self.populations[start : start + LOCALITY_BLOCK_SIZE])
+            counts += np.bincount(block, minlength=len(POPULATION_NAMES))
+        return {name: int(counts[index]) for index, name in enumerate(POPULATION_NAMES)}
+
+    def schedule_kind_blocks(self):
+        """Per-sequence schedule-kind targets, one locality block at a time."""
+        for start in range(0, self.sequences, LOCALITY_BLOCK_SIZE):
+            frames = np.asarray(self.frames[start : start + LOCALITY_BLOCK_SIZE])
+            yield self.frame_schedule_kinds[frames]
+
+    def _load_factor_channels(self) -> None:
+        """Optional 12-bit lexical and lexicon-class sidecars, one value per token."""
+        lexical_path = Path(f"{self.prefix}.lexical.bin")
+        class_path = Path(f"{self.prefix}.lexclass.bin")
+        if lexical_path.exists():
+            lexical = np.memmap(lexical_path, dtype=np.uint16, mode="r")
+            if lexical.shape[0] != self.token_count:
+                raise ValueError(
+                    f"{lexical_path}: {lexical.shape[0]} tokens, expected {self.token_count}"
+                )
+            self.lexical = lexical
+        if class_path.exists():
+            lexicon = np.memmap(class_path, dtype=np.uint8, mode="r")
+            if lexicon.shape[0] != self.token_count:
+                raise ValueError(
+                    f"{class_path}: {lexicon.shape[0]} tokens, expected {self.token_count}"
+                )
+            self.lexicon = lexicon
 
     def _load(self, key: str) -> np.ndarray:
+        if key not in self.manifest.format:
+            raise ValueError(f"{self.prefix}: missing required shard field '{key}'")
         spec = self.manifest.format[key]
         dtype = NUMPY_DTYPES[spec["dtype"]]
         return np.memmap(f"{self.prefix}{spec['suffix']}", dtype=dtype, mode="r")
 
-    def _load_discourse(self) -> None:
-        """Load speech-act / actionable shards, or synthesize them for old prefixes."""
-        if "speech" in self.manifest.format:
-            speech = self._load("speech")
-            if speech.size != self.sequences:
-                raise ValueError(
-                    f"{self.prefix}: speech has {speech.size} values, "
-                    f"expected {self.sequences}"
-                )
-            self.speech = speech.astype(np.int64, copy=False)
-        if "actionable" in self.manifest.format:
-            actionable = self._load("actionable")
-            if actionable.size != self.token_count:
-                raise ValueError(
-                    f"{self.prefix}: actionable has {actionable.size} values, "
-                    f"expected {self.token_count}"
-                )
-            self.actionable = actionable.astype(np.uint8, copy=False)
-        if self.speech is not None and self.actionable is not None:
-            return
-        speech = np.full(self.sequences, SPEECH_ACT_INDEX["none"], dtype=np.int64)
-        actionable = np.zeros(self.token_count, dtype=np.uint8)
-        for index in range(self.sequences):
-            start = int(self.offsets[index])
-            end = int(self.offsets[index + 1])
-            labels = self.labels[start:end]
-            kinds = self.kinds[start:end]
-            has_content = bool(
-                np.any(
-                    (kinds != 3)
-                    & np.isin(labels, list(CONTENT_LABEL_IDS))
-                )
-            )
-            if has_content:
-                speech[index] = SPEECH_ACT_INDEX["request"]
-                content = (kinds != 3) & np.isin(labels, list(CONTENT_LABEL_IDS))
-                actionable[start:end] = content.astype(np.uint8)
-        if self.speech is None:
-            self.speech = speech
-        if self.actionable is None:
-            self.actionable = actionable
-
     def __len__(self) -> int:
         return self.sequences
-
-    def _frame_members(self) -> list[np.ndarray]:
-        """Build the large frame index only when frame balancing requests it."""
-        if self.frames is None:
-            return []
-        if self.frame_members is None:
-            frame_count = len(self.manifest.frame_names)
-            try:
-                members = group_frame_members(self.frames, frame_count)
-            except ValueError as error:
-                raise ValueError(f"{self.prefix}: {error}") from error
-            actual_counts = [int(group.size) for group in members]
-            if self.manifest.frame_counts and actual_counts != self.manifest.frame_counts:
-                raise ValueError(f"{self.prefix}: frame counts do not match frames shard")
-            self.frame_members = members
-        return self.frame_members
-
-    def population_epoch_size(
-        self, population_mix: tuple[float, float, float], *, cover_all: bool
-    ) -> int:
-        if self.populations is None:
-            raise ValueError("population epoch size requires a populations shard")
-        counts = np.bincount(
-            np.asarray(self.populations), minlength=len(POPULATION_NAMES)
-        )
-        allocated = population_draw_counts(
-            counts, np.asarray(population_mix), self.sequences, cover_all=cover_all
-        )
-        return int(allocated.sum())
 
     def digests(self) -> dict[str, str]:
         """SHA-256 of the manifest and every shard file for the report.
@@ -498,6 +443,8 @@ class Dataset:
             except (OSError, ValueError):
                 cache = {}
         files = {"manifest": Path(f"{self.prefix}.json")}
+        if self.manifest.sequence_metadata is not None:
+            files["sequenceMetadata"] = Path(f"{self.prefix}{self.manifest.sequence_metadata['suffix']}")
         for key, spec in self.manifest.format.items():
             files[key] = Path(f"{self.prefix}{spec['suffix']}")
         result: dict[str, str] = {}
@@ -527,209 +474,78 @@ class Dataset:
                 pass
         return result
 
+    def batch_count(self, batch_size: int) -> int:
+        """Exact full-pass optimizer steps, including locality/bucket tails."""
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        total = 0
+        for start in range(0, self.sequences, LOCALITY_BLOCK_SIZE):
+            lengths = self.lengths[start : start + LOCALITY_BLOCK_SIZE]
+            buckets = np.searchsorted(BUCKETS, lengths, side="left")
+            if np.any(buckets >= len(BUCKETS)):
+                raise ValueError(f"{self.prefix}: sequence exceeds the maximum token length")
+            counts = np.bincount(buckets, minlength=len(BUCKETS))
+            total += int(((counts + batch_size - 1) // batch_size).sum())
+        return total
+
     def batches(
         self,
         batch_size: int,
         shuffle_seed: int | None = None,
-        balance_frames: bool = False,
-        balance_kinds: bool = False,
-        balance_schedule_kinds: bool = False,
-        frame_balance_power: float = 0.5,
-        population_mix: tuple[float, float, float] | None = None,
-        population_cover_all: bool = False,
         max_sequences: int | None = None,
     ):
-        """Yield batches of sequence indices, grouped by similar length.
+        """Visit rows once, using bounded locality blocks and length buckets.
 
-        Sorting by length before chunking means only the last batch of each
-        length class carries meaningful padding.
+        A cap is only used by diagnostic evaluation; it draws a fixed subset
+        without replacement before bucketing. Full training never resamples.
+
+        Memory: one block of indices at a time (`LOCALITY_BLOCK_SIZE`), plus
+        the block order (one integer per block) and an optional subset of
+        `max_sequences` indices. NumPy draws that subset with Floyd's
+        algorithm once the split exceeds 50 * max_sequences, so it is never a
+        permutation of the whole split. There is no global permutation: the
+        corpus file is already in hash order (source-independent), blocks are
+        visited in shuffled order, and rows are shuffled within each block.
         """
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        if max_sequences is not None and max_sequences < 1:
+            raise ValueError("max_sequences must be positive")
         rng = np.random.default_rng(shuffle_seed)
-        selected = np.arange(self.sequences)
-        cover_all_extras: np.ndarray | None = None
-        if population_mix is not None:
-            if balance_frames or balance_kinds or balance_schedule_kinds:
-                raise ValueError(
-                    "population mixing cannot be combined with frame/kind balancing"
-                )
-            if self.populations is None:
-                raise ValueError(
-                    f"{self.prefix}: population mixing requires a populations shard"
-                )
-            weights = np.asarray(population_mix, dtype=np.float64)
-            if weights.shape != (len(POPULATION_NAMES),):
-                raise ValueError("population mix must have exactly R,H,E weights")
-            if not np.all(np.isfinite(weights)) or np.any(weights < 0):
-                raise ValueError("population mix weights must be finite and non-negative")
-            total_weight = float(weights.sum())
-            if total_weight <= 0:
-                raise ValueError("population mix must have positive total weight")
-            counts = np.bincount(
-                np.asarray(self.populations), minlength=len(POPULATION_NAMES)
-            )
-            draw_total = min(self.sequences, max_sequences) if max_sequences is not None else self.sequences
-            draw_counts = population_draw_counts(
-                counts,
-                weights,
-                draw_total,
-                cover_all=population_cover_all,
-            )
-            population_values = np.asarray(self.populations)
-            draws: list[np.ndarray] = []
-            for population_id, count in enumerate(draw_counts):
-                if count == 0:
-                    continue
-                members = np.flatnonzero(population_values == population_id)
-                if members.size == 0:
-                    raise ValueError(
-                        f"{self.prefix}: population {POPULATION_NAMES[population_id]} "
-                        "is empty but has non-zero requested weight"
-                    )
-                count = int(count)
-                if population_cover_all:
-                    extra = count - members.size
-                    if extra:
-                        draws.append(
-                            rng.choice(
-                                members, size=extra, replace=extra > members.size
-                            )
-                        )
-                else:
-                    draws.append(rng.choice(members, size=count, replace=count > members.size))
-            if population_cover_all:
-                cover_all_extras = (
-                    np.concatenate(draws)
-                    if draws
-                    else np.empty(0, dtype=np.int64)
-                )
-            else:
-                selected = np.concatenate(draws)
-                rng.shuffle(selected)
-            del draws, members
-            # The cap was incorporated into the population allocation. Applying
-            # it again would disturb the requested R/H/E proportions.
-            max_sequences = None
-        elif balance_frames or balance_kinds or balance_schedule_kinds:
-            frame_members = self._frame_members()
-            if not frame_members:
-                raise ValueError(
-                    f"{self.prefix}: balanced batching requires a frames shard"
-                )
-            counts = np.asarray(
-                [members.size for members in frame_members], dtype=np.float64
-            )
-            masses = (
-                np.power(counts, 1.0 - frame_balance_power)
-                if balance_frames
-                else counts.copy()
-            )
-            if balance_kinds:
-                kind_frames: dict[str, list[int]] = {}
-                for frame_id, frame_name in enumerate(self.manifest.frame_names):
-                    kind_frames.setdefault(frame_name.split("/", 1)[0], []).append(
-                        frame_id
-                    )
-                # Normalize within each kind. Every kind then contributes one
-                # unit of total mass, while --balance-frames controls how that
-                # unit is distributed among the kind's wording frames.
-                for frame_ids in kind_frames.values():
-                    kind_mass = float(masses[frame_ids].sum())
-                    masses[frame_ids] /= kind_mass
-            if balance_schedule_kinds:
-                schedule_frames: dict[int, list[int]] = {}
-                for frame_id, schedule_kind in enumerate(self.frame_schedule_kinds):
-                    schedule_frames.setdefault(int(schedule_kind), []).append(frame_id)
-                for frame_ids in schedule_frames.values():
-                    class_mass = float(masses[frame_ids].sum())
-                    masses[frame_ids] /= class_mass
-            draw_counts = rng.multinomial(self.sequences, masses / masses.sum())
-            draws: list[np.ndarray] = []
-            for count, members in zip(draw_counts, frame_members, strict=True):
-                if count:
-                    draws.append(rng.choice(members, size=count, replace=True))
-            selected = np.concatenate(draws)
-            rng.shuffle(selected)
-            del draws, members
-
-        if max_sequences is not None and selected.size > max_sequences:
-            selected = rng.choice(selected, size=max_sequences, replace=False)
-
-        if population_cover_all:
-            # The 38 GiB rows shard is larger than RAM. Globally randomized
-            # sequence ids turn every batch into thousands of NVMe page faults
-            # and leave CUDA idle. Shuffle 262k-sequence locality blocks, then
-            # bucket and shuffle batches inside each block. Every unique row is
-            # still visited once, minority duplicates stay beside their source,
-            # and each gather becomes predominantly sequential I/O.
-            block_size = 262_144
-            block_count = math.ceil(self.sequences / block_size)
-            extras = (
-                cover_all_extras
-                if cover_all_extras is not None
-                else np.empty(0, dtype=np.int64)
-            )
-            if extras.size:
-                extra_blocks = extras // block_size
-                extra_order = np.argsort(extra_blocks, kind="stable")
-                extras = extras[extra_order]
-                extra_counts = np.bincount(extra_blocks, minlength=block_count)
-            else:
-                extra_counts = np.zeros(block_count, dtype=np.int64)
-            extra_stops = np.cumsum(extra_counts, dtype=np.int64)
-            extra_starts = np.concatenate(
-                (np.zeros(1, dtype=np.int64), extra_stops[:-1])
-            )
-            block_order = np.arange(block_count)
-            if shuffle_seed is not None:
-                rng.shuffle(block_order)
-            for block in block_order:
-                start = int(block) * block_size
-                stop = min(start + block_size, self.sequences)
-                block_selected = np.arange(start, stop, dtype=np.int64)
-                extra_start = int(extra_starts[block])
-                extra_stop = int(extra_stops[block])
-                if extra_stop > extra_start:
-                    block_selected = np.concatenate(
-                        (block_selected, extras[extra_start:extra_stop])
-                    )
-                bucket_ids = np.searchsorted(
-                    BUCKETS, self.lengths[block_selected], side="left"
-                )
-                groups = [
-                    block_selected[bucket_ids == index]
-                    for index in range(len(BUCKETS))
-                ]
-                descriptors: list[tuple[int, int, int]] = []
-                for bucket_index, group in enumerate(groups):
-                    if shuffle_seed is not None:
-                        rng.shuffle(group)
-                    descriptors.extend(
-                        (bucket_index, offset, min(offset + batch_size, group.size))
-                        for offset in range(0, group.size, batch_size)
-                    )
-                if shuffle_seed is not None:
-                    rng.shuffle(descriptors)
-                for bucket_index, offset, end in descriptors:
-                    # Sorted ids preserve sequential memmap reads; order inside
-                    # a batch cannot affect its averaged gradient.
-                    yield np.sort(groups[bucket_index][offset:end])
-            return
-
-        # Group into the fixed padding buckets, then shuffle whole batches. This
-        # keeps padding low without the old 20M-row global lexsort or a permanent
-        # shortest-to-longest curriculum.
-        bucket_ids = np.searchsorted(BUCKETS, self.lengths[selected], side="left")
-        groups = [selected[bucket_ids == index] for index in range(len(BUCKETS))]
-        del bucket_ids, selected
-        descriptors = [
-            (bucket_index, start, min(start + batch_size, group.size))
-            for bucket_index, group in enumerate(groups)
-            for start in range(0, group.size, batch_size)
-        ]
+        subset = None
+        if max_sequences is not None and max_sequences < self.sequences:
+            subset = np.sort(rng.choice(self.sequences, max_sequences, replace=False))
+        block_order = np.arange(math.ceil(self.sequences / LOCALITY_BLOCK_SIZE))
         if shuffle_seed is not None:
-            rng.shuffle(descriptors)
-        for bucket_index, start, stop in descriptors:
-            yield groups[bucket_index][start:stop]
+            rng.shuffle(block_order)
+        for block in block_order:
+            start = int(block) * LOCALITY_BLOCK_SIZE
+            stop = min(start + LOCALITY_BLOCK_SIZE, self.sequences)
+            if subset is None:
+                selected = np.arange(start, stop, dtype=np.int64)
+                lengths = self.lengths[start:stop]
+            else:
+                left, right = np.searchsorted(subset, (start, stop))
+                selected = subset[left:right]
+                lengths = self.lengths[selected]
+            if selected.size == 0:
+                continue
+            buckets = np.searchsorted(BUCKETS, lengths, side="left")
+            if np.any(buckets >= len(BUCKETS)):
+                raise ValueError(f"{self.prefix}: sequence exceeds the maximum token length")
+            groups = [selected[buckets == index] for index in range(len(BUCKETS))]
+            descriptors = []
+            for index, group in enumerate(groups):
+                if shuffle_seed is not None:
+                    rng.shuffle(group)
+                descriptors.extend(
+                    (index, offset, min(offset + batch_size, group.size))
+                    for offset in range(0, group.size, batch_size)
+                )
+            if shuffle_seed is not None:
+                rng.shuffle(descriptors)
+            for index, offset, end in descriptors:
+                yield np.sort(groups[index][offset:end])
 
     def batch(
         self,
@@ -783,22 +599,14 @@ class Dataset:
         neighbors[valid] = np.asarray(self.neighbors)[gather[valid]]
 
         actionable = np.zeros((count, width), dtype=np.float32)
-        if self.actionable is not None:
-            actionable[valid] = np.asarray(self.actionable)[gather[valid]].astype(
-                np.float32
-            )
-
-        speech_acts = (
-            np.asarray(self.speech)[index_array].astype(np.int64, copy=False)
-            if self.speech is not None
-            else np.zeros(count, dtype=np.int64)
+        actionable[valid] = np.asarray(self.actionable)[gather[valid]].astype(
+            np.float32
         )
-        if self.frames is not None:
-            schedule_kinds = self.frame_schedule_kinds[
-                np.asarray(self.frames[index_array])
-            ].astype(np.int64, copy=False)
-        else:
-            schedule_kinds = np.zeros(count, dtype=np.int64)
+
+        speech_acts = np.asarray(self.speech)[index_array].astype(np.int64, copy=False)
+        schedule_kinds = self.frame_schedule_kinds[
+            np.asarray(self.frames[index_array])
+        ].astype(np.int64, copy=False)
 
         tensors = {
             "rows": torch.as_tensor(rows),
@@ -811,6 +619,14 @@ class Dataset:
             "speech_acts": torch.as_tensor(speech_acts),
             "actionable": torch.as_tensor(actionable),
         }
+        if self.lexical is not None:
+            lexical = np.zeros((count, width), dtype=np.int64)
+            lexical[valid] = np.asarray(self.lexical)[gather[valid]]
+            tensors["lexical_ids"] = torch.as_tensor(lexical)
+        if self.lexicon is not None:
+            lexicon = np.zeros((count, width), dtype=np.int64)
+            lexicon[valid] = np.asarray(self.lexicon)[gather[valid]]
+            tensors["lexicon_ids"] = torch.as_tensor(lexicon)
         if pin_memory:
             tensors = {key: value.pin_memory() for key, value in tensors.items()}
         if device is not None:
@@ -819,104 +635,3 @@ class Dataset:
                 for key, value in tensors.items()
             }
         return tensors
-
-
-def fingerprints_path(prefix: str | Path) -> Path:
-    """The sibling `<prefix>.jsonl.fingerprints.json` written by generate.ts."""
-    return Path(f"{prefix}.jsonl.fingerprints.json")
-
-
-def merge_fingerprint_excludes(paths: list[Path], out: Path) -> Path:
-    """Union fingerprint JSON files into one generate.ts `--exclude` payload.
-
-    Train must drop both held-out and validation wording; generate.ts accepts
-    a single exclude file.
-    """
-    fingerprints: set[str] = set()
-    for path in paths:
-        parsed = json.loads(path.read_text())
-        values = parsed.get("fingerprints")
-        if not isinstance(values, list):
-            raise TypeError(f"exclude file has no fingerprints array: {path}")
-        fingerprints.update(str(value) for value in values)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"fingerprints": sorted(fingerprints)}) + "\n")
-    return out
-
-
-def _normalize_generated(path: Path) -> None:
-    """Tag raw generator records with the Phase 13 corpus `source` field.
-
-    `generate.ts` emits its Phase 08 records with a `seed` field; the Phase 13
-    featurizer consumes the merged corpus contract, which carries `source` and
-    rejects unknown keys. This is the one bridge between the two committed
-    contracts — no labels are invented here.
-    """
-    lines = path.read_text().splitlines()
-    records: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        record = json.loads(stripped)
-        record.setdefault("source", "rule")
-        record.pop("seed", None)
-        records.append(json.dumps(record))
-    path.write_text("\n".join(records) + ("\n" if records else ""))
-
-
-def prepare(
-    split: str,
-    count: int,
-    seed: int,
-    directory: str | Path,
-    exclude: str | Path | None = None,
-) -> Path:
-    """Regenerate a split through Phase 08 (`generate.ts`) and Phase 13.
-
-    Runs the workspace tools from the repo root and returns the shard prefix.
-    `exclude` is the held-out fingerprint file that non-held-out splits must
-    exclude; heldout passes `None`.
-    """
-    repo = repo_root()
-    target = Path(directory)
-    if not target.is_absolute():
-        target = repo / target
-    target.mkdir(parents=True, exist_ok=True)
-    prefix = target / split
-    jsonl = Path(f"{prefix}.jsonl")
-
-    generate = [
-        "bun",
-        "run",
-        "packages/cron/training/src/generate.ts",
-        "--split",
-        split,
-        "--count",
-        str(count),
-        "--seed",
-        str(seed),
-        "--out",
-        str(jsonl),
-    ]
-    if exclude is not None:
-        excluded = Path(exclude)
-        if not excluded.is_absolute():
-            excluded = repo / excluded
-        generate += ["--exclude", str(excluded)]
-    subprocess.run(generate, cwd=repo, check=True)
-
-    _normalize_generated(jsonl)
-
-    subprocess.run(
-        [
-            "bun",
-            "run",
-            "packages/cron/training/src/featurize.ts",
-            str(jsonl),
-            str(prefix),
-        ],
-        cwd=repo,
-        check=True,
-    )
-    return prefix

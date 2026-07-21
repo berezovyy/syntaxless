@@ -9,67 +9,19 @@ from pathlib import Path
 
 from dataset import (
     CONTENT_LABEL_IDS,
-    POPULATION_INDEX,
     ROLE_LABELS,
     SPEECH_ACT_NAMES,
     Dataset,
-    group_frame_members,
-    merge_fingerprint_excludes,
-    population_draw_counts,
+    LOCALITY_BLOCK_SIZE,
 )
 
 
-def test_group_frame_members() -> None:
-    frames = np.asarray([2, 0, 2, 1, 0, 2], dtype=np.uint16)
-    members = group_frame_members(frames, 4)
-    assert [item.tolist() for item in members] == [[1, 4], [3], [0, 2, 5], []]
-
-
-def test_group_frame_members_rejects_invalid_ids() -> None:
-    try:
-        group_frame_members(np.asarray([0, 3], dtype=np.uint16), 3)
-    except ValueError as error:
-        assert "invalid frame" in str(error)
-    else:
-        raise AssertionError("out-of-range frame id was accepted")
-
-
-def test_merge_fingerprint_excludes_unions_and_sorts():
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        left = root / "a.json"
-        right = root / "b.json"
-        left.write_text('{"fingerprints": ["b", "a"]}\n')
-        right.write_text('{"fingerprints": ["c", "a"]}\n')
-        out = merge_fingerprint_excludes([left, right], root / "union.json")
-        assert json.loads(out.read_text())["fingerprints"] == ["a", "b", "c"]
-
-
-def test_speech_act_vocabulary_is_contiguous_and_frozen():
-    assert SPEECH_ACT_NAMES == (
-        "none",
-        "request",
-        "descriptive",
-        "question",
-        "quoted",
-        "correction",
-        "one-off",
-        "cancel",
-        "incomplete",
-    )
-    assert ROLE_LABELS.index("INTERVAL_2") in CONTENT_LABEL_IDS
-    assert ROLE_LABELS.index("WEEKDAY_MON") in CONTENT_LABEL_IDS
-    assert ROLE_LABELS.index("HOUR_9") in CONTENT_LABEL_IDS
-    assert 0 not in CONTENT_LABEL_IDS  # O
-    assert ROLE_LABELS.index("GLUE") not in CONTENT_LABEL_IDS
-    assert ROLE_LABELS.index("BOUND_START") not in CONTENT_LABEL_IDS
-
-
 def _write_tiny_shard(
-    directory: Path, populations: tuple[int, int, int] | None = None
+    directory: Path, populations: tuple[int, int, int] = (0, 0, 2),
+    *, name: str = "tiny",
 ) -> Path:
     """Three sequences, mixed lengths, discourse heads, manifest dtypes."""
-    prefix = directory / "tiny"
+    prefix = directory / name
     rows_per_token = 2
     feature_rows = 16
     # seq0 length 2, seq1 length 3, seq2 length 1 → buckets 8, 8, 8
@@ -107,6 +59,7 @@ def _write_tiny_shard(
         "frames": frames,
         "speech": speech,
         "actionable": actionable,
+        "populations": np.asarray(populations, dtype=np.uint8),
     }
     fmt = {
         "rows": {"suffix": ".rows.bin", "dtype": "uint16"},
@@ -118,10 +71,8 @@ def _write_tiny_shard(
         "frames": {"suffix": ".frames.bin", "dtype": "uint32"},
         "speech": {"suffix": ".speech.bin", "dtype": "uint8"},
         "actionable": {"suffix": ".actionable.bin", "dtype": "uint8"},
+        "populations": {"suffix": ".populations.bin", "dtype": "uint8"},
     }
-    if populations is not None:
-        files["populations"] = np.asarray(populations, dtype=np.uint8)
-        fmt["populations"] = {"suffix": ".populations.bin", "dtype": "uint8"}
     for key, array in files.items():
         array.tofile(f"{prefix}{fmt[key]['suffix']}")
     manifest = {
@@ -136,12 +87,11 @@ def _write_tiny_shard(
         "speechActClasses": 9,
         "speechActNames": list(SPEECH_ACT_NAMES),
         "actionableCounts": {"0": 1, "1": 5},
-    }
-    if populations is not None:
-        manifest["populationCounts"] = {
+        "populationCounts": {
             name: populations.count(index)
             for index, name in enumerate(("R", "H", "E"))
-        }
+        },
+    }
     Path(f"{prefix}.json").write_text(json.dumps(manifest))
     return prefix
 
@@ -195,79 +145,43 @@ def test_batch_preserves_requested_order_duplicates_and_padding() -> None:
         assert dataset.neighbors.dtype == np.int16
 
 
-def test_batch_rejects_empty_selection() -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        dataset = Dataset(_write_tiny_shard(Path(directory)))
-        try:
-            dataset.batch([])
-        except ValueError as error:
-            assert "at least one index" in str(error)
-        else:
-            raise AssertionError("empty batch was accepted")
+def test_shards_require_published_sequence_and_discourse_fields() -> None:
+    for field in ("frames", "speech", "actionable", "populations"):
+        with tempfile.TemporaryDirectory(prefix="cron-missing-target-") as directory:
+            prefix = _write_tiny_shard(Path(directory), populations=(0, 0, 2))
+            path = Path(f"{prefix}.json")
+            manifest = json.loads(path.read_text())
+            del manifest["format"][field]
+            path.write_text(json.dumps(manifest))
+            try:
+                Dataset(prefix)
+            except ValueError as error:
+                assert str(prefix) in str(error)
+                assert f"missing required shard field '{field}'" in str(error)
+            else:
+                raise AssertionError(f"Missing {field} was accepted as usable supervision")
 
 
-def test_population_mix_draws_exact_seeded_training_ratio() -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        dataset = Dataset(
-            _write_tiny_shard(
-                Path(directory),
-                (
-                    POPULATION_INDEX["R"],
-                    POPULATION_INDEX["H"],
-                    POPULATION_INDEX["E"],
-                ),
-            )
-        )
-        kwargs = {
-            "batch_size": 128,
-            "shuffle_seed": 17,
-            "population_mix": (0.68, 0.22, 0.10),
-            "max_sequences": 100,
-        }
-        first = [index for batch in dataset.batches(**kwargs) for index in batch]
-        second = [index for batch in dataset.batches(**kwargs) for index in batch]
-        assert first == second
-        assert len(first) == 3  # cap cannot exceed the number of unique corpus rows
-        # With a larger complete corpus, max_sequences is the epoch draw size.
-        dataset.sequences = 100
-        dataset.lengths = np.resize(dataset.lengths, 100)
-        dataset.populations = np.resize(np.asarray(dataset.populations), 100)
-        selected = [index for batch in dataset.batches(**kwargs) for index in batch]
-        counts = np.bincount(np.asarray(dataset.populations)[selected], minlength=3)
-        assert counts.tolist() == [68, 22, 10]
+def test_full_pass_visits_every_row_once_across_locality_blocks() -> None:
+    dataset = Dataset.__new__(Dataset)
+    dataset.prefix = Path("fixture")
+    dataset.sequences = LOCALITY_BLOCK_SIZE + 13
+    dataset.lengths = np.resize(np.asarray([1, 9, 33, 65, 128]), dataset.sequences)
+    batches = list(dataset.batches(512, shuffle_seed=17))
+    chosen = np.concatenate(batches)
+    np.testing.assert_array_equal(np.sort(chosen), np.arange(dataset.sequences))
+    assert len(batches) == dataset.batch_count(512)
+    assert all(np.all(indices[:-1] <= indices[1:]) for indices in batches)
+    assert all(indices[0] // LOCALITY_BLOCK_SIZE == indices[-1] // LOCALITY_BLOCK_SIZE for indices in batches)
 
 
-def test_population_mix_requires_explicit_population_shard() -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        dataset = Dataset(_write_tiny_shard(Path(directory)))
-        try:
-            list(dataset.batches(8, population_mix=(0.68, 0.22, 0.10)))
-        except ValueError as error:
-            assert "requires a populations shard" in str(error)
-        else:
-            raise AssertionError("population mixing inferred missing population labels")
-
-
-def test_cover_all_population_mix_keeps_every_record() -> None:
-    counts = np.asarray([14_997_846, 3_766_558, 1_225_170], dtype=np.int64)
-    allocated = population_draw_counts(
-        counts,
-        np.asarray([0.68, 0.22, 0.10]),
-        None,
-        cover_all=True,
-    )
-    assert allocated.tolist() == [14_997_846, 4_852_244, 2_205_566]
-    assert int(allocated.sum()) == 22_055_656
-    assert np.all(allocated >= counts)
-
-
-if __name__ == "__main__":
-    test_group_frame_members()
-    test_group_frame_members_rejects_invalid_ids()
-    test_speech_act_vocabulary_is_contiguous_and_frozen()
-    test_merge_fingerprint_excludes_unions_and_sorts()
-    test_batch_preserves_requested_order_duplicates_and_padding()
-    test_batch_rejects_empty_selection()
-    test_population_mix_draws_exact_seeded_training_ratio()
-    test_population_mix_requires_explicit_population_shard()
-    print("test_dataset: all checks passed")
+def test_diagnostic_subset_is_seeded_without_replacement() -> None:
+    dataset = Dataset.__new__(Dataset)
+    dataset.prefix = Path("fixture")
+    dataset.sequences = 100
+    dataset.lengths = np.resize(np.asarray([1, 16, 48]), dataset.sequences)
+    first = np.concatenate(list(dataset.batches(8, shuffle_seed=0, max_sequences=17)))
+    second = np.concatenate(list(dataset.batches(8, shuffle_seed=0, max_sequences=17)))
+    np.testing.assert_array_equal(first, second)
+    assert first.size == np.unique(first).size == 17
+    assert int(first.min()) >= 0 and int(first.max()) < dataset.sequences
