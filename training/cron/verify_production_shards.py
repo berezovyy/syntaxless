@@ -15,7 +15,9 @@ import sys
 
 import numpy as np
 
-from dataset import Dataset, NUMPY_DTYPES, ROLE_LABELS, SPEECH_ACT_NAMES, length_bucket
+from dataset import (
+    Dataset, LOCALITY_BLOCK_SIZE, NUMPY_DTYPES, ROLE_LABELS, SPEECH_ACT_NAMES, length_bucket,
+)
 
 
 FIELDS = (
@@ -47,14 +49,30 @@ def corpus_record_count(path: Path) -> int:
 
 
 def array_digest(values: np.ndarray, dtype: type[np.generic]) -> dict:
-    """Hash loader values in their serialized dtype, including converted speech."""
+    """Hash loader values in their serialized dtype, 65,536 entries at a time."""
+    return blocks_digest(
+        (values[start:start + 65_536] for start in range(0, len(values), 65_536)), dtype
+    )
+
+
+def blocks_digest(blocks, dtype: type[np.generic]) -> dict:
+    """Hash a stream of bounded blocks; never holds more than one block."""
     digest = hashlib.sha256()
     count = 0
-    for start in range(0, len(values), 65_536):
-        block = np.ascontiguousarray(values[start:start + 65_536], dtype=dtype)
+    for values in blocks:
+        block = np.ascontiguousarray(values, dtype=dtype)
         digest.update(memoryview(block).cast("B"))
         count += block.nbytes
     return {"bytes": count, "sha256": digest.hexdigest()}
+
+
+def lengths_within(data: Dataset, low: int, high: int) -> bool:
+    """Whether every sequence length is in [low, high], one block at a time."""
+    for start in range(0, len(data), LOCALITY_BLOCK_SIZE):
+        lengths = data.lengths[start:start + LOCALITY_BLOCK_SIZE]
+        if lengths.size and (int(lengths.min()) < low or int(lengths.max()) > high):
+            return False
+    return True
 
 
 def verify_batches(data: Dataset, batch_size: int = 512) -> int:
@@ -111,25 +129,27 @@ def verify_production(corpus: Path, prefix: Path, expectations: Path) -> dict:
         manifest_path = Path(f"{prefix}-{split}.json")
         manifest_hash = file_sha256(manifest_path)
         data = Dataset(f"{prefix}-{split}")
+        if "sequenceMetadata" in want:
+            metadata = want["sequenceMetadata"]
+            require(data.manifest.sequence_metadata == metadata, f"{split}: metadata manifest")
+            metadata_path = Path(f"{prefix}-{split}{metadata['suffix']}")
+            require(metadata_path.stat().st_size == metadata["bytes"], f"{split}: metadata size")
+            require(file_sha256(metadata_path) == metadata["sha256"], f"{split}: metadata differs from source")
+            require(metadata["rows"] == len(data), f"{split}: metadata rows")
         require(len(data) == want["sequences"] > 0, f"{split}: sequence count")
         require(data.token_count == want["tokens"], f"{split}: token count")
         require(data.manifest.frame_names == want["frameNames"], f"{split}: frame names")
         require(data.manifest.frame_counts == want["frameCounts"], f"{split}: frame counts")
         require(data.manifest.label_counts == want["labelCounts"], f"{split}: label counts")
         require(data.manifest.actionable_counts == want["actionableCounts"], f"{split}: actionability counts")
-        require(data.populations is not None, f"{split}: missing populations")
-        actual_population_counts = {
-            name: int(np.count_nonzero(np.asarray(data.populations) == index))
-            for index, name in enumerate(("R", "H", "E"))
-        }
-        require(actual_population_counts == want["populationCounts"], f"{split}: population counts")
+        require(data.population_counts() == want["populationCounts"], f"{split}: population counts")
         require(data.manifest.population_counts == want["populationCounts"], f"{split}: manifest population counts")
         require(data.role_classes == len(ROLE_LABELS), f"{split}: role vocabulary")
         require(data.manifest.speech_act_names == list(SPEECH_ACT_NAMES), f"{split}: speech vocabulary")
         require(data.rows_per_token == expected["rowsPerToken"], f"{split}: feature width")
         require(data.feature_rows == expected["featureRows"], f"{split}: feature vocabulary")
         require(int(data.offsets[0]) == 0, f"{split}: initial offset")
-        require(bool(np.all((data.lengths > 0) & (data.lengths <= 128))), f"{split}: token lengths")
+        require(lengths_within(data, 1, 128), f"{split}: token lengths")
         fields = {}
         paths = {}
         for field in FIELDS:
@@ -142,8 +162,10 @@ def verify_production(corpus: Path, prefix: Path, expectations: Path) -> dict:
             require(path.stat().st_size == actual["bytes"] and file_sha256(path) == actual["sha256"], f"{split}: {field} file differs from loaded values")
             paths[field] = path
             fields[field] = actual
-        kinds = data.frame_schedule_kinds[data.frames]
-        require(array_digest(kinds, np.uint8) == want["scheduleKinds"], f"{split}: schedule-kind targets")
+        require(
+            blocks_digest(data.schedule_kind_blocks(), np.uint8) == want["scheduleKinds"],
+            f"{split}: schedule-kind targets",
+        )
         checked = verify_batches(data)
         require(checked == len(data), f"{split}: incomplete batch consumption")
         for field, path in paths.items():
