@@ -1,0 +1,10 @@
+{
+  "name": "@syntaxless/validation-training",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test ./tests/*.test.ts",
+    "train": "bun run src/train.ts"
+  }
+}
