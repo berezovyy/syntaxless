@@ -1,0 +1,12 @@
+{
+  "sha256": "0f0f5d3516c82965d7cc13dbdad5b1f6013a267d482f9e92736782112c14b04d",
+  "candidateSha256": "cbd9ec06afbc108f76c12d3117bf3af46cf080fb64fb4dac096619ce3125d7b5",
+  "scopeFreezeSha256": "eaee8ac2620db4925c20bd1434df5d7550a65e712dc3cfbae238a944311c1984",
+  "rows": 1411,
+  "authoringRevision": 5,
+  "createdAt": "2026-10-11T19:18:59.023Z",
+  "authorship": "AI-authored by the implementation assistant, using a separate evaluation writer without training renderer, parser, or model inference",
+  "independenceLimits": "Same assistant designed implementation and evaluation; generated variations of a limited number of authored constructions. This is not independent human evidence, nor a population accuracy estimate.",
+  "authorSourceSha256": "36ef12fc94142c430e9890adf8dc1521e824fa14d3c860cdd0fbe9cfa8978265",
+  "trainingEligible": false
+}

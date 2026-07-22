@@ -1,0 +1,20 @@
+{"id":"dev-neg-01","text":"Emails are usually required.","intent":null,"trainingEligible":false,"family":"descriptive"}
+{"id":"dev-neg-02","text":"What's the max length for email?","intent":null,"trainingEligible":false,"family":"question"}
+{"id":"dev-neg-03","text":"The docs say \"required email max 100\".","intent":null,"trainingEligible":false,"family":"quoted"}
+{"id":"dev-neg-04","text":"Prices are usually at least 10.","intent":null,"trainingEligible":false,"family":"descriptive"}
+{"id":"dev-neg-05","text":"Send a reminder every weekday at 9.","intent":null,"trainingEligible":false,"family":"wrong-domain"}
+{"id":"dev-neg-06","text":"around 10 characters","intent":null,"trainingEligible":false,"family":"approximate"}
+{"id":"dev-neg-07","text":"between 5","intent":null,"trainingEligible":false,"family":"incomplete"}
+{"id":"dev-neg-08","text":"Is the integer field required?","intent":null,"trainingEligible":false,"family":"question"}
+{"id":"dev-neg-09","text":"Copy the phrase \"optional url\" into the ticket.","intent":null,"trainingEligible":false,"family":"quoted"}
+{"id":"dev-neg-10","text":"required string around 10 characters","intent":null,"trainingEligible":false,"family":"approximate"}
+{"id":"dev-neg-11","text":"Run this job every hour.","intent":null,"trainingEligible":false,"family":"wrong-domain"}
+{"id":"dev-neg-12","text":"required integer between 5","intent":null,"trainingEligible":false,"family":"incomplete"}
+{"id":"dev-neg-13","text":"User names are generally optional.","intent":null,"trainingEligible":false,"family":"descriptive"}
+{"id":"dev-neg-14","text":"How many characters may a string have?","intent":null,"trainingEligible":false,"family":"question"}
+{"id":"dev-neg-15","text":"A typical password is fairly long.","intent":null,"trainingEligible":false,"family":"descriptive"}
+{"id":"dev-neg-16","text":"Remind me each Monday morning.","intent":null,"trainingEligible":false,"family":"wrong-domain"}
+{"id":"dev-neg-17","text":"about 18 years","intent":null,"trainingEligible":false,"family":"approximate"}
+{"id":"dev-neg-18","text":"at least","intent":null,"trainingEligible":false,"family":"incomplete"}
+{"id":"dev-neg-19","text":"The sample reads \"required integer at least 18\".","intent":null,"trainingEligible":false,"family":"quoted"}
+{"id":"dev-neg-20","text":"Should url be optional?","intent":null,"trainingEligible":false,"family":"question"}

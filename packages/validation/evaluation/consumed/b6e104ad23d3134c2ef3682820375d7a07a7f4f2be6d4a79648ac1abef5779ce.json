@@ -1,0 +1,8 @@
+{
+  "sha256": "b6e104ad23d3134c2ef3682820375d7a07a7f4f2be6d4a79648ac1abef5779ce",
+  "candidateSha256": "4636d10d7f55ddd9dc8c603ab58ee795a0339e4e47d662934d0c35626ffd0f2f",
+  "run": "/home/berezovyy/Projects/syntaxless/training/validation/runs/zero64-2026-10-11T18-24-31-106Z",
+  "consumedAt": "2026-10-11T18:32:17.050Z",
+  "authorship": "AI-authored by the implementation assistant, using a separate evaluation writer without training renderer, parser, or model inference",
+  "independenceLimits": "Same assistant designed implementation and evaluation; generated variations of a limited number of authored constructions. This is not independent human evidence, nor a population accuracy estimate."
+}
