@@ -1,0 +1,8 @@
+{
+  "sha256": "07716304f1ecf2c41b941882a13bd060eb87c55447264419ecbb1b07dd1e2bcd",
+  "acceptance": "/home/berezovyy/Projects/syntaxless/packages/sort/evaluation/ai-v3.jsonl",
+  "candidateSha256": "297807645b8b8a3613c1175448e3244ebb10cc696d30752bb684e0150b87a33d",
+  "consumedAt": "2026-10-12T00:09:00.315Z",
+  "authorship": "AI-authored by the same implementation assistant through a separate evaluation-only writer",
+  "independenceLimits": "No production/training imports. Independent paired order targets and hand-checked critical targets. Caller identifiers and bounded constructions vary; no independent human author or population accuracy claim."
+}

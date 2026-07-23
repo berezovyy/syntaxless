@@ -1,0 +1,10 @@
+{
+  "sha256": "3540b8c2dfcd471f82ee1c3b74dc8b83f2faf613be5f25be441b2cbabba92ac2",
+  "candidateSha256": "f57e43c87d1b2c6ab838efcefff7622b3f57fcd481c95dd0f7b1a4ca7e2a9d94",
+  "scopeFreezeSha256": "6cf57024ada75fd1a4b47c9feb187750402e47341542610585dca32d1decbef0",
+  "createdAt": "2026-10-11T20:26:53.311Z",
+  "trainingEligible": false,
+  "authorship": "AI-authored by the same implementation assistant through a separate evaluation-only writer",
+  "independenceLimits": "No production/training imports. Independent paired order targets and hand-checked critical targets. Caller identifiers and bounded constructions vary; no independent human author or population accuracy claim.",
+  "rows": 1185
+}
