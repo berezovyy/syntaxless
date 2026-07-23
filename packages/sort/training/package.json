@@ -1,0 +1,10 @@
+{
+  "name": "@syntaxless/sort-training",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test ./src/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "train": "bun run src/train.ts"
+  }
+}
