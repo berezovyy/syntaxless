@@ -1,0 +1,10 @@
+{
+  "sha256": "db68f3766666184159689bca65e32584d357c1332ae10189eb684b58599f0879",
+  "candidateSha256": "0166506004b7ced3768877e5566c19bcb4ca3150006cb71738167f7327e21d91",
+  "scopeFreezeSha256": "5b078d94dce61feb7d596af7c9069842568aa10bc5c8ca652f21ab30de8cdee0",
+  "createdAt": "2026-10-11T20:59:08.372Z",
+  "trainingEligible": false,
+  "rows": 1243,
+  "authorship": "AI-authored by the same implementation assistant through a separate evaluation-only writer",
+  "independenceLimits": "No production/training imports. Independent mathematical schedule targets and hand-checked critical outputs. Bounded constructions and numeric variation are not independent human evidence or population accuracy."
+}
