@@ -1,0 +1,32 @@
+{
+  "name": "@syntaxless/retry",
+  "version": "0.1.0",
+  "description": "Local retry policies and deterministic bounded delay schedules",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test ./tests/*.test.ts",
+    "build": "bun run scripts/build.ts",
+    "check:package": "bun run build && bun run scripts/check-package.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "esbuild": "^0.28.2",
+    "playwright": "1.62.0",
+    "typescript": "5.9.3"
+  }
+}
