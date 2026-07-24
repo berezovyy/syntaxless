@@ -1,0 +1,13 @@
+{
+  "createdAt": "2026-10-12T00:17:54.460106+00:00",
+  "path": "packages/retry/evaluation/ai-v6.jsonl",
+  "sha256": "3edb170664a7e1be61fa20dc387e3047916065fcfc5d80640e9aa5a003a5336b",
+  "bytes": 560220,
+  "rowCount": 1317,
+  "restoredByteIdentically": true,
+  "previousRetirement": "training/retry/cleanup-2026-10-12-final.json",
+  "recipe": "Evaluation-only revision 6 original positive initial base 125 and negative initial base 777; SHA matched original metadata and cleanup record exactly",
+  "reason": "Fail-closed reserved-wording verification exposed a retired unconsumed authoring draft with retained metadata. Restore complete wording rather than weaken exclusion or invent consumption.",
+  "consumed": false,
+  "modelChanged": false
+}
