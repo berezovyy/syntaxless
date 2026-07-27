@@ -1,0 +1,9 @@
+{
+  "sha256": "49ea54201d3b90dade7b3c72b2d967c8e9888861e3074b69d8b18bbfafe6bfdf",
+  "acceptance": "/home/berezovyy/Projects/syntaxless/packages/format/evaluation/ai-v4.jsonl",
+  "candidateSha256": "443f8a113dc4f700ac9e144deaa84da4099abe11e93f2d8fef8d99bb3b1b5723",
+  "consumedAt": "2026-10-11T23:28:22.824Z",
+  "archiveSha256": "66edba6b644907d35c08ab07ee2bcb955cb6ee29a1188004ab4554099b5091d4",
+  "authorship": "AI-authored by the same implementation assistant through an evaluation-only writer",
+  "independenceLimits": "No production parser/compiler or training renderer imports. Native Intl targets and fixed standard-based witnesses. Bounded constructions and numeric variation are not independent human evidence or population accuracy."
+}
