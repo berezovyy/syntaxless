@@ -1,0 +1,30 @@
+export const LABELS = [
+  "O",
+  "NUMBER",
+  "CURRENCY",
+  "PERCENT",
+  "EXACT",
+  "MIN",
+  "MAX",
+  "PRECISION",
+  "GROUP",
+  "NOGROUP",
+  "PARENS",
+  "MINUS",
+  "DISPLAY",
+  "DATE",
+  "TIME",
+  "DATETIME",
+  "STYLE",
+  "DSTYLE",
+  "TSTYLE",
+  "HOUR",
+  "LOCALE",
+  "ZONE",
+  "GLUE",
+  "UNSUPPORTED",
+  "DEFAULT_PRECISION",
+] as const;
+
+export type Role = (typeof LABELS)[number];
+export const LABEL_COUNT = LABELS.length;
