@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { readJsonl } from "./jsonl.js";
+import { fromRepository } from "./paths.js";
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const digestPattern = /^[a-f0-9]{64}$/u;
@@ -40,10 +41,12 @@ export function reservedHashes(metadataDirectory: string, consumedDirectory: str
         available.add(record.sha256);
       }
 
+      const acceptance = record.acceptance && fromRepository(record.acceptance);
+
       if (
-        record.acceptance &&
-        existsSync(record.acceptance) &&
-        hash(readFileSync(record.acceptance)) !== record.sha256
+        acceptance &&
+        existsSync(acceptance) &&
+        hash(readFileSync(acceptance)) !== record.sha256
       ) {
         throw Error("consumed full acceptance changed");
       }
