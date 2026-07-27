@@ -53,3 +53,43 @@ test("normalize canonicalizes a meridiem-qualified dotted clock", () => {
   expect(normalize("Daily at 1.20 p.m.")).toBe("daily at 1:20 pm");
   expect(normalize("Release 1.20 is current")).toBe("release 1.20 is current");
 });
+
+const oneOffCases = [
+  { phrase: "remind me tomorrow at 3", marker: "tomorrow" },
+  { phrase: "call mom tonight at 8pm", marker: "tonight" },
+  { phrase: "next friday at 9am", marker: "next friday" },
+  { phrase: "ping me in 10 minutes", marker: "in 10 minutes" },
+];
+
+test.each(oneOffCases)("rules refuse a single occasion: $phrase", async ({ phrase, marker }) => {
+  expect(await parse(phrase, { source: "rules" })).toEqual({
+    ok: false,
+    reason: `"${marker}" describes a single occasion, not a recurring schedule`,
+    code: "unsafe-context",
+    confidence: 0,
+    diagnostics: [
+      {
+        code: "one-off",
+        severity: "warning",
+        message: `"${marker}" describes a single occasion, not a recurring schedule`,
+      },
+    ],
+    source: "rules",
+  });
+});
+
+test("rules still accept recurring wording next to the refused markers", async () => {
+  expect(await parse("every friday at 9am", { source: "rules" })).toMatchObject({
+    ok: true,
+    intent: {
+      frequency: { unit: "week", interval: 1 },
+      weekdays: ["friday"],
+      time: { hour: 9, minute: 0 },
+    },
+  });
+
+  expect(await parse("every 10 minutes", { source: "rules" })).toMatchObject({
+    ok: true,
+    intent: { frequency: { unit: "minute", interval: 10 } },
+  });
+});

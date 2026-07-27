@@ -41,9 +41,9 @@ export interface Diagnostic {
 }
 
 /**
- * Additive extension of the Phase 04 result: the original `ok`/`intent`/
- * `reason`/`code` members are unchanged, and every variant now carries the
- * confidence, diagnostics, and the source that produced it.
+ * Result of {@link parse}. Success carries the intent; failure carries a
+ * human-readable `reason` and a stable `code`. Both carry the confidence,
+ * diagnostics, and the source that produced them.
  */
 export type ParseResult =
   | {
@@ -139,10 +139,58 @@ function parseTime(text: string): TimeOfDay | "invalid" | null {
   return null;
 }
 
+const ONE_OFF_WORDS = new Set(["today", "tomorrow", "tonight", "yesterday"]);
+
+const DEICTIC_TARGETS = new Set([
+  "morning",
+  "afternoon",
+  "evening",
+  "night",
+  "week",
+  "weekend",
+  "month",
+  "year",
+]);
+
 /**
- * v0 rule-based parser. It deliberately recognizes a small, closed grammar and fails
- * explicitly on anything else. It is the baseline the model path must match and the
- * fallback reachable through `parse(text, { source: "rules" })`.
+ * Detect wording that names a single occasion ("tomorrow at 3", "next friday",
+ * "in 10 minutes"). Such text is not a recurring schedule, so the rules parser
+ * refuses it instead of inventing a daily or weekly recurrence.
+ */
+function oneOffMarker(tokens: readonly string[]): string | null {
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+
+    if (ONE_OFF_WORDS.has(token)) return token;
+    const next = tokens[i + 1];
+
+    if (next === undefined) continue;
+
+    if (
+      (token === "next" || token === "this") &&
+      (WEEKDAY_ALIASES[next] !== undefined || DEICTIC_TARGETS.has(next))
+    ) {
+      return `${token} ${next}`;
+    }
+
+    const unit = tokens[i + 2];
+
+    if (
+      token === "in" &&
+      (NUMBER_WORDS[next] !== undefined || /^\d+$/.test(next) || next === "a" || next === "an") &&
+      unit !== undefined &&
+      UNIT_ALIASES[unit] !== undefined
+    ) {
+      return `${token} ${next} ${unit}`;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Deterministic rule-based parser for a small, closed grammar. Anything outside
+ * that grammar fails explicitly. Reachable through `parse(text, { source: "rules" })`.
  */
 async function parseWithRules(text: string): Promise<ParseResult> {
   const normalized = normalize(text);
@@ -158,6 +206,16 @@ async function parseWithRules(text: string): Promise<ParseResult> {
   }
 
   const tokens = normalized.split(/[\s,]+/).filter((token) => token.length > 0);
+  const oneOff = oneOffMarker(tokens);
+
+  if (oneOff !== null) {
+    const reason = `"${oneOff}" describes a single occasion, not a recurring schedule`;
+
+    return fail("unsafe-context", reason, "rules", [
+      { code: "one-off", severity: "warning", message: reason },
+    ]);
+  }
+
   const used = new Array<boolean>(tokens.length).fill(false);
 
   let ordinalWeekday: OrdinalWeekday | null = null;
@@ -403,9 +461,9 @@ async function parseWithRules(text: string): Promise<ParseResult> {
 }
 
 /**
- * Public async parse. The model path is the default; `{ source: "rules" }`
- * reaches the deterministic Phase 04 baseline. Both paths return the same
- * additive {@link ParseResult}, so `cron()` never needs to know which ran.
+ * Parse schedule text into a {@link ScheduleIntent}. The bundled model is the
+ * default; `{ source: "rules" }` selects the deterministic rule-based parser.
+ * Both return the same {@link ParseResult} shape.
  */
 export async function parse(text: string, options?: ModelParserOptions): Promise<ParseResult> {
   if (options?.source === "rules") return parseWithRules(text);
