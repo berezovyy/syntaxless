@@ -1,49 +1,57 @@
 # Useful tests
 
-Run `bun run check` for formatting, types, TypeScript tests, and the build. Run
-`bun run test:python` for the Python training/export harness. See the root
-[development instructions](README.md#development) for setup and package checks.
+Run `bun run check` for formatting, types, TypeScript tests, and builds. Run
+`bun run test:python` for both cron and validation's Python tests, using the
+existing cron environment in separate processes. Validation's tests must not be
+omitted from Python verification.
 
-## What a test should prove
+## What to keep
 
-- Exercise production behavior and assert an independently chosen result. A
-  hand-built report matching its own literals does not test the evaluator.
-- Name the regression it catches: wrong schedule, unsafe acceptance, corrupted
-  supervision, training/evaluation leakage, or incorrect numerical output.
-- Give rejection and filtering tests a positive control. A leak detector that
-  always returns `[]` must fail, not make every isolation test green.
-- Test decision boundaries on both sides. Prefer explicit expected intents,
-  counts, and tensors over truthiness or broad “success or any failure” checks.
-- Use deterministic seeds and isolated temporary fixtures. Do not depend on
-  downloaded corpora, a local candidate, or reports left by an earlier run.
-- Do not test source spelling, README wording, private helper names, or arbitrary
-  inventory counts. Frozen binary vocabularies and evidence-consumption rules
-  are compatibility contracts, so their exact values do matter.
+Keep a test when an independently chosen expected result exposes a plausible
+wrong behavior. Prefer public behavior and distinct boundaries over repeated
+synonyms, values, random seeds, corpus inventories, and private structure.
 
-Before adding a test, ask: **what plausible wrong implementation would fail it?**
-For important gates, temporarily introduce that fault in a disposable copy and
-check that an assertion fails. Compilation/import failures are not evidence that
-the behavioral test works. A few targeted mutations are useful checks, not a
-claim of exhaustive mutation coverage.
+- Runtime tests check exact output, invalid or conflicting input, unsafe model
+  acceptance, and incompatible artifacts.
+- Training tests check aligned supervision, actual evaluation calculations,
+  split separation, evidence consumption, promotion, and publication integrity.
+- Numerical tests check reference logits, quantization, export, padding, and
+  gradients. The small cron fixture retains original Python reference values.
+- Package and browser checks verify the shipped declarations and runtime,
+  lazy loading, concurrent initialization, offline use, and request privacy.
 
-## Suite boundaries
+Give rejection and filtering tests a positive control, and test both sides of
+safety limits. Don't keep expected values calculated by the function under test,
+truthiness checks, or checks accepting any outcome. Delete unused fixtures and
+helpers with their last useful test rather than hiding tests in loops or skips.
 
-- **Runtime:** compiler and rules examples, model-result safety and confidence,
-  correction/actionable selection, tokenization, and numerical inference parity.
-- **Training tools:** actual evaluation report aggregation, promotion decisions,
-  generation/exclusion behavior, aligned supervision, and sampling diversity.
-- **Evaluation data:** shared corpus checks validate schema, compiler gold,
-  isolation, consumed acceptance, and wording independence without copying a
-  test block for each corpus. Human wording remains evaluation-only.
-- **Python:** batch order, duplicates, padding and all supervision tensors;
-  quantization, export round-trips, gradients, and padding neutrality.
+There is no required percentage of tests to delete. Keep distinct useful
+behavior rather than retaining repeated examples or enforcing a numerical quota.
 
-The bundled weights match the typed label vocabulary. `model-backed-parse.test.ts`
-checks that public parse of one explicit weekday schedule succeeds. That check
-does not measure the human evaluation set. Keep smoke and packed-consumer checks
-strict about the schedule they assert, and keep rejection coverage for
-incompatible weights.
+## Package and browser commands
 
-Passing consumed-corpus regressions is not fresh acceptance evidence. Do not
-weaken a release gate, retune against acceptance wording, or relabel a failure
-as success merely to keep tests green.
+First, run `bun run build`. Second, run `bun run --cwd packages/<package>
+check:package` for each of cron, validation, filter, sort, retry, retention, and
+format. The checks use isolated tarball consumers in Bun and Node and remove
+their temporary directories.
+
+Run `bun packages/cron/tests/browser.ts` for cron. Run
+`bun packages/<package>/scripts/check-browser.ts` for each other package.
+Browser checks require Playwright's Chromium and permission to listen on a
+local port. See the [development instructions](README.md#development) for setup.
+
+`bun run --cwd packages/cron smoke` retains a useful known regression. The
+current model interprets "every weekday at 9" as 21:00 instead of the expected
+09:00. Keep the expected morning schedule unchanged and report the failure
+separately from the passing explicit "9am" reference.
+
+## Limits of passing tests
+
+Unit tests do not measure fresh language acceptance. Passing consumed evaluation
+examples is regression evidence, not new promotion evidence. Do not weaken
+release limits, retune against acceptance wording, or relabel a failure as success.
+
+For important numerical and safety checks, introduce a targeted fault in a
+small disposable copy and verify an assertion fails. A missing import or a
+compilation failure does not prove the behavior is tested. A few checks do not
+claim exhaustive mutation coverage.
