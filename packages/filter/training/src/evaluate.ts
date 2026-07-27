@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
-import { interval } from "../../../validation/training/src/evaluate.js";
+import { interval } from "../../../shared/training/statistics.js";
 import { LABELS } from "../../src/labels.js";
 import { tokenize } from "../../src/model/tokenizer.js";
 import { parse } from "../../src/parse.js";
@@ -40,7 +40,7 @@ export async function evaluate(
     { total: number; exact: number; wrong: number; accepted: number }
   > = {};
 
-  const failures: unknown[] = [];
+  const failures: { family: string; text: string; expected: unknown; actual: unknown }[] = [];
 
   for (const [i, row] of rows.entries()) {
     const result = await predict(row, i);
@@ -68,7 +68,7 @@ export async function evaluate(
       negative.accepted += Number(result.ok);
     }
 
-    if (!exact && failures.filter((f: any) => f.family === family).length < 3) {
+    if (!exact && failures.filter((f) => f.family === family).length < 3) {
       failures.push({ family, text: row.text, expected: row.intent, actual: result });
     }
   }

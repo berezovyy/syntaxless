@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
-import { interval } from "../../../validation/training/src/evaluate.js";
+import { interval } from "../../../shared/training/statistics.js";
 import { LABELS } from "../../src/labels.js";
 import { tokenize } from "../../src/model/tokenizer.js";
 import { parse } from "../../src/parse.js";

@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 
+import { interval } from "../../../shared/training/statistics.ts";
 import { parse } from "../../src/index.ts";
 import type { ParseResult } from "../../src/parser/parse.ts";
-import { evaluateRecords, interval } from "../src/evaluate.ts";
+import { evaluateRecords } from "../src/evaluate.ts";
 import type { CorpusRecord } from "../src/generate.ts";
 
 test(

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
-import { interval } from "../../../validation/training/src/evaluate.js";
+import { interval } from "../../../shared/training/statistics.js";
 import { LABELS } from "../../src/labels.js";
 import { tokenize } from "../../src/model/tokenizer.js";
 import { parse } from "../../src/parse.js";
@@ -110,9 +110,9 @@ if (import.meta.main) {
     : undefined;
 
   const report = await evaluate(rows, async (row, i) => {
-    if (weights) return parse(row.text, { ...row.context, weights });
+    if (weights) return parse(row.text, { weights });
 
-    const prepared = prepare(row.text, row.context);
+    const prepared = prepare(row.text);
     const tokens = tokenize(prepared.text);
     const p = predictions?.[i];
 
@@ -128,7 +128,7 @@ if (import.meta.main) {
     });
 
     try {
-      const decoded = resolveRoles(prepared, labels, row.context);
+      const decoded = resolveRoles(prepared, labels);
 
       return decoded.confidence >= 0.5
         ? { ok: true, ...decoded, source: "model" }
