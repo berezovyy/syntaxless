@@ -11,10 +11,16 @@
     "test": "bun run --filter '@syntaxless/*' --if-present test",
     "build": "bun run --filter '@syntaxless/*' --if-present build",
     "check": "bun run format:check && bun run typecheck && bun run test && bun run build",
-    "test:python": "uv run --project training/cron --locked python training/cron/run_tests.py",
-    "train:production": "bun run --cwd packages/cron/training train:production",
+    "test:python": "uv run --project training/cron --locked python -B training/cron/run_tests.py && uv run --project training/cron --locked python -B training/cron/run_tests.py training/validation",
+    "train": "bun run packages/cron/training/src/train.ts",
     "format": "prettier --write . --ignore-path .gitignore --ignore-path .prettierignore",
-    "format:check": "prettier --check . --ignore-path .gitignore --ignore-path .prettierignore"
+    "format:check": "prettier --check . --ignore-path .gitignore --ignore-path .prettierignore",
+    "train:validation": "bun run packages/validation/training/src/train.ts",
+    "train:filter": "bun run packages/filter/training/src/train.ts",
+    "train:sort": "bun run packages/sort/training/src/train.ts",
+    "train:retry": "bun run packages/retry/training/src/train.ts",
+    "train:retention": "bun run packages/retention/training/src/train.ts",
+    "train:format": "bun run packages/format/training/src/train.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
