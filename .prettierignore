@@ -4,3 +4,14 @@ coverage/
 # Generated model artifacts retain the exporter's byte-for-byte representation.
 packages/cron/src/model/weights.gen.ts
 training/cron/export-report.json
+
+packages/validation/src/model/weights.gen.ts
+packages/filter/src/model/weights.gen.ts
+**/data/synth/
+packages/sort/src/model/weights.gen.ts
+packages/retry/src/model/weights.gen.ts
+packages/retention/src/model/weights.gen.ts
+packages/format/src/model/weights.gen.ts
+
+# Consumption archives are generated and their exact bytes are hashed.
+**/evaluation/consumed/*.archive.json
