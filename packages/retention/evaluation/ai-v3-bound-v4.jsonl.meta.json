@@ -1,0 +1,10 @@
+{
+  "sha256": "69e6a1b70435d306ba31d709914ae586336125883ea5e2f8fdad50362c0cfafa",
+  "candidateSha256": "3cf7a7fc6a998b05dfbaab6a9d5e12ca024f5608580e0c6079405746ec73070f",
+  "scopeFreezeSha256": "7e0a4d0b176583d4ed6746806954cccc0738498666ecd62528f8e91d09887768",
+  "createdAt": "2026-10-11T22:04:48.366Z",
+  "trainingEligible": false,
+  "rows": 1321,
+  "authorship": "AI-authored by the same implementation assistant through an evaluation-only writer",
+  "independenceLimits": "No production parser/compiler or training renderer imports. Independent UTC selection and hand-checked timezone witnesses. Bounded constructions and numeric variation are not independent human evidence or population accuracy."
+}

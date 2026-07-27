@@ -1,0 +1,9 @@
+{
+  "sha256": "7fdc1ed8597d04669e5e3d6f8f16940d61d93363faf5f39e5dd8c13e585e6c03",
+  "acceptance": "/home/berezovyy/Projects/syntaxless/packages/retention/evaluation/ai-v5.jsonl",
+  "candidateSha256": "a00ae81dec429f7969b8ea749784812bc7ac8a2214e1ef37ee5d63742a07e3b3",
+  "consumedAt": "2026-10-11T22:21:46.170Z",
+  "archiveSha256": "f5dedd47629274fa7e0dbff09544cffce6556d006d62f9e50d20192a3ab3aef0",
+  "authorship": "AI-authored by the same implementation assistant through an evaluation-only writer",
+  "independenceLimits": "No production parser/compiler or training renderer imports. Independent UTC selection and hand-checked timezone witnesses. Bounded constructions and numeric variation are not independent human evidence or population accuracy."
+}
