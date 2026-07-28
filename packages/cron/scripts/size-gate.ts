@@ -1,5 +1,5 @@
 /**
- * Hard Brotli byte budget for the emitted bundle (Phase 21).
+ * Hard Brotli byte budget for the emitted bundle.
  *
  * The compiler entry must stay free of the weights, and the separately emitted
  * model chunks must stay bounded. Both budgets are enforced at Brotli quality

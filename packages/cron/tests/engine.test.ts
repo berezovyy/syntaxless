@@ -44,21 +44,24 @@ function roleWeights(role: number): Uint8Array {
 
 afterEach(dispose);
 
-test("typed vocabularies cannot fall back to legacy parsing when their metadata differs", () => {
-  expect(() => createInference({ ...weights, labels: LABELS })).toThrow("typed role vocabulary");
+test(
+  "typed vocabularies cannot fall back to " + "span-label parsing when their metadata differs",
+  () => {
+    expect(() => createInference({ ...weights, labels: LABELS })).toThrow("typed role vocabulary");
 
-  const current = JSON.parse(
-    new TextDecoder().decode(roleWeights(labelId.CONTEXT_NUMBER)),
-  ) as WeightsArtifact;
+    const current = JSON.parse(
+      new TextDecoder().decode(roleWeights(labelId.CONTEXT_NUMBER)),
+    ) as WeightsArtifact;
 
-  expect(() => createInference({ ...current, labels: weights.labels })).toThrow(
-    "typed role vocabulary",
-  );
+    expect(() => createInference({ ...current, labels: weights.labels })).toThrow(
+      "typed role vocabulary",
+    );
 
-  expect(() => createInference({ ...weights, labels: [...weights.labels].reverse() })).toThrow(
-    "typed role vocabulary",
-  );
-});
+    expect(() => createInference({ ...weights, labels: [...weights.labels].reverse() })).toThrow(
+      "typed role vocabulary",
+    );
+  },
+);
 
 test("custom engines run their own weights without changing other engines", async () => {
   const tokens = tokenize("every weekday at 9");
@@ -182,18 +185,21 @@ test("calibration vectors must describe the complete hidden state", async () => 
   }
 });
 
-test("unsupported artifacts reject before inference and a failed initialization can retry", async () => {
-  const custom = bytes({ version: 2 });
-  const first = getEngine({ weights: custom });
+test(
+  "unsupported artifacts reject before inference " + "and a failed initialization can retry",
+  async () => {
+    const custom = bytes({ version: 2 });
+    const first = getEngine({ weights: custom });
 
-  await expect(first).rejects.toMatchObject({
-    name: "unsupported-weights-version",
-    expected: 1,
-    actual: 2,
-  });
+    await expect(first).rejects.toMatchObject({
+      name: "unsupported-weights-version",
+      expected: 1,
+      actual: 2,
+    });
 
-  const retry = getEngine({ weights: custom });
+    const retry = getEngine({ weights: custom });
 
-  expect(retry).not.toBe(first);
-  await expect(retry).rejects.toHaveProperty("name", "unsupported-weights-version");
-});
+    expect(retry).not.toBe(first);
+    await expect(retry).rejects.toHaveProperty("name", "unsupported-weights-version");
+  },
+);

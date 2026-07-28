@@ -206,10 +206,10 @@ export function tokenize(text: string): RawToken[] {
   });
 }
 
-/** Legacy artifact dimensions, kept so callers can load an older self-hosted
- * weight file while the runtime and corpus generator use the current schema. */
-export const LEGACY_FEATURE_COUNT = 17;
-export const LEGACY_EMBEDDING_ROWS = 580;
+/** Dimensions of the earlier 17-slot, 580-row feature layout without character
+ * n-grams. Self-hosted artifacts in that layout still load. */
+export const COMPACT_FEATURE_COUNT = 17;
+export const COMPACT_EMBEDDING_ROWS = 580;
 
 export function featureRows(
   token: Pick<RawToken, "features" | "ngrams">,
@@ -242,8 +242,8 @@ export function featureRows(
   if (layout.featureRows === EMBEDDING_ROWS && layout.rowsPerToken === FEATURE_COUNT) {
     rows.push(...token.ngrams);
   } else if (
-    layout.featureRows !== LEGACY_EMBEDDING_ROWS ||
-    layout.rowsPerToken !== LEGACY_FEATURE_COUNT
+    layout.featureRows !== COMPACT_EMBEDDING_ROWS ||
+    layout.rowsPerToken !== COMPACT_FEATURE_COUNT
   ) {
     throw new RangeError(
       `unsupported tokenizer layout: ${layout.featureRows} rows, ${layout.rowsPerToken} slots`,

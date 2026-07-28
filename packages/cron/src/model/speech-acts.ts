@@ -35,15 +35,3 @@ export const speechActId = Object.fromEntries(SPEECH_ACTS.map((name, id) => [nam
   SpeechAct,
   number
 >;
-
-/**
- * Map a predicted speech-act id back to a class name. Out-of-range ids throw;
- * the caller must never clamp or substitute `"none"` for a corrupt prediction.
- */
-export function speechActFromId(id: number): SpeechAct {
-  const act = SPEECH_ACTS[id];
-
-  if (act === undefined) throw new RangeError(`speech-act id out of range: ${id}`);
-
-  return act;
-}

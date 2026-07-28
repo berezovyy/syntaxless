@@ -177,16 +177,6 @@ export type MeridiemKind = "am" | "pm" | "none";
 export type LabelValue =
   Weekday | FrequencyUnit | Ordinal | BoundKind | DayGroupKind | MeridiemKind | number;
 
-const WEEKDAY_BY_CODE: Record<(typeof WEEKDAY_LABEL_CODES)[number], Weekday> = {
-  MON: "monday",
-  TUE: "tuesday",
-  WED: "wednesday",
-  THU: "thursday",
-  FRI: "friday",
-  SAT: "saturday",
-  SUN: "sunday",
-};
-
 const WEEKDAY_TO_LABEL: Record<Weekday, Label> = {
   monday: "WEEKDAY_MON",
   tuesday: "WEEKDAY_TUE",
@@ -275,10 +265,6 @@ export function valueOf(label: Label): LabelValue | undefined {
 
 export function weekdayLabel(weekday: Weekday): Label {
   return WEEKDAY_TO_LABEL[weekday];
-}
-
-export function weekdayFromCode(code: (typeof WEEKDAY_LABEL_CODES)[number]): Weekday {
-  return WEEKDAY_BY_CODE[code];
 }
 
 export function hourLabel(hour24: number): Label {

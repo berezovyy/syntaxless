@@ -111,7 +111,7 @@ export function createInference(artifact: WeightsArtifact): InferenceEngine {
 
     if (value === undefined) return undefined;
 
-    // Legacy exports used finite scalars as inactive vector placeholders.
+    // A finite scalar marks an inactive calibration vector.
     if (typeof value === "number") {
       if (!Number.isFinite(value)) throw new RangeError(`weights ${name} must be finite`);
 

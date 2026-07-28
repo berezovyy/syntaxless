@@ -1,8 +1,8 @@
 /**
  * Confidence bands for the model-backed parser.
  *
- * The Phase 15 weight artifact ships a calibrated boundary threshold but no
- * margin bands, so the high/medium thresholds live here as constants. They are
+ * Weight artifacts carry a calibrated boundary threshold but no margin bands,
+ * so the high/medium thresholds live here as constants. They are
  * pure inputs to {@link classifyConfidence}; changing them never changes an
  * intent, only whether a parse is reported as high, medium, or low confidence.
  */
@@ -22,7 +22,7 @@ export const CONFIDENCE_THRESHOLDS: ConfidenceThresholds = {
 
 /**
  * Classify a decoded margin score into a band. The score is the weakest
- * per-token margin from Phase 17, in `[0, 1]`.
+ * per-token margin, in `[0, 1]`.
  */
 export function classifyConfidence(
   score: number,
