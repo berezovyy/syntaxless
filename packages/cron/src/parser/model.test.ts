@@ -18,7 +18,7 @@ function daily(score = 1): LabeledToken[] {
 }
 
 test("a score below 0.5 suppresses the decoded intent", () => {
-  const result = resultFromLabeledTokens(daily(0.499), undefined, "daily", "off", "request");
+  const result = resultFromLabeledTokens(daily(0.499), undefined, "daily", "request");
 
   expect(result).toMatchObject({
     ok: false,
@@ -37,7 +37,7 @@ test.each([
 ])(
   "confidence $score preserves the intent with the correct diagnostic",
   ({ score, diagnostic }) => {
-    const result = resultFromLabeledTokens(daily(score), undefined, "daily", "off", "request");
+    const result = resultFromLabeledTokens(daily(score), undefined, "daily", "request");
 
     expect(result).toMatchObject({
       ok: true,
@@ -57,13 +57,7 @@ test.each([
 test.each(["descriptive"] as const)(
   "%s rejects even a high-confidence actionable schedule",
   (speechAct) => {
-    const result = resultFromLabeledTokens(
-      daily(),
-      undefined,
-      "Please run this daily",
-      "off",
-      speechAct,
-    );
+    const result = resultFromLabeledTokens(daily(), undefined, "Please run this daily", speechAct);
 
     expect(result).toMatchObject({
       ok: false,
@@ -91,7 +85,7 @@ test.each([
 ])(
   "$name becomes an explicit model error rather than a guessed intent",
   ({ tokens, act, diagnostic }) => {
-    const result = resultFromLabeledTokens(tokens, undefined, "daily", "off", act);
+    const result = resultFromLabeledTokens(tokens, undefined, "daily", act);
 
     expect(result).toMatchObject({
       ok: false,
@@ -116,7 +110,7 @@ test.each(["thursday friday"])(
       actionable: token.text === "friday",
     }));
 
-    expect(resultFromLabeledTokens(labeled, undefined, text, "off", "correction")).toMatchObject({
+    expect(resultFromLabeledTokens(labeled, undefined, text, "correction")).toMatchObject({
       ok: true,
       intent: {
         frequency: { unit: "week", interval: 1 },
@@ -128,7 +122,6 @@ test.each(["thursday friday"])(
       labeled.map((token) => ({ ...token, actionable: false })),
       undefined,
       text,
-      "off",
       "correction",
     );
 
@@ -142,7 +135,6 @@ test("raw schedule wording cannot rescue all-O labels", () => {
     [{ ...daily()[0]!, role: labelId.O }],
     undefined,
     "Please run this daily",
-    "on",
     "request",
   );
 

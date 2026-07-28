@@ -124,9 +124,6 @@ export class UnsafeScheduleContextError extends RangeError {
   }
 }
 
-/** Diagnostic overlay flag. Public parse is heads-only either way. */
-export type OverlayMode = "on" | "off";
-
 interface Entry {
   token: RawToken;
   label: Label;
@@ -647,20 +644,18 @@ function selectActionableEntries(entries: readonly Entry[]): {
 /**
  * Turn labeled tokens into a validated intent. Throws {@link UnknownRoleError}
  * for an out-of-range role id and `RangeError` for an unrecognized or
- * out-of-bounds schedule. Public decode is heads-only: speech-act owns refuse,
- * the actionable span owns which tokens count, and facts come from labels plus
- * closed lexicon tables. Overlay-on is not a regex fallback.
+ * out-of-bounds schedule. The speech-act decides whether to refuse, the
+ * actionable span decides which tokens count, and facts come from labels plus
+ * closed lexicon tables.
+ *
+ * `_sourceText` is unused; it keeps the positional order of existing callers.
  */
 export function decodeIntent(
   labeled: readonly LabeledToken[],
   scheduleKind?: ScheduleKindEvidence,
-  sourceText?: string,
-  overlay: OverlayMode = "off",
+  _sourceText?: string,
   speechAct?: SpeechAct,
 ): DecodedIntent {
-  void overlay;
-  void sourceText;
-
   if (speechAct === undefined) {
     throw new RangeError("decodeIntent: heads-only requires a speech-act");
   }

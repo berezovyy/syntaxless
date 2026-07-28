@@ -1,7 +1,6 @@
 /** Internal build entry for scoring artifacts with the shipped parser and compiler. */
 import { compile } from "../compiler/cron.js";
 import { decodeIntent } from "../parser/decode.js";
-import type { OverlayMode } from "../parser/decode.js";
 import { labelTokensFromPredictions, parsePrediction } from "../parser/model.js";
 import { normalize } from "../parser/normalize.js";
 import type { WeightsArtifact } from "./decode.js";
@@ -41,10 +40,9 @@ export function createEvaluation(artifact: WeightsArtifact) {
         normalized,
         tokens,
         predictions,
-        parse: (options?: { overlay?: OverlayMode }) =>
-          parsePrediction(normalized, engine, predictions, labeled, options),
+        parse: () => parsePrediction(normalized, engine, predictions, labeled),
         // Raw inspection uses the full speech head and original text, before calibration.
-        decodeRaw(overlay: OverlayMode = "off") {
+        decodeRaw() {
           if (predictions.speechAct === undefined) {
             throw new RangeError("decodeRaw: heads-only requires a speech-act head");
           }
@@ -53,7 +51,6 @@ export function createEvaluation(artifact: WeightsArtifact) {
             labeled,
             scheduleKind,
             text,
-            overlay,
             engine.predictedSpeechAct(predictions.speechAct),
           );
         },

@@ -122,74 +122,78 @@ test("valid calendar intent facts survive explanation without cron approximation
   expect(() => explain({ ...daily, time: {} } as ScheduleIntent)).toThrow(IntentError);
 });
 
-test("literal intervals remain valid intents beyond a clock field, and cron only compiles equal steps", () => {
-  for (const [unit, interval, expression] of [
-    ["minute", 59, null],
-    ["minute", 60, "0 * * * *"],
-    ["minute", 61, null],
-    ["minute", 120, null],
-    ["hour", 23, null],
-    ["hour", 24, "0 0 * * *"],
-    ["hour", 25, null],
-    ["hour", Number.MAX_SAFE_INTEGER, null],
-  ] as const) {
-    const text = `every ${interval} ${unit}s`;
+test(
+  "literal intervals remain valid intents beyond a clock field, " +
+    "and cron only compiles equal steps",
+  () => {
+    for (const [unit, interval, expression] of [
+      ["minute", 59, null],
+      ["minute", 60, "0 * * * *"],
+      ["minute", 61, null],
+      ["minute", 120, null],
+      ["hour", 23, null],
+      ["hour", 24, "0 0 * * *"],
+      ["hour", 25, null],
+      ["hour", Number.MAX_SAFE_INTEGER, null],
+    ] as const) {
+      const text = `every ${interval} ${unit}s`;
 
-    const labeled = tokenize(text)
-      .filter((token) => token.kind !== 3)
-      .map((token) => ({
-        token,
-        role:
-          token.text === "every"
-            ? labelId.RECUR
-            : /^\d+$/.test(token.text)
-              ? labelId.INTERVAL_LIT
-              : unit === "minute"
-                ? labelId.UNIT_MIN
-                : labelId.UNIT_HOUR,
-        boundary: token.text === "every",
-        score: 1,
-        actionable: true,
-      }));
+      const labeled = tokenize(text)
+        .filter((token) => token.kind !== 3)
+        .map((token) => ({
+          token,
+          role:
+            token.text === "every"
+              ? labelId.RECUR
+              : /^\d+$/.test(token.text)
+                ? labelId.INTERVAL_LIT
+                : unit === "minute"
+                  ? labelId.UNIT_MIN
+                  : labelId.UNIT_HOUR,
+          boundary: token.text === "every",
+          score: 1,
+          actionable: true,
+        }));
 
-    const decoded = decodeIntent(labeled, undefined, text, "off", "request");
-    const intent = { frequency: { unit, interval } };
+      const decoded = decodeIntent(labeled, undefined, text, "request");
+      const intent = { frequency: { unit, interval } };
 
-    expect(decoded.intent).toEqual(intent);
-    validate(intent);
-    expect(explain(intent)).toContain(`interval is ${interval} ${unit}`);
+      expect(decoded.intent).toEqual(intent);
+      validate(intent);
+      expect(explain(intent)).toContain(`interval is ${interval} ${unit}`);
 
-    expect(compile(intent)).toMatchObject(
-      expression === null
-        ? { supported: false, code: "non-unit-interval" }
-        : { supported: true, expression },
-    );
-  }
-
-  for (const interval of [0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
-    const intent = { frequency: { unit: "minute" as const, interval } };
-
-    expect(() => validate(intent)).toThrow(IntentError);
-
-    expect(compile(intent)).toMatchObject({
-      supported: false,
-      code: "invalid-interval",
-    });
-  }
-
-  for (const [unit, interval, expected] of [
-    ["minute", 120, ["2026-01-01T02:00:00.000Z", "2026-01-01T04:00:00.000Z"]],
-    ["hour", 25, ["2026-01-02T01:00:00.000Z", "2026-01-03T02:00:00.000Z"]],
-  ] as const) {
-    const result = recurrences(
-      { frequency: { unit, interval } },
-      { timezone: "UTC", reference: "2026-01-01T00:00:00Z", count: 2 },
-    );
-
-    expect(result.ok).toBe(true);
-
-    if (result.ok) {
-      expect(result.occurrences.map((occurrence) => occurrence.instant)).toEqual([...expected]);
+      expect(compile(intent)).toMatchObject(
+        expression === null
+          ? { supported: false, code: "non-unit-interval" }
+          : { supported: true, expression },
+      );
     }
-  }
-});
+
+    for (const interval of [0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      const intent = { frequency: { unit: "minute" as const, interval } };
+
+      expect(() => validate(intent)).toThrow(IntentError);
+
+      expect(compile(intent)).toMatchObject({
+        supported: false,
+        code: "invalid-interval",
+      });
+    }
+
+    for (const [unit, interval, expected] of [
+      ["minute", 120, ["2026-01-01T02:00:00.000Z", "2026-01-01T04:00:00.000Z"]],
+      ["hour", 25, ["2026-01-02T01:00:00.000Z", "2026-01-03T02:00:00.000Z"]],
+    ] as const) {
+      const result = recurrences(
+        { frequency: { unit, interval } },
+        { timezone: "UTC", reference: "2026-01-01T00:00:00Z", count: 2 },
+      );
+
+      expect(result.ok).toBe(true);
+
+      if (result.ok) {
+        expect(result.occurrences.map((occurrence) => occurrence.instant)).toEqual([...expected]);
+      }
+    }
+  },
+);

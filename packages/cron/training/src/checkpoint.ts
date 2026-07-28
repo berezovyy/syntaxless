@@ -7,9 +7,9 @@ import { isDeepStrictEqual } from "node:util";
 import { readJsonl } from "../../../shared/training/jsonl.js";
 import { canonicalizeIntent } from "./canonical-intent.js";
 import { loadCompactProtection } from "./compact-protection.js";
+import { replaceJson } from "./corpus/disk.js";
 import { type CorpusRecord, corpusRecordSchema } from "./corpus/merge.js";
-import { replaceJson } from "./corpus/production/publication.js";
-import { corpusCodeHashes, fileHash } from "./corpus/production/source-hashes.js";
+import { corpusCodeHashes, fileHash } from "./corpus/source-hashes.js";
 import { type Engine, loadEngine } from "./evaluate.js";
 
 interface Counts {
@@ -65,7 +65,7 @@ export function scoreCheckpointRecords(
     digest.update(JSON.stringify(row) + "\n");
 
     const prediction = engine.predict(row.text);
-    const parsed = prediction.parse({ overlay: "off" });
+    const parsed = prediction.parse();
 
     const positive = row.intent !== null;
 
@@ -75,7 +75,7 @@ export function scoreCheckpointRecords(
       isDeepStrictEqual(canonicalizeIntent(parsed.intent), canonicalizeIntent(row.intent!));
 
     try {
-      const raw = prediction.decodeRaw("off");
+      const raw = prediction.decodeRaw();
 
       if (
         positive &&
@@ -203,7 +203,7 @@ if (import.meta.main) {
     !["validation", "heldout"].includes(split ?? "") ||
     process.argv.length !== 6
   ) {
-    throw new Error("Checkpoint scoring is internal to bun run train");
+    throw new Error("Checkpoint scoring is internal to bun run train:cron");
   }
 
   // A full training invocation uses only certified compact inputs. Unit tests

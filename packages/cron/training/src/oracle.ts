@@ -118,7 +118,6 @@ export function oracleDecode(record: OracleRecord): OracleOutcome {
       labeledTokensFromGold(record.text, record.spans),
       undefined,
       record.text,
-      "off",
       speechActFor(record),
     );
 
@@ -150,10 +149,6 @@ export function oracleAgrees(
     outcome.ok &&
     isDeepStrictEqual(canonicalizeIntent(outcome.intent), canonicalizeIntent(expected))
   );
-}
-
-export function oracleMatches(record: OracleRecord): boolean {
-  return oracleAgrees(oracleDecode(record), record.intent, speechActFor(record));
 }
 
 export function kindTemplateKey(
@@ -303,18 +298,6 @@ export async function loadGoldOracleRecords(): Promise<OracleRecord[]> {
 
       records.push(asOracleRecord(value, "gold"));
     }
-  }
-
-  return records;
-}
-
-export function loadKindSeedOracleRecords(seedsPerTemplate = KIND_SEED_COUNT): OracleRecord[] {
-  const records: OracleRecord[] = [];
-  let index = 0;
-
-  for (const example of iterateKindOracleSeeds(seedsPerTemplate)) {
-    records.push(kindExampleToRecord(example, index));
-    index += 1;
   }
 
   return records;

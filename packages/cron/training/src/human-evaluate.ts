@@ -7,8 +7,7 @@
  * compile behavior. Development and calibration rows are diagnostic only;
  * only a fresh acceptance partition can produce a promotion decision.
  * The training coordinator scores consumed `human-v*` as regression evidence.
- * Promotion uses overlay-off against the existing bars; overlay-on is
- * diagnostic. After the hash is recorded in the consumption ledger, further 100%
+ * After the hash is recorded in the consumption ledger, further 100%
  * on that file is regression, not promotion. Using those failures to write
  * decoder regex is forbidden; using them to name a generator kind is the loop.
  */
@@ -140,43 +139,20 @@ export interface HumanEvaluationReport {
     passed: boolean;
     failures: string[];
   };
-  /**
-   * Overlay-off scores on the same artifact. `promotion.passed` is this block
-   * against the existing bars; overlay-on remains diagnostic.
-   */
-  overlayOff: {
-    total: number;
-    correct: number;
-    accuracy: number;
-    positiveTotal: number;
-    positiveCorrect: number;
-    negativeTotal: number;
-    negativeCorrect: number;
-    negativeFalseAccepts: number;
-    negativeFalseAcceptanceRate: number;
-    silentMeaningChanges: number;
-    silentMeaningChangeRate: number;
-    failureCounts: Record<string, number>;
-    failures: HumanFailure[];
-    /** FA on H-neg at coverage on H-pos after F abstention. */
-    faAtCov: string;
-    /** Uncapped counts and critical ids for development checkpoint selection. */
-    capabilitySafety: Record<string, CapabilitySafetyCounts>;
-    criticalFailures: string[];
-    /** Complete paired outcomes; failures[] is intentionally only a small sample. */
-    caseOutcomes: CaseOutcome[];
-  };
-  /**
-   * Calibration-only signal for phase 10. Never true for development.
-   * Acceptance uses `promotion.passed` instead. Does not move confidence floors.
-   */
-  overlayOffEligibleForDefault: boolean;
+  /** FA on H-neg at coverage on H-pos after abstention. */
+  faAtCov: string;
+  /** Uncapped per-capability counts; `failures` is only a capped sample. */
+  capabilitySafety: Record<string, CapabilitySafetyCounts>;
+  /** Sorted ids of failed records marked critical. */
+  criticalFailures: string[];
+  /** Complete per-record outcomes; `failures` is only a capped sample. */
+  caseOutcomes: CaseOutcome[];
   /** Wrong intent emitted with ok:true; excludes negative false-accepts (H-silent). */
   positiveSilentMeaningChanges: number;
   attribution: AttributionReport;
 }
 
-export interface HumanOverlayRates {
+export interface HumanRates {
   accuracy: number;
   silentMeaningChangeRate: number;
   negativeFalseAcceptanceRate: number;
@@ -185,75 +161,39 @@ export interface HumanOverlayRates {
 }
 
 /**
- * Pure promotion arithmetic. Overlay-off must meet the existing bars and must
- * not be worse than overlay-on on silent-change or false-accept. Overlay-on
- * 1.0 cannot rescue overlay-off 0.7.
+ * Pure promotion arithmetic. Only a fresh acceptance partition can pass; other
+ * partitions report the same bar failures as diagnostics.
  */
 export function decideHumanPromotion(
   partition: HumanEvaluatePartition,
-  overlayOn: HumanOverlayRates,
-  overlayOff: HumanOverlayRates | undefined,
-): {
-  eligible: boolean;
-  passed: boolean;
-  failures: string[];
-  overlayOffEligibleForDefault: boolean;
-} {
+  rates: HumanRates,
+): { eligible: boolean; passed: boolean; failures: string[] } {
   const eligible = partition === "acceptance";
-
-  if (overlayOff === undefined) {
-    return {
-      eligible,
-      passed: false,
-      failures: ["missing overlay-off"],
-      overlayOffEligibleForDefault: false,
-    };
-  }
-
   const failures: string[] = [];
 
-  if (overlayOff.accuracy < MIN_OVERALL_ACCURACY) {
-    failures.push(`overlay-off overall accuracy below ${MIN_OVERALL_ACCURACY}`);
+  if (rates.accuracy < MIN_OVERALL_ACCURACY) {
+    failures.push(`overall accuracy below ${MIN_OVERALL_ACCURACY}`);
   }
 
-  for (const [family, counts] of Object.entries(overlayOff.byFamily)) {
+  for (const [family, counts] of Object.entries(rates.byFamily)) {
     if (counts.total < MIN_FAMILY_SUPPORT) continue;
 
     if (counts.correct / counts.total < MIN_FAMILY_ACCURACY) {
-      failures.push(`overlay-off ${family}: accuracy below ${MIN_FAMILY_ACCURACY}`);
+      failures.push(`${family}: accuracy below ${MIN_FAMILY_ACCURACY}`);
     }
   }
 
-  if (overlayOff.silentMeaningChangeRate > MAX_SILENT_MEANING_CHANGE_RATE) {
-    failures.push(`overlay-off silent meaning-change rate above ${MAX_SILENT_MEANING_CHANGE_RATE}`);
+  if (rates.silentMeaningChangeRate > MAX_SILENT_MEANING_CHANGE_RATE) {
+    failures.push(`silent meaning-change rate above ${MAX_SILENT_MEANING_CHANGE_RATE}`);
   }
 
-  if (overlayOff.negativeFalseAcceptanceRate > MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE) {
-    failures.push(
-      `overlay-off negative false-acceptance rate above ${MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE}`,
-    );
+  if (rates.negativeFalseAcceptanceRate > MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE) {
+    failures.push(`negative false-acceptance rate above ${MAX_NEGATIVE_FALSE_ACCEPTANCE_RATE}`);
   }
 
-  for (const id of overlayOff.criticalFailures) {
-    failures.push(`overlay-off critical failure: ${id}`);
-  }
+  for (const id of rates.criticalFailures) failures.push(`critical failure: ${id}`);
 
-  if (overlayOff.silentMeaningChangeRate > overlayOn.silentMeaningChangeRate) {
-    failures.push("overlay-off silent meaning-change worse than overlay-on");
-  }
-
-  if (overlayOff.negativeFalseAcceptanceRate > overlayOn.negativeFalseAcceptanceRate) {
-    failures.push("overlay-off negative false-accept worse than overlay-on");
-  }
-
-  const overlayOffMeetsBars = failures.length === 0;
-
-  return {
-    eligible,
-    passed: eligible && overlayOffMeetsBars,
-    failures,
-    overlayOffEligibleForDefault: partition === "calibration" && overlayOffMeetsBars,
-  };
+  return { eligible, passed: eligible && failures.length === 0, failures };
 }
 
 export interface SequenceEvidenceSummary {
@@ -378,20 +318,9 @@ function summarizeEvidence(
   );
 }
 
-const GENERATOR_SOURCES = [
-  "packages/cron/training/src/backward.ts",
-  "packages/cron/training/src/correction.ts",
-  "packages/cron/training/src/discourse.ts",
-  "packages/cron/training/src/featurize.ts",
-  "packages/cron/training/src/featurize-kinds.ts",
-  "packages/cron/training/src/sequence-metadata.ts",
-  "packages/cron/training/src/kinds.ts",
-  "packages/cron/training/src/renderer.ts",
-  "packages/cron/training/src/sampler.ts",
-] as const;
-
+/** Every corpus-producing module: all non-test TypeScript under training/src. */
 async function generatorSourceNames(): Promise<string[]> {
-  const sources: string[] = [...GENERATOR_SOURCES];
+  const sources: string[] = [];
 
   async function walk(directory: string): Promise<void> {
     for (const entry of await readdir(resolveRepo(directory), {
@@ -407,11 +336,9 @@ async function generatorSourceNames(): Promise<string[]> {
     }
   }
 
-  for (const directory of ["corpus", "mix", "llm", "real"]) {
-    await walk(`packages/cron/training/src/${directory}`);
-  }
+  await walk("packages/cron/training/src");
 
-  return [...new Set(sources)].sort();
+  return sources.sort();
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -739,7 +666,7 @@ export type HumanEvaluateOptions = {
   weights?: string;
 } & ({ partition: "regression" } | { partition: HumanPartition; corpus: string });
 
-interface HumanOverlayScore {
+interface HumanScore {
   correct: number;
   negativeTotal: number;
   negativeFalseAccepts: number;
@@ -792,7 +719,7 @@ function speechActFromHead(
   return (SPEECH_ACTS as readonly string[]).includes(name) ? (name as SpeechAct) : undefined;
 }
 
-function emptyHumanScore(): HumanOverlayScore {
+function emptyHumanScore(): HumanScore {
   return {
     correct: 0,
     negativeTotal: 0,
@@ -823,197 +750,190 @@ function scoreHumanCorpus(
   records: readonly HumanEvaluationRecord[],
   speechNames: readonly string[],
 ) {
-  const overlayOn = emptyHumanScore();
-  const overlayOff = emptyHumanScore();
+  const score = emptyHumanScore();
 
   for (const item of records) {
     const prediction = engine.predict(item.text);
+    const parsed = prediction.parse();
+    let raw: ReturnType<typeof prediction.decodeRaw> | null = null;
 
-    for (const [overlay, score] of [
-      ["on", overlayOn],
-      ["off", overlayOff],
-    ] as const) {
-      const parsed = overlay === "on" ? prediction.parse() : prediction.parse({ overlay: "off" });
-      let raw: ReturnType<typeof prediction.decodeRaw> | null = null;
+    try {
+      raw = prediction.decodeRaw();
+    } catch {
+      // Decoder rejection is a safe abstention in the raw policy curve.
+    }
 
-      try {
-        raw = overlay === "on" ? prediction.decodeRaw() : prediction.decodeRaw("off");
-      } catch {
-        // Decoder rejection is a safe abstention in the raw policy curve.
-      }
+    let correct = false;
+    let category = "correct";
+    let actual: unknown = parsed;
 
-      let correct = false;
-      let category = "correct";
-      let actual: unknown = parsed;
-
-      if (item.intent === null) {
-        score.negativeTotal += 1;
-        correct = !parsed.ok;
-
-        if (!correct) {
-          category = "negative-false-accept";
-          score.negativeFalseAccepts += 1;
-          score.silentMeaningChanges += 1;
-        }
-      } else if (!parsed.ok) {
-        score.positiveTotal += 1;
-        category = `parse:${parsed.code}`;
-      } else {
-        score.positiveTotal += 1;
-        score.positiveAccepted += 1;
-        const expectedIntent = canonicalizeIntent(item.intent);
-        const actualIntent = canonicalizeIntent(parsed.intent);
-
-        if (!isDeepStrictEqual(expectedIntent, actualIntent)) {
-          category = `intent:${differentIntentFields(expectedIntent, actualIntent)}`;
-          score.silentMeaningChanges += 1;
-          score.positiveSilentMeaningChanges += 1;
-          actual = actualIntent;
-        } else {
-          const compiled = engine.compile(parsed.intent);
-          const expected = compileExpectation(item);
-
-          actual = { intent: actualIntent, compiled };
-
-          if ("parse" in expected) {
-            throw new Error(`${item.id}: impossible positive rejection expectation`);
-          } else if (expected.supported) {
-            correct = compiled.supported && compiled.expression === expected.expression;
-            if (!correct) category = "compile:expression";
-          } else {
-            correct = !compiled.supported && compiled.code === expected.code;
-            if (!correct) category = "compile:failure-code";
-          }
-        }
-      }
-
-      score.correct += Number(correct);
-      if (item.intent !== null && correct) score.positiveCorrect += 1;
-
-      score.selectiveOutcomes.push({
-        accepted: parsed.ok,
-        correct,
-        confidence: parsed.confidence,
-        negative: item.intent === null,
-      });
-
-      const rawCorrect =
-        item.intent === null
-          ? raw === null
-          : raw !== null &&
-            isDeepStrictEqual(canonicalizeIntent(raw.intent), canonicalizeIntent(item.intent));
-
-      score.rawSelectiveOutcomes.push({
-        accepted: raw !== null,
-        correct: rawCorrect,
-        confidence: raw?.confidence ?? 0,
-        negative: item.intent === null,
-      });
-
-      if (raw?.evidence !== undefined) {
-        score.rawEvidence.push({
-          evidence: raw.evidence,
-          correct: rawCorrect,
-          negative: item.intent === null,
-        });
-      }
-
-      addCount(score.byFamily, item.family, correct);
-
-      score.caseOutcomes.push({
-        id: item.id,
-        capabilities: item.capabilities,
-        positive: item.intent !== null,
-        correct,
-        falseAccept: category === "negative-false-accept",
-        silentMeaningChange: category.startsWith("intent:"),
-      });
-
-      for (const capability of new Set(item.capabilities)) {
-        addCount(score.byCapability, capability, correct);
-
-        const counts = (score.capabilitySafety[capability] ??= {
-          total: 0,
-          correct: 0,
-          positiveTotal: 0,
-          positiveCorrect: 0,
-          negativeTotal: 0,
-          negativeFalseAccepts: 0,
-          positiveSilentMeaningChanges: 0,
-        });
-
-        counts.total++;
-        counts.correct += Number(correct);
-        counts.positiveTotal += Number(item.intent !== null);
-        counts.positiveCorrect += Number(item.intent !== null && correct);
-        counts.negativeTotal += Number(item.intent === null);
-        counts.negativeFalseAccepts += Number(category === "negative-false-accept");
-        counts.positiveSilentMeaningChanges += Number(category.startsWith("intent:"));
-      }
-
-      if (!correct && overlay === "off") {
-        const tokens =
-          prediction.normalized === item.text ? prediction.tokens : engine.tokenize(item.text);
-
-        const predictions =
-          prediction.normalized === item.text ? prediction.predictions : engine.inferTokens(tokens);
-
-        const predictedLabels: Label[] = [];
-
-        for (let index = 0; index < tokens.length; index += 1) {
-          if (tokens[index]!.kind === 3) continue;
-          predictedLabels.push(engine.labelName(predictions.labels[index]!) as Label);
-        }
-
-        const predictedSpeechAct = speechActFromHead(speechNames, predictions.speechAct);
-
-        addAttribution(score.attribution, {
-          id: item.id,
-          source: "human",
-          family: item.family,
-          bucket: attributeMiss({
-            text: item.text,
-            expectedIntent: item.intent,
-            accepted: parsed.ok,
-            actualIntent: parsed.ok ? parsed.intent : null,
-            predictedLabels,
-            ...(predictedSpeechAct === undefined ? {} : { predictedSpeechAct }),
-            predictedOracle:
-              raw === null
-                ? { ok: false, error: "raw-decode-null" }
-                : { ok: true, intent: raw.intent },
-          }),
-        });
-      }
+    if (item.intent === null) {
+      score.negativeTotal += 1;
+      correct = !parsed.ok;
 
       if (!correct) {
-        score.incorrectIds.add(item.id);
-        const count = (score.failureCounts[category] ?? 0) + 1;
+        category = "negative-false-accept";
+        score.negativeFalseAccepts += 1;
+        score.silentMeaningChanges += 1;
+      }
+    } else if (!parsed.ok) {
+      score.positiveTotal += 1;
+      category = `parse:${parsed.code}`;
+    } else {
+      score.positiveTotal += 1;
+      score.positiveAccepted += 1;
+      const expectedIntent = canonicalizeIntent(item.intent);
+      const actualIntent = canonicalizeIntent(parsed.intent);
 
-        score.failureCounts[category] = count;
-        addFailureCount(score.failureCountsByFamily, item.family, category);
+      if (!isDeepStrictEqual(expectedIntent, actualIntent)) {
+        category = `intent:${differentIntentFields(expectedIntent, actualIntent)}`;
+        score.silentMeaningChanges += 1;
+        score.positiveSilentMeaningChanges += 1;
+        actual = actualIntent;
+      } else {
+        const compiled = engine.compile(parsed.intent);
+        const expected = compileExpectation(item);
 
-        for (const capability of item.capabilities) {
-          addFailureCount(score.failureCountsByCapability, capability, category);
+        actual = { intent: actualIntent, compiled };
+
+        if ("parse" in expected) {
+          throw new Error(`${item.id}: impossible positive rejection expectation`);
+        } else if (expected.supported) {
+          correct = compiled.supported && compiled.expression === expected.expression;
+          if (!correct) category = "compile:expression";
+        } else {
+          correct = !compiled.supported && compiled.code === expected.code;
+          if (!correct) category = "compile:failure-code";
         }
+      }
+    }
 
-        if (count <= MAX_FAILURES_PER_CATEGORY) {
-          score.failures.push({
-            id: item.id,
-            partition: item.partition,
-            family: item.family,
-            capabilities: item.capabilities,
-            category,
-            text: item.text,
-            expected: item.intent === null ? item.expected : item.intent,
-            actual,
-          });
-        }
+    score.correct += Number(correct);
+    if (item.intent !== null && correct) score.positiveCorrect += 1;
+
+    score.selectiveOutcomes.push({
+      accepted: parsed.ok,
+      correct,
+      confidence: parsed.confidence,
+      negative: item.intent === null,
+    });
+
+    const rawCorrect =
+      item.intent === null
+        ? raw === null
+        : raw !== null &&
+          isDeepStrictEqual(canonicalizeIntent(raw.intent), canonicalizeIntent(item.intent));
+
+    score.rawSelectiveOutcomes.push({
+      accepted: raw !== null,
+      correct: rawCorrect,
+      confidence: raw?.confidence ?? 0,
+      negative: item.intent === null,
+    });
+
+    if (raw?.evidence !== undefined) {
+      score.rawEvidence.push({
+        evidence: raw.evidence,
+        correct: rawCorrect,
+        negative: item.intent === null,
+      });
+    }
+
+    addCount(score.byFamily, item.family, correct);
+
+    score.caseOutcomes.push({
+      id: item.id,
+      capabilities: item.capabilities,
+      positive: item.intent !== null,
+      correct,
+      falseAccept: category === "negative-false-accept",
+      silentMeaningChange: category.startsWith("intent:"),
+    });
+
+    for (const capability of new Set(item.capabilities)) {
+      addCount(score.byCapability, capability, correct);
+
+      const counts = (score.capabilitySafety[capability] ??= {
+        total: 0,
+        correct: 0,
+        positiveTotal: 0,
+        positiveCorrect: 0,
+        negativeTotal: 0,
+        negativeFalseAccepts: 0,
+        positiveSilentMeaningChanges: 0,
+      });
+
+      counts.total++;
+      counts.correct += Number(correct);
+      counts.positiveTotal += Number(item.intent !== null);
+      counts.positiveCorrect += Number(item.intent !== null && correct);
+      counts.negativeTotal += Number(item.intent === null);
+      counts.negativeFalseAccepts += Number(category === "negative-false-accept");
+      counts.positiveSilentMeaningChanges += Number(category.startsWith("intent:"));
+    }
+
+    if (!correct) {
+      const tokens =
+        prediction.normalized === item.text ? prediction.tokens : engine.tokenize(item.text);
+
+      const predictions =
+        prediction.normalized === item.text ? prediction.predictions : engine.inferTokens(tokens);
+
+      const predictedLabels: Label[] = [];
+
+      for (let index = 0; index < tokens.length; index += 1) {
+        if (tokens[index]!.kind === 3) continue;
+        predictedLabels.push(engine.labelName(predictions.labels[index]!) as Label);
+      }
+
+      const predictedSpeechAct = speechActFromHead(speechNames, predictions.speechAct);
+
+      addAttribution(score.attribution, {
+        id: item.id,
+        source: "human",
+        family: item.family,
+        bucket: attributeMiss({
+          text: item.text,
+          expectedIntent: item.intent,
+          accepted: parsed.ok,
+          actualIntent: parsed.ok ? parsed.intent : null,
+          predictedLabels,
+          ...(predictedSpeechAct === undefined ? {} : { predictedSpeechAct }),
+          predictedOracle:
+            raw === null
+              ? { ok: false, error: "raw-decode-null" }
+              : { ok: true, intent: raw.intent },
+        }),
+      });
+    }
+
+    if (!correct) {
+      score.incorrectIds.add(item.id);
+      const count = (score.failureCounts[category] ?? 0) + 1;
+
+      score.failureCounts[category] = count;
+      addFailureCount(score.failureCountsByFamily, item.family, category);
+
+      for (const capability of item.capabilities) {
+        addFailureCount(score.failureCountsByCapability, capability, category);
+      }
+
+      if (count <= MAX_FAILURES_PER_CATEGORY) {
+        score.failures.push({
+          id: item.id,
+          partition: item.partition,
+          family: item.family,
+          capabilities: item.capabilities,
+          category,
+          text: item.text,
+          expected: item.intent === null ? item.expected : item.intent,
+          actual,
+        });
       }
     }
   }
 
-  return { overlayOn, overlayOff };
+  return score;
 }
 
 export async function evaluateHumanCorpus(
@@ -1082,47 +1002,30 @@ export async function evaluateHumanCorpus(
     }
   }
 
-  const { overlayOn, overlayOff } = scoreHumanCorpus(engine, records, speechNames);
+  const score = scoreHumanCorpus(engine, records, speechNames);
 
   const total = records.length;
-  const accuracy = overlayOn.correct / total;
-  const silentMeaningChangeRate = overlayOn.silentMeaningChanges / total;
-
-  const negativeFalseAcceptanceRate =
-    overlayOn.negativeFalseAccepts / Math.max(overlayOn.negativeTotal, 1);
-
-  const overlayOffSilent = overlayOff.silentMeaningChanges / total;
-
-  const overlayOffNegative =
-    overlayOff.negativeFalseAccepts / Math.max(overlayOff.negativeTotal, 1);
-
-  const selectivePrediction = riskCoverage(overlayOn.selectiveOutcomes);
-  const rawSelectivePrediction = riskCoverage(overlayOn.rawSelectiveOutcomes);
+  const accuracy = score.correct / total;
+  const silentMeaningChangeRate = score.silentMeaningChanges / total;
+  const negativeFalseAcceptanceRate = score.negativeFalseAccepts / Math.max(score.negativeTotal, 1);
+  const selectivePrediction = riskCoverage(score.selectiveOutcomes);
+  const rawSelectivePrediction = riskCoverage(score.rawSelectiveOutcomes);
 
   const calibrationThreshold =
     options.partition === "calibration" ? selectCalibrationThreshold(rawSelectivePrediction) : null;
 
-  const promotion = decideHumanPromotion(
-    options.partition,
-    {
-      accuracy,
-      silentMeaningChangeRate,
-      negativeFalseAcceptanceRate,
-      byFamily: overlayOn.byFamily,
-      criticalFailures: records
-        .filter((item) => item.critical && overlayOn.incorrectIds.has(item.id))
-        .map((item) => item.id),
-    },
-    {
-      accuracy: overlayOff.correct / total,
-      silentMeaningChangeRate: overlayOffSilent,
-      negativeFalseAcceptanceRate: overlayOffNegative,
-      byFamily: overlayOff.byFamily,
-      criticalFailures: records
-        .filter((item) => item.critical && overlayOff.incorrectIds.has(item.id))
-        .map((item) => item.id),
-    },
-  );
+  const criticalFailures = records
+    .filter((item) => item.critical && score.incorrectIds.has(item.id))
+    .map((item) => item.id)
+    .sort();
+
+  const promotion = decideHumanPromotion(options.partition, {
+    accuracy,
+    silentMeaningChangeRate,
+    negativeFalseAcceptanceRate,
+    byFamily: score.byFamily,
+    criticalFailures,
+  });
 
   return {
     version: HUMAN_CORPUS_VERSION,
@@ -1134,61 +1037,37 @@ export async function evaluateHumanCorpus(
     partition: options.partition,
     isolation,
     total,
-    correct: overlayOn.correct,
+    correct: score.correct,
     accuracy,
-    positiveTotal: overlayOn.positiveTotal,
-    positiveCorrect: overlayOn.positiveCorrect,
-    negativeTotal: overlayOn.negativeTotal,
-    negativeCorrect: overlayOn.negativeTotal - overlayOn.negativeFalseAccepts,
-    byFamily: overlayOn.byFamily,
-    byCapability: overlayOn.byCapability,
-    failureCounts: overlayOn.failureCounts,
-    failureCountsByFamily: overlayOn.failureCountsByFamily,
-    failureCountsByCapability: overlayOn.failureCountsByCapability,
-    failures: overlayOn.failures,
-    negativeFalseAccepts: overlayOn.negativeFalseAccepts,
+    positiveTotal: score.positiveTotal,
+    positiveCorrect: score.positiveCorrect,
+    negativeTotal: score.negativeTotal,
+    negativeCorrect: score.negativeTotal - score.negativeFalseAccepts,
+    byFamily: score.byFamily,
+    byCapability: score.byCapability,
+    failureCounts: score.failureCounts,
+    failureCountsByFamily: score.failureCountsByFamily,
+    failureCountsByCapability: score.failureCountsByCapability,
+    failures: score.failures,
+    negativeFalseAccepts: score.negativeFalseAccepts,
     negativeFalseAcceptanceRate,
-    silentMeaningChanges: overlayOn.silentMeaningChanges,
+    silentMeaningChanges: score.silentMeaningChanges,
     silentMeaningChangeRate,
     selectivePrediction,
     rawSelectivePrediction,
     calibrationThreshold,
-    sequenceEvidence: summarizeEvidence(overlayOn.rawEvidence),
-    promotion: {
-      eligible: promotion.eligible,
-      passed: promotion.passed,
-      failures: promotion.failures,
-    },
-    overlayOff: {
-      total,
-      correct: overlayOff.correct,
-      accuracy: overlayOff.correct / total,
-      positiveTotal: overlayOff.positiveTotal,
-      positiveCorrect: overlayOff.positiveCorrect,
-      negativeTotal: overlayOff.negativeTotal,
-      negativeCorrect: overlayOff.negativeTotal - overlayOff.negativeFalseAccepts,
-      negativeFalseAccepts: overlayOff.negativeFalseAccepts,
-      negativeFalseAcceptanceRate:
-        overlayOff.negativeFalseAccepts / Math.max(overlayOff.negativeTotal, 1),
-      silentMeaningChanges: overlayOff.silentMeaningChanges,
-      silentMeaningChangeRate: overlayOff.silentMeaningChanges / total,
-      failureCounts: overlayOff.failureCounts,
-      failures: overlayOff.failures,
-      capabilitySafety: overlayOff.capabilitySafety,
-      caseOutcomes: overlayOff.caseOutcomes,
-      criticalFailures: records
-        .filter((item) => item.critical && overlayOff.incorrectIds.has(item.id))
-        .map((item) => item.id)
-        .sort(),
-      faAtCov: faAtCoverage({
-        negativeTotal: overlayOff.negativeTotal,
-        negativeAccepted: overlayOff.negativeFalseAccepts,
-        positiveTotal: overlayOff.positiveTotal,
-        positiveAccepted: overlayOff.positiveAccepted,
-      }).formatted,
-    },
-    overlayOffEligibleForDefault: promotion.overlayOffEligibleForDefault,
-    positiveSilentMeaningChanges: overlayOff.positiveSilentMeaningChanges,
-    attribution: overlayOff.attribution,
+    sequenceEvidence: summarizeEvidence(score.rawEvidence),
+    promotion,
+    faAtCov: faAtCoverage({
+      negativeTotal: score.negativeTotal,
+      negativeAccepted: score.negativeFalseAccepts,
+      positiveTotal: score.positiveTotal,
+      positiveAccepted: score.positiveAccepted,
+    }).formatted,
+    capabilitySafety: score.capabilitySafety,
+    criticalFailures,
+    caseOutcomes: score.caseOutcomes,
+    positiveSilentMeaningChanges: score.positiveSilentMeaningChanges,
+    attribution: score.attribution,
   };
 }

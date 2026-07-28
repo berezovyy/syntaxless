@@ -1,8 +1,9 @@
 /**
  * Candidate/baseline evaluation over a gold corpus.
  *
- * Baselines run the built runtime. Typed candidates run current source with
- * their own decoded artifact; legacy candidates use the built runtime.
+ * Baselines run the built runtime. Candidates whose role count matches the
+ * current label set run current source with their own decoded artifact; other
+ * candidates run the built runtime.
  * No source copies, generated-module replacement, or scratch trees are needed.
  *
  * The corpus is gold data with rendered spans, an expected AST, and an expected
@@ -112,13 +113,6 @@ export interface ContractReport {
   failures: ContractFailure[];
 }
 
-export interface OverlayOffEvaluation {
-  contracts: ContractReport[];
-  selectivePrediction: RiskCoveragePoint[];
-  rawSelectivePrediction: RiskCoveragePoint[];
-  typoInvariance: TypoInvarianceReport;
-}
-
 export interface EvaluationResult {
   artifactSha256: string;
   corpus: string;
@@ -131,20 +125,15 @@ export interface EvaluationResult {
   /** Counterfactual raw-decode curve used to select a better policy. */
   rawSelectivePrediction: RiskCoveragePoint[];
   typoInvariance: TypoInvarianceReport;
-  /**
-   * Overlay-off scores on the same artifact. Promotion uses this block;
-   * overlay-on remains diagnostic. Missing overlay-off is a failed run.
-   */
-  overlayOff: OverlayOffEvaluation;
   /** Extra column; not a contract and not averaged into exactAst. */
   speechActAccuracy?: number;
   /** Extra column; not a contract and not averaged into exactAst. */
   actionableAccuracy?: number;
-  /** Per-miss ROLE/ACT/DECODE/CONF/GOLD histogram (overlay-off exactAst). */
+  /** Per-miss ROLE/ACT/DECODE/CONF/GOLD histogram for exactAst misses. */
   attribution: AttributionReport;
-  /** Overlay-off EXEC: execEqual(prediction, gold), not oracle correct/total. */
+  /** EXEC: execEqual(prediction, gold), not oracle correct/total. */
   exec: { correct: number; total: number };
-  /** Overlay-off FA@cov from parse accepts after the F abstention threshold. */
+  /** FA@cov from parse accepts after the abstention threshold. */
   faAtCov: string;
 }
 
@@ -707,10 +696,8 @@ export async function evaluateCorpus(
   }
 
   const tokenRoles = emptyAccumulator();
-  const overlayOn = emptyParseScoreBuckets();
-  const overlayOff = emptyParseScoreBuckets();
+  const buckets = emptyParseScoreBuckets();
   const typoInvariance = emptyTypoReport();
-  const typoOff = emptyTypoReport();
   const attribution = emptyAttributionReport();
   let speechActTotal = 0;
   let speechActCorrect = 0;
@@ -794,39 +781,20 @@ export async function evaluateCorpus(
       rawError = error;
     }
 
-    const parsedOff = prediction.parse({ overlay: "off" });
-    let rawOff: ReturnType<EvaluationPrediction["decodeRaw"]> | null = null;
-    let rawOffError: unknown;
-
-    try {
-      rawOff = prediction.decodeRaw("off");
-    } catch (error) {
-      rawOffError = error;
-    }
-
-    const { astCorrect } = scoreParsedGold(engine, item, parsed, raw, rawError, overlayOn);
-
-    const { astCorrect: astCorrectOff } = scoreParsedGold(
-      engine,
-      item,
-      parsedOff,
-      rawOff,
-      rawOffError,
-      overlayOff,
-    );
+    const { astCorrect } = scoreParsedGold(engine, item, parsed, raw, rawError, buckets);
 
     execTotal += 1;
-    if (execEqual(parsedOff.ok ? parsedOff.intent : null, item.intent)) execCorrect += 1;
+    if (execEqual(parsed.ok ? parsed.intent : null, item.intent)) execCorrect += 1;
 
     if (item.intent === null) {
       negativeTotal += 1;
-      if (parsedOff.ok) negativeAccepted += 1;
+      if (parsed.ok) negativeAccepted += 1;
     } else {
       positiveTotal += 1;
-      if (parsedOff.ok) positiveAccepted += 1;
+      if (parsed.ok) positiveAccepted += 1;
     }
 
-    const exactMiss = item.intent === null ? parsedOff.ok : !astCorrectOff;
+    const exactMiss = item.intent === null ? parsed.ok : !astCorrect;
 
     if (exactMiss) {
       const oracleRecord: OracleRecord = {
@@ -841,12 +809,12 @@ export async function evaluateCorpus(
 
       let predictedOracle: ReturnType<typeof oracleDecode> | undefined;
 
-      if (rawOff !== null) {
-        predictedOracle = { ok: true, intent: rawOff.intent };
-      } else if (rawOffError !== undefined) {
+      if (raw !== null) {
+        predictedOracle = { ok: true, intent: raw.intent };
+      } else if (rawError !== undefined) {
         predictedOracle = {
           ok: false,
-          error: rawOffError instanceof Error ? rawOffError.message : String(rawOffError),
+          error: rawError instanceof Error ? rawError.message : String(rawError),
         };
       }
 
@@ -857,8 +825,8 @@ export async function evaluateCorpus(
         bucket: attributeMiss({
           text: item.text,
           expectedIntent: item.intent,
-          accepted: parsedOff.ok,
-          actualIntent: parsedOff.ok ? parsedOff.intent : null,
+          accepted: parsed.ok,
+          actualIntent: parsed.ok ? parsed.intent : null,
           goldSpans: item.spans,
           ...(item.speechAct === undefined ? {} : { goldSpeechAct: item.speechAct }),
           goldLabels,
@@ -900,12 +868,6 @@ export async function evaluateCorpus(
       const noisyParsed = noisyPrediction.parse();
 
       recordTypo(typoInvariance, item, canonicalExpected, astCorrect, noisy, noisyParsed);
-
-      const noisyParsedOff = noisyPrediction.parse({
-        overlay: "off",
-      });
-
-      recordTypo(typoOff, item, canonicalExpected, astCorrectOff, noisy, noisyParsedOff);
     }
   }
 
@@ -918,7 +880,6 @@ export async function evaluateCorpus(
   };
 
   finalizeTypo(typoInvariance);
-  finalizeTypo(typoOff);
 
   return {
     artifactSha256: engine.artifactSha256,
@@ -928,23 +889,13 @@ export async function evaluateCorpus(
     scope,
     contracts: [
       report("tokenRoles", tokenRoles, provenance),
-      report("rawDecode", overlayOn.rawDecode, provenance),
-      report("exactAst", overlayOn.exactAst, provenance),
-      report("compiledExpression", overlayOn.compiledExpression, provenance),
+      report("rawDecode", buckets.rawDecode, provenance),
+      report("exactAst", buckets.exactAst, provenance),
+      report("compiledExpression", buckets.compiledExpression, provenance),
     ],
-    selectivePrediction: riskCoverage(overlayOn.selectiveOutcomes),
-    rawSelectivePrediction: riskCoverage(overlayOn.rawSelectiveOutcomes),
+    selectivePrediction: riskCoverage(buckets.selectiveOutcomes),
+    rawSelectivePrediction: riskCoverage(buckets.rawSelectiveOutcomes),
     typoInvariance,
-    overlayOff: {
-      contracts: [
-        report("rawDecode", overlayOff.rawDecode, provenance),
-        report("exactAst", overlayOff.exactAst, provenance),
-        report("compiledExpression", overlayOff.compiledExpression, provenance),
-      ],
-      selectivePrediction: riskCoverage(overlayOff.selectiveOutcomes),
-      rawSelectivePrediction: riskCoverage(overlayOff.rawSelectiveOutcomes),
-      typoInvariance: typoOff,
-    },
     ...(speechActTotal === 0 ? {} : { speechActAccuracy: speechActCorrect / speechActTotal }),
     ...(actionableTotal === 0 ? {} : { actionableAccuracy: actionableCorrect / actionableTotal }),
     attribution,

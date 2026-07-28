@@ -24,10 +24,10 @@ function heads(
   sourceText?: string,
   speechAct: SpeechAct = "request",
 ) {
-  return decodeIntent(actionable(labeled), scheduleKind, sourceText, "off", speechAct);
+  return decodeIntent(actionable(labeled), scheduleKind, sourceText, speechAct);
 }
 
-/** Turn rendered spans into perfect labels, mirroring Phase 13 alignment. */
+/** Turn rendered spans into perfect labels, using the same alignment as training. */
 function labelTokens(example: RenderedExample, score = 1): LabeledToken[] {
   const tokens = tokenize(example.text);
   const labeled: LabeledToken[] = [];
@@ -288,8 +288,8 @@ test.each(invalidSchedules)("selected schedule refuses: $name", ({ parts, reason
   });
 
   for (const input of [labeled, actionable(labeled)]) {
-    expect(() => decodeIntent(input, undefined, sentence.text, "off", "request")).toThrow(reason);
-    const result = resultFromLabeledTokens(input, undefined, sentence.text, "off", "request");
+    expect(() => decodeIntent(input, undefined, sentence.text, "request")).toThrow(reason);
+    const result = resultFromLabeledTokens(input, undefined, sentence.text, "request");
 
     expect(result.ok).toBe(false);
 
@@ -321,7 +321,7 @@ test("a malformed value in a discarded correction clause cannot block the replac
       actionable: token.text === "friday",
     }));
 
-  expect(decodeIntent(labeled, undefined, undefined, "off", "correction").intent).toEqual({
+  expect(decodeIntent(labeled, undefined, undefined, "correction").intent).toEqual({
     frequency: { unit: "week", interval: 1 },
     weekdays: ["friday"],
   });
@@ -377,11 +377,11 @@ test.each(conflictingFacts)(
       });
 
       for (const input of [labeled, actionable(labeled)]) {
-        expect(() => decodeIntent(input, undefined, sentence.text, "off", "request")).toThrow(
+        expect(() => decodeIntent(input, undefined, sentence.text, "request")).toThrow(
           `conflicting ${name}`,
         );
 
-        const result = resultFromLabeledTokens(input, undefined, sentence.text, "off", "request");
+        const result = resultFromLabeledTokens(input, undefined, sentence.text, "request");
 
         expect(result.ok).toBe(false);
 

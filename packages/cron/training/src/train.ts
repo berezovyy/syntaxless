@@ -1,11 +1,11 @@
-/** The only training entry point: bun run train. */
+/** Cron training coordinator: `bun run train:cron` from the repository root. */
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { prepareCompactCorpus } from "./compact";
-import { replaceJson } from "./corpus/production/publication";
+import { replaceJson } from "./corpus/disk";
 import { evaluateHumanCorpus } from "./human-evaluate";
 import { runOracleSuite, summarizeOracleReport } from "./oracle";
 
@@ -38,7 +38,7 @@ async function train(): Promise<void> {
   const started = Date.now();
 
   const workflow = {
-    command: "bun run train",
+    command: "bun run train:cron",
     corpusPrefix: null as string | null,
     runDirectory: directory,
     status: "failed",
@@ -71,8 +71,8 @@ async function train(): Promise<void> {
   try {
     console.log(`run -> ${directory}`);
     measure("before preparation");
-    // Exclude available evaluation wording and disclose historical gaps.
-    // The historical production generator remains private and intact.
+    // Exclude evaluation wording and report consumed partitions whose records
+    // are unavailable.
     const prepared = await prepareCompactCorpus(join(directory, "corpus"));
     const consumption = prepared.proof.consumption;
 
@@ -152,7 +152,11 @@ async function train(): Promise<void> {
       status: "complete",
       humanRegression: {
         report: regressionPath,
-        overlayOff: human.overlayOff,
+        positiveCorrect: human.positiveCorrect,
+        positiveTotal: human.positiveTotal,
+        negativeCorrect: human.negativeCorrect,
+        negativeTotal: human.negativeTotal,
+        faAtCov: human.faAtCov,
         positiveSilentMeaningChanges: human.positiveSilentMeaningChanges,
         promotionEvidence: false,
       },
@@ -160,9 +164,9 @@ async function train(): Promise<void> {
     });
 
     console.log(
-      `regression: H-pos ${human.overlayOff.positiveCorrect}/${human.overlayOff.positiveTotal}, ` +
-        `H-negOK ${human.overlayOff.negativeCorrect}/${human.overlayOff.negativeTotal}, ` +
-        `H-silent ${human.positiveSilentMeaningChanges}, FA@cov ${human.overlayOff.faAtCov}`,
+      `regression: H-pos ${human.positiveCorrect}/${human.positiveTotal}, ` +
+        `H-negOK ${human.negativeCorrect}/${human.negativeTotal}, ` +
+        `H-silent ${human.positiveSilentMeaningChanges}, FA@cov ${human.faAtCov}`,
     );
 
     console.log(`report -> ${reportPath}`);
@@ -184,7 +188,7 @@ async function train(): Promise<void> {
 
 if (import.meta.main) {
   if (process.argv.length !== 2) {
-    throw new Error("Training takes no flags. Run from the repository root: bun run train");
+    throw new Error("Training takes no flags. Run from the repository root: bun run train:cron");
   }
 
   await train();

@@ -11,24 +11,44 @@ import type { RawToken } from "../model/tokenizer.js";
 import { mahalanobisDiag, sequenceEnergy } from "./abstain.js";
 import { classifyConfidence } from "./confidence.js";
 import { decodeIntent, UnknownRoleError, UnsafeScheduleContextError } from "./decode.js";
-import type { LabeledToken, OverlayMode } from "./decode.js";
+import type { LabeledToken, UnsafeScheduleContextReason } from "./decode.js";
 import { normalize } from "./normalize.js";
 import type { Diagnostic, ParseResult } from "./parse.js";
 
-export type { OverlayMode };
-
-/** Public parser options. `source` defaults to `"model"`. Overlay defaults to `"off"`. */
+/** Options for {@link parse}. `source` defaults to `"model"`. */
 export interface ModelParserOptions {
   source?: "model" | "rules";
   /** Self-hosted weight bytes; overrides the bundled artifact. */
   weights?: Uint8Array;
   /**
-   * Diagnostic flag only. Public parse is heads-only either way: `"on"` is
-   * not a discourse/correction regex scaffold.
+   * Conformal sequence-energy threshold. A parse whose energy exceeds it is
+   * rejected as out of distribution. Defaults to the artifact's calibration.
    */
-  overlay?: OverlayMode;
-  /** Track F conformal energy threshold; reject when sequence energy exceeds it. */
   energyThreshold?: number;
+}
+
+const UNSAFE_CONTEXT_REASONS: Record<UnsafeScheduleContextReason, string> = {
+  "informational-question": "the text asks about a schedule rather than requesting one",
+  "uncertain-alternative": "the text offers uncertain alternatives rather than one schedule",
+  "competing-correction": "the text contains competing corrections of a schedule",
+  "quoted-schedule": "the schedule appears inside a quotation",
+  "historical-description": "the text describes a past schedule rather than requesting one",
+  "multiple-schedules": "the text names more than one schedule",
+  "descriptive-statement": "the text describes a schedule rather than requesting one",
+  "non-scheduling-language": "the text does not request a schedule",
+  descriptive: "the text describes a schedule rather than requesting one",
+  question: "the text asks about a schedule rather than requesting one",
+  quoted: "the schedule appears inside a quotation",
+  "one-off": "the text describes a single occasion, not a recurring schedule",
+  cancel: "the text cancels or stops a schedule rather than requesting one",
+  incomplete: "the schedule request is incomplete",
+  none: "the text does not request a recurring schedule",
+  "no-actionable-span": "the text does not contain a schedule to act on",
+};
+
+/** A human-readable explanation of why a schedule-like text was refused. */
+export function unsafeContextReason(reason: UnsafeScheduleContextReason): string {
+  return UNSAFE_CONTEXT_REASONS[reason];
 }
 
 /**
@@ -52,7 +72,7 @@ export function labelTokensFromPredictions(
   }));
 }
 
-/** Legacy artifacts derive request/refusal from actionable content labels. */
+/** Artifacts without a speech-act head derive request/refusal from actionable content labels. */
 export function speechActFromSpanLabels(labeled: readonly LabeledToken[]): SpeechAct {
   for (const item of labeled) {
     if (item.token.kind === 3) continue;
@@ -120,16 +140,19 @@ export function calibratedRejection(
     cutoff = mahalanobisThreshold;
   }
 
+  const measurement = `${metric} ${value.toFixed(4)} exceeds ${cutoff}`;
+  const metricName = metric === "energy" ? "sequence energy" : metric;
+
   return {
     ok: false,
-    reason: `abstain ${metric} ${value.toFixed(4)} exceeds ${cutoff}`,
+    reason: `the text is too unlike the model's training data to parse safely (${measurement})`,
     code: "unsafe-context",
     confidence: 0,
     diagnostics: [
       {
         code: "calibrated-abstain",
         severity: "warning",
-        message: `${metric === "energy" ? "sequence energy" : metric} exceeded the conformal threshold`,
+        message: `${metricName} exceeded the conformal threshold`,
       },
     ],
     source: "model",
@@ -141,18 +164,17 @@ export function resultFromLabeledTokens(
   labeled: readonly LabeledToken[],
   scheduleKind?: { kind: ScheduleKind; score: number },
   sourceText?: string,
-  overlay: OverlayMode = "off",
   speechAct?: SpeechAct,
 ): ParseResult {
   let decoded;
 
   try {
-    decoded = decodeIntent(labeled, scheduleKind, sourceText, overlay, speechAct);
+    decoded = decodeIntent(labeled, scheduleKind, sourceText, speechAct);
   } catch (error) {
     if (error instanceof UnsafeScheduleContextError) {
       return {
         ok: false,
-        reason: error.message,
+        reason: unsafeContextReason(error.contextReason),
         code: "unsafe-context",
         confidence: 0,
         diagnostics: [
@@ -169,7 +191,7 @@ export function resultFromLabeledTokens(
     if (error instanceof UnknownRoleError) {
       return {
         ok: false,
-        reason: error.message,
+        reason: "the model produced an unknown label; the weights may be corrupt",
         code: "model-error",
         confidence: 0,
         diagnostics: [{ code: "unknown-role", severity: "error", message: error.message }],
@@ -180,7 +202,7 @@ export function resultFromLabeledTokens(
     if (error instanceof RangeError) {
       return {
         ok: false,
-        reason: error.message,
+        reason: `could not decode the schedule: ${error.message.replace(/^decodeIntent: /, "")}`,
         code: "model-error",
         confidence: 0,
         diagnostics: [{ code: "decode-error", severity: "error", message: error.message }],
@@ -194,9 +216,11 @@ export function resultFromLabeledTokens(
   const band = classifyConfidence(decoded.confidence);
 
   if (band === "low") {
+    const confidence = decoded.confidence.toFixed(3);
+
     return {
       ok: false,
-      reason: `low confidence (${decoded.confidence.toFixed(3)})`,
+      reason: `the model is not confident enough to return a schedule (confidence ${confidence})`,
       code: "low-confidence",
       confidence: decoded.confidence,
       diagnostics: [
@@ -265,7 +289,7 @@ export function parsePrediction(
   engine: InferenceEngine,
   predictions: Predictions,
   labeled: readonly LabeledToken[],
-  options?: Pick<ModelParserOptions, "overlay" | "energyThreshold">,
+  options?: Pick<ModelParserOptions, "energyThreshold">,
 ): ParseResult {
   if (normalized.length === 0) {
     return {
@@ -277,8 +301,6 @@ export function parsePrediction(
       source: "model",
     };
   }
-
-  const overlay = options?.overlay ?? "off";
 
   const speechAct =
     engine.decisionHead && predictions.speechAct !== undefined
@@ -318,5 +340,5 @@ export function parsePrediction(
     };
   }
 
-  return resultFromLabeledTokens(labeled, undefined, normalized, overlay, speechAct);
+  return resultFromLabeledTokens(labeled, undefined, normalized, speechAct);
 }

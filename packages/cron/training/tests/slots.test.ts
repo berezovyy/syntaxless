@@ -97,7 +97,6 @@ test.each(speechCases)(
           labeledTokensFromGold(sentence.text, sentence.spans),
           undefined,
           sentence.text,
-          "off",
           speech.act,
         );
 
