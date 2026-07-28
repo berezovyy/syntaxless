@@ -1,83 +1,144 @@
 # @syntaxless/cron
 
-Natural-language schedules to a typed intent AST and cron expressions.
+Turn English schedule text into a typed intent and a 5-field cron expression,
+entirely on-device.
 
-`parse(text)` returns a `ScheduleIntent`; `compile(intent)` returns a cron expression or an
-explicit unsupported result. The package has no runtime dependencies.
+`parse(text)` returns a `ScheduleIntent`. `compile(intent)` returns a cron
+expression, or an explicit unsupported result when cron can't represent the
+intent. The package has no runtime dependencies.
 
-## Intent validation and explanations
+## Install
 
-`validate(intent)` checks the full intent and throws `IntentError` with a typed
-`code` for malformed facts. `compile(intent)` uses the same checks before
-reporting unsupported cron semantics. Unknown fields, invalid calendar dates,
-conflicting selectors and incomplete supplied clocks are rejected rather than
-ignored. Dates use years 0001 to 9999, with inclusive start and exclusive end.
-Every frequency unit accepts a positive safe integer interval. For example,
-120 minutes is a valid intent for recurrence previews, even though the current
-compiler doesn't convert it to an hourly cron expression. An unsupported
-compiler result preserves the intent rather than treating the interval as invalid.
+```sh
+npm install @syntaxless/cron
+```
 
-`explain(intent)` describes every supplied fact, defaults and cron support,
-without loading the model. Calendar schedules default to local 00:00. Hourly
-schedules default to minute 0 and accept a `MinuteOfHour`, such as
-`{ minute: 15 }`, without inventing a daily hour anchor. Weekly and monthly
-schedules without a selector use the recurrence anchor's weekday or day of the
-month. The anchor defaults to the caller's reference instant.
-The last business day means the last Monday to Friday day of the month, without
-holiday exclusions.
+The package is ESM-only and targets ES2022 runtimes (Node.js 18+, Bun and
+modern browsers).
 
-Cron expressions use local clock fields starting at zero. Minute intervals must
-divide 60, and hour intervals must divide 24. For example, cron compilation
-refuses a 7-minute interval because `*/7` has a 4-minute gap at each hour boundary.
-The complete field cycles use `0`, so 60 minutes compiles to `0 * * * *` and
-24 hours compiles to `0 0 * * *` at the default selected minute.
-The target scheduler supplies timezone and daylight-saving behavior. Cron cannot
-encode recurrence bounds, exceptions or ordinal weekday rules.
+## Quick start
 
-## Clarification for missing cron days
+```ts
+import { compile, cron, explain, parse } from "@syntaxless/cron";
 
-`clarify(intent)` returns a typed question when a valid weekly or monthly intent
-only lacks the day needed for cron compilation. A question identifies `weekdays`
-with allowed weekday values or `dayOfMonth` with limits 1 to 31. Other intents
-return `null`, including unsupported intervals, bounds and ordinal rules.
-The API doesn't infer ambiguous clocks or invent alternatives from confidence.
+await cron("every monday at 5pm");
+// { supported: true, expression: "0 17 * * 1",
+//   intent: { frequency: { unit: "week", interval: 1 }, weekdays: ["monday"],
+//             time: { hour: 17, minute: 0 } } }
+
+const parsed = await parse("every 15 minutes");
+// { ok: true, intent: { frequency: { unit: "minute", interval: 15 } },
+//   confidence: 0.999…, diagnostics: [], source: "model" }
+
+compile({ frequency: { unit: "minute", interval: 7 } });
+// { supported: false, code: "non-unit-interval",
+//   reason: "cron minute steps would change the interval at hour boundaries" }
+
+await cron("remind me tomorrow at 3");
+// { supported: false, code: "unsafe-context", intent: null,
+//   reason: "the text does not request a recurring schedule" }
+
+explain({
+  frequency: { unit: "week", interval: 1 },
+  weekdays: ["monday"],
+  time: { hour: 17, minute: 0 },
+});
+// "The recurrence interval is 1 week. The local time is 17:00. … The cron expression is 0 17 * * 1."
+```
+
+## API
+
+### Parsing
+
+| Export      | Signature                                                              |
+| ----------- | ---------------------------------------------------------------------- |
+| `parse`     | `(text: string, options?: ModelParserOptions) => Promise<ParseResult>` |
+| `cron`      | `(text: string) => Promise<CronResult>`                                |
+| `preload`   | `(config?: EngineConfig) => Promise<void>`                             |
+| `getEngine` | `(config?: EngineConfig) => Promise<InferenceEngine>`                  |
+| `dispose`   | `() => void`                                                           |
+
+`ModelParserOptions`:
+
+- `source`: `"model"` (default) uses the bundled model. `"rules"` uses a small
+  deterministic grammar that fails explicitly on anything outside it.
+- `weights`: self-hosted artifact bytes (UTF-8 JSON) instead of the bundled model.
+- `energyThreshold`: overrides the artifact's calibrated out-of-distribution threshold.
+
+`ParseResult` is `{ ok: true, intent, confidence, diagnostics, source }` or
+`{ ok: false, reason, code, confidence, diagnostics, source }`. `reason` is a
+readable sentence; `code` is one of `empty`, `unrecognized`,
+`unrecognized-time`, `unrecognized-weekday`, `unrecognized-interval`,
+`conflicting-selectors`, `low-confidence`, `unsafe-context` or `model-error`.
+`unsafe-context` covers text that names a schedule without requesting one:
+questions, quotations, descriptions, cancellations, incomplete requests and
+one-off events. Diagnostics carry the machine-readable detail.
+
+`cron(text)` parses and compiles. It returns `{ supported: true, expression,
+intent }` or `{ supported: false, reason, code, intent, clarification? }`.
+Parse failures have `intent: null`; compile failures keep the recognized intent.
+
+`preload` initializes the engine that `parse` uses. Repeated calls with the same
+weight buffer share initialization, so treat that buffer as immutable.
+`dispose` releases cached engines; an engine a caller already holds stays usable.
+
+### Intents
+
+| Export                 | Signature                                                   |
+| ---------------------- | ----------------------------------------------------------- |
+| `validate`             | `(intent: unknown) => asserts intent is ScheduleIntent`     |
+| `compile`              | `(intent: ScheduleIntent) => CompileResult`                 |
+| `compileWeekdays`      | `(days: Weekday[]) => string`                               |
+| `WEEKDAY_NUMBER`       | `Readonly<Record<Weekday, number>>` (Sunday is 0)           |
+| `explain`              | `(intent: ScheduleIntent) => string`                        |
+| `clarify`              | `(intent: ScheduleIntent) => ScheduleClarification \| null` |
+| `resolveClarification` | `(intent, answer: ClarificationAnswer) => ScheduleIntent`   |
+| `IntentError`          | `TypeError` subclass with a typed `code`                    |
+
+A `ScheduleIntent` has a `frequency` (`unit`: minute, hour, day, week or month;
+positive safe-integer `interval`), plus optional `time`, `weekdays`,
+`dayOfMonth`, `ordinalWeekday`, `day` (last day or last business day), `bounds`
+(inclusive `start`, exclusive `end`, ISO dates from 0001 to 9999) and
+`exceptions`.
+
+`validate` throws `IntentError` for malformed facts: unknown fields, invalid
+dates, conflicting selectors or incomplete clocks. `compile` runs the same
+checks and then returns `{ supported: true, expression }` or `{ supported:
+false, reason, code }`. Unsupported codes are `non-unit-interval`,
+`ordinal-weekday`, `day-spec`, `bounds`, `exceptions` and `missing-anchor`.
+
+Cron fields are local and zero-based. Minute intervals must divide 60 and hour
+intervals must divide 24, because `*/7` would leave a 4-minute gap at each hour
+boundary. A complete cycle compiles to `0`: 60 minutes is `0 * * * *` and
+24 hours is `0 0 * * *`. Calendar schedules default to 00:00, and hourly
+schedules default to minute 0. Cron can't encode bounds, exceptions or ordinal
+weekday rules. The scheduler supplies the timezone and daylight-saving behavior.
+
+`explain` describes every fact, the defaults and the cron support without
+loading the model. `clarify` returns a typed question when a weekly or monthly
+intent only lacks the day that cron needs, and `null` otherwise:
 
 ```ts
 import { clarify, compile, resolveClarification } from "@syntaxless/cron";
-import type { ScheduleIntent } from "@syntaxless/cron";
 
-const intent: ScheduleIntent = {
+const intent = {
   frequency: { unit: "week", interval: 1 },
   time: { hour: 9, minute: 25 },
-};
-const question = clarify(intent);
-if (question?.field === "weekdays") {
-  // Supply the user's answer rather than choosing a day automatically.
-  const resolved = resolveClarification(intent, { weekdays: ["tuesday", "thursday"] });
-  const result = compile(resolved); // 25 9 * * 2,4
-}
+} as const;
+const question = clarify(intent); // { field: "weekdays", allowed: [...], ... }
+const resolved = resolveClarification(intent, { weekdays: ["tuesday", "thursday"] });
+compile(resolved); // { supported: true, expression: "25 9 * * 2,4" }
 ```
 
-`resolveClarification(intent, answer)` accepts only the requested field. It
-validates the answer and returns a separate intent without losing existing
-facts or sharing nested data. Invalid answers and already complete intents throw
-`IntentError`. `cron(text)` includes `clarification` on missing-anchor failures
-while preserving the recognized intent. Parsing failures receive no invented
-intent or clarification. The host chooses when to ask, apply or recompile.
-The clarification functions are synchronous and load no model.
+`resolveClarification` accepts only the requested field, validates it and
+returns a new intent. It never picks a day on the caller's behalf.
 
-## Recurrence previews
-
-`recurrences(intent, options)` returns a bounded preview and never starts timers
-or executes tasks. Provide a timezone, an absolute reference instant, and either
-`count` or `before`. The reference and `before` horizon are exclusive. Absolute
-instants accept epoch milliseconds or ISO strings with an explicit offset and
-up to millisecond precision. The supported Gregorian year range is 0001 to 9999.
+### Recurrence previews
 
 ```ts
 import { recurrences } from "@syntaxless/cron";
 
-const preview = recurrences(
+recurrences(
   { frequency: { unit: "month", interval: 1 }, dayOfMonth: 31 },
   {
     timezone: "UTC",
@@ -86,86 +147,107 @@ const preview = recurrences(
     policies: { monthEnd: "constrain" },
   },
 );
-// The preview contains February 29 and March 31 at local midnight.
+// ok: true, occurrences at 2028-02-29T00:00Z and 2028-03-31T00:00Z
 ```
 
-All frequency units follow local calendar fields, rather than fixed elapsed
-durations. Optional `anchor` sets the interval phase and defaults to `reference`.
-The anchor isn't an implicit start bound. Minute phases use the anchor's local
-minute, and hour phases use its local hour with the intent's selected minute.
-Day phases use its local date. Weeks begin on Monday, and month phases use its
-local month. Missing weekly selectors use the anchor's weekday, while missing
-monthly selectors use its day of the month. Cron's zero-based field phase can
-differ from a recurrence preview's explicit anchor phase.
+`recurrences(intent, options)` returns a bounded preview. It never starts timers
+or runs tasks. Options:
 
-Previews implement day-of-month, ordinal weekday, last-day and last-business-day
-selectors. Inclusive start dates, exclusive end dates and exceptions apply to
-the actual local date after any timezone adjustment. Results are sorted by
-instant and contain no duplicate instant. Each occurrence includes requested
-and actual local fields, so a clock shifted through a gap remains visible.
+- `timezone` and `reference` are required. `reference` is an exclusive start:
+  epoch milliseconds, or an ISO instant with an explicit offset.
+- `count` or `before` is required. `before` is an exclusive horizon.
+- `anchor` sets the interval phase and defaults to `reference`.
+- `policies` sets the DST and month-end behavior described below.
+- `calendar` is required for IANA timezones.
+- `maxSteps` limits candidate work (default 10000, maximum 100000).
 
-The default policies skip nonexistent local times, select the earlier occurrence
-of repeated local times, and skip missing days such as February 31. `gap` also
-accepts `earlier`, `later` or `reject`. `fold` also accepts `later`, `both` or
-`reject`, and `monthEnd` also accepts `constrain` or `reject`. Earlier and later
-gap policies shift by the timezone transition's length. Rejection policies
-report a failure within the requested window, without returning partial results.
+Policies:
 
-A preview permits at most 1000 occurrences. Candidate work defaults to 10000
-steps, and `maxSteps` may raise it to 100000. An unattainable count returns
-`work-limit` instead of searching without a bound. A horizon containing more
-than 1000 occurrences returns `output-limit`. Successful results identify
-whether the count, horizon, intent end or supported year range stopped the
-preview. Malformed intents throw `IntentError`, while context and policy failures
-return an explicit result.
+| Policy     | Default   | Other values                 | Applies to               |
+| ---------- | --------- | ---------------------------- | ------------------------ |
+| `gap`      | `skip`    | `earlier`, `later`, `reject` | Nonexistent local times  |
+| `fold`     | `earlier` | `later`, `both`, `reject`    | Repeated local times     |
+| `monthEnd` | `skip`    | `constrain`, `reject`        | Days such as February 31 |
 
-## Optional timezone adapter
+The result is either `{ ok: true, occurrences, stop, examinedSteps, policies }`
+or `{ ok: false, code, reason }`. Each occurrence has its instant, its actual
+local fields and the requested local fields. A preview returns at most 1000
+occurrences. The failure codes `work-limit` and `output-limit` report an
+exhausted budget instead of returning partial results. Malformed intents throw
+`IntentError`.
 
-The default calendar supports UTC and fixed offsets such as `+05:45`. IANA
-timezones require an explicit adapter. The separate `@syntaxless/cron/temporal`
-entry accepts a host's native Temporal or polyfill namespace, without importing
-a polyfill or changing a global itself.
+Units follow local calendar fields rather than fixed durations, and weeks begin
+on Monday. The default calendar supports UTC and fixed offsets such as
+`+05:45`. For IANA timezones, pass an adapter from the `@syntaxless/cron/temporal`
+entry:
 
 ```ts
 import { Temporal } from "@js-temporal/polyfill";
 import { createTemporalCalendar } from "@syntaxless/cron/temporal";
 
-const calendar = createTemporalCalendar(Temporal);
-// Supply calendar in the recurrence options alongside an IANA timezone.
+const calendar = createTemporalCalendar(Temporal); // native Temporal also works
 ```
 
-The adapter uses Temporal's earlier and later resolutions to distinguish ordinary
-times, gaps and folds. The host supplies the timezone database. See the
-[Temporal ZonedDateTime documentation](https://tc39.es/proposal-temporal/docs/zoneddatetime.html).
-The polyfill is a development dependency for package checks, not a runtime
-dependency of cron. Custom adapters must return valid Gregorian fields and
-offsets strictly below 24 hours, with ordered earlier and later resolutions.
+The adapter doesn't import a polyfill or change globals, and the host supplies
+the timezone database. A custom adapter must return valid Gregorian fields,
+offsets below 24 hours, and ordered earlier/later resolutions.
 
-## Remaining cron work
+## How it works
 
-The bundled model still interprets the development case `every weekday at 9`
-as 21:00 instead of the declared unqualified 24-hour convention, while explicit
-`9am` and `9pm` work. No sentence-specific decoder correction or rules fallback
-has been added. Model clock consistency and a fresh full promotion gate are
-still required by the implementation plan. Compact training also requires the
-original wording for five missing historical acceptance partitions.
+1. `normalize` canonicalizes punctuation, meridiem forms and dotted clocks.
+2. A small model tags every token. It is a 64-wide int6-quantized
+   convolutional and bidirectional-recurrent tagger. It predicts 77 schedule
+   roles, span boundaries, actionable spans, a schedule kind and a speech act.
+3. A deterministic decoder builds the intent from the role labels and closed
+   lexicon tables. The speech-act head decides whether the text is a request at
+   all. Calibrated energy and Mahalanobis thresholds reject inputs unlike the
+   training data, and a confidence floor of 0.5 rejects uncertain parses.
+4. `validate` and `compile` are deterministic TypeScript and never call the model.
 
-## Privacy
+The compiler entry (`dist/index.js`) is about 5.6 KB with Brotli. The weights
+live in a separate, lazily imported `dist/weights.gen.js`, which is about 100 KB
+minified and 58 KB with Brotli. Nothing loads until the first `parse`,
+`preload` or `getEngine` call.
 
-Inference runs entirely on-device. Fetching static model bytes is allowed; sending user text,
-tokens, intents, or confidence anywhere is not. There is no silent hosted fallback: the bundled
-default weights work offline, and a self-hoster supplies bytes through `parse`'s `weights` option
-or `preload`/`getEngine` config. Importing the types or the compiler downloads and initializes
-nothing; the model module is imported on the first `parse()`, `preload()`, or `getEngine()` call.
+**Privacy.** Inference runs on-device. User text, tokens, intents and confidence
+never leave the process, and there is no hosted fallback. Self-hosters can pass
+their own weights through `parse`'s `weights` option or `preload`/`getEngine`.
 
-Each engine uses its own weights and calibration. Repeated calls with the same
-weight buffer share initialization; treat that buffer as immutable and use a new
-buffer for another artifact. `dispose()` releases cached engines; an engine
-already held by a caller remains usable.
+**Weights format.** Each artifact declares a format version. An unsupported
+version fails with `unsupported-weights-version` before any decoding. Artifacts
+in the earlier 17-slot feature layout without character n-grams still load.
 
-## Weights format
+## Limitations
 
-The bundled model artifact carries a `WEIGHTS_FORMAT_VERSION`. A self-hosted artifact whose version
-the runtime does not understand is a hard error (`unsupported-weights-version`) raised before any
-decode — never a silent mis-decode. The weight bytes live in a separately emitted, lazily loaded
-model chunk; the compiler entry does not inline them.
+- The bundled model reads a bare hour in `every weekday at 9` as 21:00 instead
+  of 09:00. Explicit `9am` and `9pm` work. `bun run smoke` keeps this case as a
+  failing regression check until a retrained model fixes it.
+- English only, with no locale-specific date formats.
+- `last_business_day` means the last Monday-to-Friday of the month. Holidays
+  aren't excluded.
+- The rules parser refuses one-off wording by keyword (`today`, `tomorrow`,
+  `tonight`, `next friday`, `in 10 minutes`, …). It recognizes only a small grammar.
+- The evaluation corpora are written by the implementation assistant, not by
+  independent people. Scores measure regression, not population accuracy. See
+  [evaluation](evaluation/README.md).
+
+## Development
+
+| Script                  | Purpose                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `bun run typecheck`     | Type-check sources, tests and scripts                                          |
+| `bun run test`          | Unit and numerical-parity tests                                                |
+| `bun run build`         | Build `dist/` and enforce the Brotli size gate                                 |
+| `bun run size:gate`     | Re-check the size budget of an existing build                                  |
+| `bun run check:package` | Pack the tarball, verify its file list, run a consumer                         |
+| `bun run test:browser`  | Browser check for lazy loading and request privacy (needs Playwright Chromium) |
+| `bun run smoke`         | Known-regression check for the bare-hour case above                            |
+
+## Training and evaluation
+
+- [Training](training/README.md): corpus preparation, model training and export.
+- [Evaluation](evaluation/README.md): held-out evaluation corpora and acceptance policy.
+
+## License
+
+[MIT](LICENSE)

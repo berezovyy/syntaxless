@@ -1,232 +1,169 @@
-# Human-style evaluation
+# Cron evaluation
 
-## Compiler contract correction
+Held-out, evaluation-only corpora for `@syntaxless/cron`. Every record measures
+the public parser and compiler end to end. None of this wording may be used for
+training, checkpoint selection, threshold fitting or export calibration.
+Training preparation actively excludes it (see [Isolation](#isolation)).
 
-The stage 7 compiler refuses intervals whose cron field steps produce unequal
-gaps at hour or day boundaries. Historical fixtures contain 65 supported targets
-for such intervals. `compiler-contract-v2.json` records corrected compiler
-targets alongside the original targets and exact record and file hashes.
-Historical text, intents and consumption records remain unchanged.
+## Layout
 
-The evaluator applies corrections only to the exact reviewed records and
-reports compiler contract version 2 and the correction manifest digest. New or
-altered records retain their supplied targets and must pass the usual checks.
-The correction establishes no new language accuracy or model promotion, and old
-compiler scores are not directly comparable to the corrected contract.
+```
+evaluation/
+  README.md
+  human-v1.jsonl … human-v15.jsonl  # versioned corpora (v1 mixes partitions; v2–v15 are acceptance sets)
+  human-calibration-v2.jsonl        # calibration corpus for confidence and abstention policy
+  consumed.json                     # ledger of consumed acceptance-partition hashes
+  historical-acceptance.json        # earlier consumed revisions whose wording is still protected
+  compiler-contract-v2.json         # reviewed compiler-target corrections for existing records
+```
 
-## Historical wording protection
+File names and bytes are load-bearing: the training code reads this directory
+by name pattern, and several records are bound by sha256. Don't rename, move
+or reformat these files.
 
-`historical-acceptance.json` preserves consumed partitions that no longer match
-the current fixtures. Two partitions come directly from Git blobs, and two more
-were restored by reversing documented gold corrections. Each restored partition
-has the exact digest already recorded in `consumed.json`. The restoration proof
-records source Git blobs, changed fields and documentation identities in
-`training/cron/recovery-proof-2026-10-12.json`.
+## Data format
 
-The archive protects wording only. Historical authoring mistakes remain intact
-to preserve consumed identities, and the records aren't valid new training gold
-or fresh acceptance evidence. Current fixtures and the archive account for
-19 of 22 consumed partitions. Earlier v9 and v11 partitions remain unavailable.
-Compact preparation excludes available wording and records the missing identities
-as a historical evidence limitation. Exclusion of unavailable wording cannot be
-verified. Historical reconstruction isn't a training prerequisite, and fresh
-reserved acceptance remains required for promotion. The ledger stays unchanged.
+Each corpus is JSONL with one record per line:
 
-`human-v1.jsonl` is a versioned, evaluation-only behavioral corpus. It is not a
-training corpus and must never enter production corpus preparation, featurization,
-parameter training, checkpoint selection, or export calibration.
+| Field              | Type                                           | Meaning                                                                                  |
+| ------------------ | ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `version`          | `1`                                            | Record schema version                                                                    |
+| `id`               | string                                         | Unique id, e.g. `v12-interval_clock-01`                                                  |
+| `partition`        | `development` \| `calibration` \| `acceptance` | Permitted use (below)                                                                    |
+| `family`           | string                                         | Balanced construction family used for per-family accuracy                                |
+| `capabilities`     | string[]                                       | Phenomena exercised (e.g. `number-word`, `reported-speech`)                              |
+| `critical`         | boolean                                        | Any failure on this record fails promotion                                               |
+| `trainingEligible` | `false`                                        | Always false                                                                             |
+| `text`             | string                                         | Input sentence                                                                           |
+| `intent`           | `ScheduleIntent` \| `null`                     | Gold intent; `null` for a negative that must be refused                                  |
+| `expected`         | object                                         | `{ parse: "reject" }`, `{ supported: true, expression }` or `{ supported: false, code }` |
 
-The partitions have separate purposes:
+Records must not contain training fields (`spans`, `split`, `frame`, `style`,
+`template`). `parseHumanCorpus` in `training/src/human-evaluate.ts` enforces the
+schema.
 
-- `development`: diagnose capabilities and guide abstract fixes.
-- `calibration`: choose confidence/abstention policy; never train parameters.
-- `acceptance`: reserved final promotion evidence; never use its wording to
-  change templates, features, decoding, confidence, or checkpoints.
+`consumed.json` contains `{ version: 1, acceptancePartitionSha256: string[] }`.
+A partition hash is the sha256 of the partition's acceptance records, each
+serialized with `JSON.stringify` and joined by `\n`, plus a trailing `\n`.
+Every acceptance set is a single partition, so for v2–v15 the hash equals the
+file's sha256.
 
-`bun run train` selects checkpoints on complete synthetic validation and fits
-export thresholds on that validation split. It scores consumed `human-v*` cases
-once after export as regression diagnostics. Human evaluation does not select
-epochs or certify promotion. Fresh acceptance remains separate.
+`historical-acceptance.json` holds `{ version, sourceLedgerSha256, partitions }`.
+Each partition lists its `partitionSha256`, its `source` path and its full
+`records`, plus either the `gitBlob` it was read from or a `recovery` block. The
+`recovery` block names the source commit and blob and lists the exact field
+changes reversed to rebuild the consumed revision.
 
-Every record deliberately lacks renderer spans and training split/frame fields,
-and carries `trainingEligible: false`. `human-evaluate.ts` fails closed if the
-file is moved under `training/data`, becomes training-shaped, is referenced by
-a generator, or contains wording copied verbatim into generator source.
+`compiler-contract-v2.json` lists 65 corrections of the form `{ id,
+recordSha256, originalExpected, expected }`, together with the sha256 of every
+corpus file. Each corrected record is a minute or hour interval that doesn't
+divide 60 or 24. Its compiler target becomes `{ supported: false, code:
+"non-unit-interval" }`. A correction applies only to the record whose canonical
+JSON matches `recordSha256`. Text, intents and consumption hashes are unchanged.
 
-The training coordinator calls `evaluateHumanCorpus` directly for the consumed
-regression union and writes `human-regression.json` in the run directory. There
-is no separate evaluation command or training partition flag. Development,
-calibration and fresh acceptance remain explicit evaluation-library operations;
-the fixed training workflow uses regression only.
+## Acceptance policy
 
-Do not evaluate the `acceptance` partition until the candidate is otherwise frozen.
+| Partition     | Use                                                                      |
+| ------------- | ------------------------------------------------------------------------ |
+| `development` | Diagnose capability gaps. Fixes must be general, never sentence-specific |
+| `calibration` | Choose confidence and abstention policy. Never trains parameters         |
+| `acceptance`  | One run on a frozen candidate, then consumed                             |
 
-The acceptance partition in `human-v1.jsonl` was consumed on 2026-09-15 and is
-now development evidence only. Its acceptance-partition hash is recorded in
-`consumed.json`; the evaluator refuses to score those acceptance records even
-if unrelated partitions change or the file is copied. Final promotion requires a newly and independently
-authored corpus with a different hash. After its one permitted acceptance run,
-copy `acceptancePartitionSha256` from the evaluation report into the ledger
-before further development.
+A candidate passes acceptance when all of these hold on the public parse
+(`decideHumanPromotion` in `training/src/human-evaluate.ts`):
 
-## After a miss: kinds, not nouns
+- overall accuracy is at least 0.95;
+- accuracy is at least 0.90 in every family with at least 5 records;
+- silent meaning changes (accepted with a wrong intent or expression) are at most 0.5%;
+- false accepts are at most 1% of negatives;
+- no `critical` record fails.
 
-Development diagnoses _classes_ (reported speech, competing clocks, dotted
-clocks, correction, descriptive timetable, question, quoted, one-off, cancel,
-incomplete). After the acceptance hash is in `consumed.json`, do not patch
-`decode.ts` to match that wording.
+`evaluateHumanCorpus` refuses to score an acceptance partition whose hash is
+already in `consumed.json`. Because the ledger is keyed by content, copying or
+renaming a file doesn't make it fresh again. After the single acceptance run,
+the partition hash is appended to the ledger. From then on the set is
+regression evidence only. The training coordinator replays the union of all
+`human-v*.jsonl` files after each export and writes `human-regression.json`.
+That replay never selects checkpoints or certifies promotion.
 
-Legal response: a new abstract kind in `packages/cron/training/src/kinds.ts`
-(and the wrap renderer) whose inner schedule still carries real roles; retrain;
-re-run the overlay-off / heads-only gate. Also legal: a lexicon row for a true synonym or
-abbreviation; `normalize` for punctuation / meridiem / dotted-clock _form_; a
-compiler fix for an AST feature cron cannot represent.
+When a fixture's gold label is corrected after consumption, the hashes of both
+revisions stay in the ledger. A correction can never create a fresh set.
 
-Discourse refuse is the speech-act head. Public parse is heads-only; overlay-on
-is not a published regex path. A human miss is a generator kind, never a parser
-regex. Consumed-set 100% after a decoder patch is still not promotion.
+## Isolation
 
-Forbidden: a decoder regex whose distinguishing term is a noun or quote from
-the failed row (`flights`, `planes`, `bakery`, `clock strikes`, a quoted
-sentence fragment). Dotted-clock belongs in `normalize` (already). Do not add
-a `/bakery/` refuse pattern “because normalize doesn’t cover bakeries.”
+Training preparation adds every `*.jsonl` text in this directory, and the
+records in `historical-acceptance.json`, to a protected-wording set. Generated
+training examples that match it are excluded. Compact preparation also
+recomputes each archived partition's digest and requires it to appear in the
+ledger (`training/src/compact-protection.ts`). `assertHumanIsolation` fails if a
+corpus is placed under `training/data`, or if a generator source references a
+corpus or copies its wording.
 
-100% on a consumed set after those failures were used is a **regression suite
-result**, never promotion. Promotion requires a newly authored corpus with a
-different hash. The per-`human-vN` 100/100 scores below are the anti-pattern
-this section forbids repeating.
+The ledger holds 22 hashes. 15 match current files and 4 match archived
+revisions. The remaining 3 belong to earlier revisions of v9 and v11 whose
+records are no longer available, so their exclusion can't be verified.
+Preparation reports these hashes as a limitation.
 
-`human-v2.jsonl` was authored by the coding agent at the user's explicit
-request, rather than by an independent human, and was consumed on 2026-09-15.
-It is a broad 150-example behavioral set, but it is not independent evidence.
-Its acceptance hash is also recorded in `consumed.json`, so it can now be used
-only as development diagnostics and never as a fresh promotion gate.
-The one valid frozen-candidate run scored 96/150 (64.0%), with 29 silent
-meaning changes and 15 false accepts. After those failures were used for
-decoder development, the same set reached 150/150; that later score is a
-regression result, not promotion evidence.
-After consumption, one gold-label typo (`half past three` had been labeled as
-15:30 rather than 03:30) was corrected. Both the originally evaluated hash and
-the corrected fixture hash are consumed; the correction cannot create a fresh
-acceptance set.
-Two later labels that incorrectly treated `nightly` as a PM marker were also
-corrected to ordinary unqualified-clock semantics. The resulting v2 and v3
-hashes are consumed as well.
+## Datasets
 
-`human-v3.jsonl` is a second, newly authored but still non-independent
-100-example acceptance set. Its only frozen-candidate run scored 78/100
-(78.0%), with 17 silent meaning changes and 12 false accepts. Its hash was
-immediately consumed; all later use is development-only.
+The result column is the single acceptance run of the frozen candidate at the
+time of consumption. "Silent" counts silent meaning changes; "FA" counts false
+accepts. Later 100% replays are regression results and are not listed.
 
-`human-v4.jsonl` is the third non-independent acceptance set. Its only frozen
-run scored 82/100 (82.0%), with 13 silent meaning changes and 8 false accepts.
-Its hash is consumed and it is development-only from this point onward.
+| Set                  | sha256 (12)    | Rows | Negatives | Status      | Acceptance result                 |
+| -------------------- | -------------- | ---: | --------: | ----------- | --------------------------------- |
+| human-v1             | `44166078b7ec` |   96 |        29 | consumed    | 40 acceptance rows; not recorded  |
+| human-v2             | `ed3914bb0cd6` |  150 |        60 | consumed    | 96/150, 29 silent, 15 FA          |
+| human-v3             | `b1247ed94271` |  100 |        50 | consumed    | 78/100, 17 silent, 12 FA          |
+| human-v4             | `5af1c32e7ff7` |  100 |        50 | consumed    | 82/100, 13 silent, 8 FA           |
+| human-v5             | `989896ccaa11` |  100 |        50 | consumed    | 90/100, 10 silent, 7 FA           |
+| human-v6             | `286f1e52a97d` |  100 |        50 | consumed    | 83/100, 11 silent, 6 FA           |
+| human-v7             | `0643782939e9` |  100 |        50 | consumed    | 79/100, 17 silent, 12 FA          |
+| human-v8             | `a4a7b969d91b` |  100 |        50 | consumed    | 82/100, 12 silent, 9 FA           |
+| human-v9             | `2f89b818686a` |  100 |        51 | consumed    | 75/100, 19 silent, 9 FA           |
+| human-v10            | `58a1380346c8` |  100 |        50 | consumed    | 88/100, 9 silent, 6 FA            |
+| human-v11            | `5e8a2ce9fd01` |  120 |        60 | consumed    | 95/120, 17 silent, 11 FA          |
+| human-v12            | `5f09f3c5681b` |  120 |        60 | consumed    | 83/120, 29 silent, 12 FA          |
+| human-v13            | `f820004ba7aa` |  120 |        50 | consumed    | 94/120, 20 silent, 7 FA           |
+| human-v14            | `3e82b1d1733d` |  120 |        50 | consumed    | 101/120, 17 silent, 10 FA         |
+| human-v15            | `b5173887da94` |  120 |        50 | consumed    | 88/120, 22 silent, 12 FA          |
+| human-calibration-v2 | `efe269e46330` |  100 |        60 | calibration | 85/100 before calibration changes |
 
-`human-v5.jsonl` is the fourth non-independent acceptance set. Its only frozen
-run scored 90/100 (90.0%), with 10 silent meaning changes and 7 false accepts.
-Its hash is consumed and it is development-only from this point onward.
+No candidate has passed acceptance. Every acceptance set is consumed, so
+promotion requires a new set.
 
-`human-v6.jsonl` is a fifth coding-agent-authored, non-independent acceptance
-set, created only after the prior candidate and decoder were frozen. It has 100
-examples across ten equally supported broad families. Its one permitted fresh
-run scored 83/100 (83.0%), with 11 silent meaning changes and 6 false accepts.
-The failures exposed replacement-correction, reported-speech, cancellation,
-vague-cadence, and clock-reconciliation gaps. Its hash was immediately recorded
-in `consumed.json`; after those gaps were fixed it reached 100/100 only as a
-development regression. That later result is not fresh promotion evidence, and
-the original 83% result remains the honest acceptance score.
+Gold corrections made after consumption were:
 
-`human-v7.jsonl` is the sixth coding-agent-authored, non-independent acceptance
-set. It was authored and gold-linted only after the v6 fixes and candidate were
-frozen, and contains 100 new examples with ten examples in each of ten broad
-families. Its one fresh run scored 79/100 (79.0%), with 17 silent meaning
-changes and 12 false accepts, so promotion failed. The failures exposed dotted
-clocks, night qualifiers, numeric relative clocks, weekday abbreviations,
-alternate-week wording, further correction forms, prose/reporting contexts,
-vague schedules, prohibitions, and incomplete ranges. The acceptance hash is
-consumed. A later 100/100 result is development regression evidence only.
+- v2: `half past three` changed from 15:30 to 03:30.
+- v2 and v3: two labels no longer read `nightly` as PM.
+- v9: an inclusive-bound convention fixed and two ambiguous labels clarified.
+- v11: `last_business_day` spelling fixed and the exclusive `between` end applied.
+- v13: `nightly` no longer read as PM, and `last_day` changed to `last_day_of_month`.
 
-`human-v8.jsonl` is a seventh coding-agent-authored, non-independent set of 100
-balanced examples. Its one fresh run scored 82/100, with 12 silent meaning
-changes and 9 false accepts. Its consumed failures guided decoder and safety
-changes; the later 100/100 score is regression evidence only.
+Both revisions of every corrected set are in the ledger.
 
-`human-v9.jsonl` is an eighth coding-agent-authored, non-independent set of 100
-balanced examples. The initially authored gold scored 75/100, with 19 silent
-meaning changes and 9 false accepts. A subsequent gold audit corrected an
-inclusive-bound convention error and two ambiguous author assumptions. Every
-intermediate and final fixture hash remains consumed. The corrected set now
-scores 100/100 only as development regression evidence.
+## Authoring a new set
 
-`human-v10.jsonl` is a ninth coding-agent-authored, non-independent set of 100
-balanced examples. Its only fresh run scored 88/100, with 9 silent meaning
-changes and 6 false accepts, so promotion failed. Its later 100/100 result is
-development regression evidence only; its wording and hash are permanently
-consumed.
+1. Write `human-v<N>.jsonl` with all records in the `acceptance` partition.
+   Balance the families and include refused negatives. Don't copy or adapt
+   wording from earlier sets or from generator sources.
+2. Freeze the candidate (code and weights) before reading any results.
+3. Check the schema and the compiler-contract bindings without scoring:
+   `bun test packages/cron/training/tests/evaluation-corpora.test.ts`.
+4. Run the single acceptance evaluation with
+   `evaluateHumanCorpus({ dist: "packages/cron/dist", partition: "acceptance", corpus: "packages/cron/evaluation/human-v<N>.jsonl" })`
+   from `training/src/human-evaluate.ts`.
+5. Append the reported `acceptancePartitionSha256` to `consumed.json`, then add
+   a row to the table above. Changing the ledger invalidates existing compact
+   preparations, which must then be regenerated.
 
-`human-calibration-v2.jsonl` is a separate coding-agent-authored calibration
-set created with the user's explicit permission. It contains 100 deliberately
-distributed examples: 40 positive recurring schedules and 60 difficult
-negatives covering reported or quoted schedules, questions, ambiguity,
-cancellations, incomplete requests, and one-off requests. It is not independent
-acceptance evidence and must never enter training. The frozen candidate initially
-scored 85/100. After
-discourse-safety fixes and removal of the unsafe global-kind confidence boost,
-the public parser scored 100/100. On raw decoding, the maximum safe-coverage
-point is a 0.4 threshold (40% coverage, zero observed risk); the existing 0.5
-public floor is therefore retained rather than tuned downward. This result is
-calibration/development evidence only and does not authorize model promotion.
+## Limitations
 
-`human-v11.jsonl` is a tenth coding-agent-authored, non-independent acceptance
-set, created after the calibration changes were frozen. It contains 120 new
-examples across twelve equally supported families, with no normalized wording
-overlap against the earlier human fixtures. Its one permitted acceptance run
-scored 95/120 (79.2%), with 17 silent meaning changes and 11 false accepts, so
-promotion failed. A gold audit corrected two authoring mistakes: the public
-`last_business_day` spelling and the exclusive end convention for `between`.
-Both the original and corrected fixture hashes are consumed. After using the
-failures for safety and decoder development, the corrected gold moved the
-audited baseline to 97/120 and ultimately reached 120/120 only as regression
-evidence; those later results are not fresh promotion evidence.
-
-`human-v12.jsonl` is an eleventh coding-agent-authored, non-independent set of
-120 balanced examples across twelve families. It was gold-linted and checked
-for normalized wording overlap before its single frozen-candidate acceptance
-run. That fresh run scored 83/120 (69.2%), with 29 silent meaning changes and
-12 false accepts, so promotion failed. Its hash was immediately consumed. The
-failures then drove false-positive guards, correction scoping, typo-aware
-evidence recovery, clock reconciliation, and additional wording support. The
-later 120/120 score is development regression evidence only and does not alter
-the original acceptance result or authorize promotion.
-
-`human-v13.jsonl` is a twelfth coding-agent-authored, non-independent set of
-120 new examples across twelve equally supported families. Before its one
-fresh run it passed schema, compiler-gold, generator-isolation, and normalized
-wording-overlap checks. The initially authored gold scored 94/120 (78.3%), with
-20 silent meaning changes and 7 false accepts, so promotion failed. A gold
-audit then corrected two author mistakes: `nightly` does not itself select PM,
-and the public day-rule spelling is `last_day_of_month`. Both fixture hashes
-are permanently consumed; the corrected audited baseline is 96/120. After the
-failures drove safety and decoder work, the corrected set reached 120/120 only
-as development regression evidence. It is not fresh promotion evidence.
-
-`human-v14.jsonl` is a thirteenth coding-agent-authored, non-independent set of
-120 examples across twelve equally supported families. It passed runtime AST
-schema validation, compiler-gold linting, generator isolation, and normalized
-wording-overlap checks before its one permitted fresh run. That run scored
-101/120 (84.2%), with 17 silent meaning changes and 10 false accepts, so the
-promotion gate failed. Its hash was immediately consumed. Any result after
-using those failures for development is regression evidence only. After the
-failures drove additional discourse-safety and explicit-value reconciliation
-work, v14 reached 120/120 and the combined v2-v13 suite reached 1310/1310 as
-development regressions; neither result authorizes promotion.
-
-`human-v15.jsonl` is a fourteenth coding-agent-authored, non-independent set of
-120 new examples across the same twelve balanced families. It passed schema,
-compiler-gold, generator-isolation, and normalized wording-overlap checks
-before its single acceptance run. The frozen candidate scored 88/120 (73.3%),
-with 22 silent meaning changes and 12 negative false accepts, so promotion
-failed. The result exposed limits in rate expressions, clock phrasing,
-relative weekdays, bounds, corrections, noisy input, ordinary prose,
-historical statements, ambiguity, and one-off requests. Its hash is consumed;
-future runs are development regressions only.
+- The implementation assistant wrote every corpus, at the maintainer's request.
+  Independent people wrote none of them. The scores are behavioral evidence
+  about this parser, not estimates of population accuracy.
+- The sets were written after earlier failures were known, so later sets probe
+  known weak spots more than ordinary usage does.
+- Three consumed revisions (of v9 and v11) are unavailable, as described above.
+- The acceptance results above come from the reports of each run. The runs
+  themselves aren't kept in the repository.
