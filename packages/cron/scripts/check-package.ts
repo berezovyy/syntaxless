@@ -1,5 +1,5 @@
 /**
- * Packaged-artifact check (Phase 21).
+ * Packaged-artifact check.
  *
  * `bun pm pack` is the source of truth for what ships. This script packs the
  * workspace into a temp directory, asserts the exact file list (rejecting extra
@@ -47,11 +47,17 @@ function walk(dir: string): string[] {
   return files;
 }
 
-/** Expected shipped paths (tarball-relative), derived from disk + `files`. */
+/** Expected shipped paths (tarball-relative), derived from disk + `files`, minus `!` exclusions. */
 function expectedPackedFiles(): Set<string> {
   const expected = new Set<string>(["package/package.json"]);
 
-  for (const entry of manifest.files) {
+  const excluded = new Set(
+    manifest.files
+      .filter((entry) => entry.startsWith("!"))
+      .map((entry) => `package/${entry.slice(1)}`),
+  );
+
+  for (const entry of manifest.files.filter((item) => !item.startsWith("!"))) {
     const path = join(packageRoot, entry);
 
     if (!existsSync(path)) throw new Error(`check:package: files entry missing: ${entry}`);
@@ -61,6 +67,10 @@ function expectedPackedFiles(): Set<string> {
     } else {
       expected.add(`package/${entry}`);
     }
+  }
+
+  for (const file of excluded) {
+    if (!expected.delete(file)) throw new Error(`check:package: excluded entry not built: ${file}`);
   }
 
   return expected;

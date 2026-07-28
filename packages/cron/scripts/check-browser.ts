@@ -224,7 +224,8 @@ try {
 
       check(
         recording.weightRequests === 1,
-        `parse after preload re-initialized the model (${recording.weightRequests} requests), expected no re-init`,
+        `parse after preload re-initialized the model (${recording.weightRequests} requests), ` +
+          "expected no re-init",
       );
 
       await page.context().setOffline(true);
@@ -281,7 +282,8 @@ try {
 
       check(
         recording.weightRequests === 2,
-        `dispose did not allow re-initialization (${recording.weightRequests} requests, expected 2)`,
+        "dispose did not allow re-initialization " +
+          `(${recording.weightRequests} requests, expected 2)`,
       );
 
       await page.close();
