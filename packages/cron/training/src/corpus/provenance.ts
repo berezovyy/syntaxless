@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-/** Producer (`rule` / `llm`) is not authorship. Never infer human origin from it. */
+/** Optional authorship and grouping metadata. Never infer human origin from the producer. */
 export const provenanceSchema = z
   .object({
     authorship: z.enum(["ai-authored", "human-authored", "public-source", "programmatic"]),

@@ -1,5 +1,5 @@
 /**
- * Write production binary shards and metadata in one streaming pass.
+ * Write binary feature shards and sequence metadata in one streaming pass.
  *
  * Read one JSONL record at a time and write all three split shards with bounded
  * buffers. The shard contract is consumed by `training/cron/dataset.py`.
@@ -16,14 +16,13 @@ import { corpusRecordSchema } from "./corpus/merge.js";
 import type { CorpusRecord, Split } from "./corpus/merge.js";
 import { featurizeRecord, MAX_TOKENS, POPULATION_IDS, SHARD_FORMAT } from "./featurize.js";
 import type { FeaturizeManifest, PerRecord } from "./featurize.js";
-import { classifyPopulation } from "./mix/quotas.js";
+import { classifyPopulation } from "./population.js";
 import { METADATA_SUFFIX, sequenceMetadata, SequenceMetadataWriter } from "./sequence-metadata.js";
 
 const SPLITS: readonly Split[] = ["train", "validation", "heldout"];
 const repo = fileURLToPath(new URL("../../../../", import.meta.url));
-// Keep one fixed buffer per output file.  Retaining thousands of small typed
-// array backing stores until Buffer.concat() was cheap for small corpora, but
-// caused Bun's RSS to grow until Linux killed production featurization.
+// Keep one fixed buffer per output file so memory does not grow with the
+// number of rows written.
 const WRITE_BUFFER_BYTES = 1024 * 1024;
 
 class BufferedWriter {

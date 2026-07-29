@@ -7,7 +7,7 @@ import { writeSync } from "node:fs";
 import { isScheduleLabel } from "../../src/model/labels.js";
 import { SPEECH_ACTS } from "../../src/model/speech-acts.js";
 import type { CorpusRecord } from "./corpus/merge.js";
-import { corpusTextKey } from "./corpus/production/protected-text.js";
+import { corpusTextKey } from "./corpus/protected-text.js";
 import type { PerRecord } from "./featurize.js";
 import { sha256Hex } from "./fingerprint.js";
 

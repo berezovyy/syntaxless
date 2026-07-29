@@ -3,8 +3,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { normalize } from "../../../../src/parser/normalize";
-import { RESERVED_PHRASES } from "../../background";
+import { normalize } from "../../../src/parser/normalize";
+import { RESERVED_PHRASES } from "../background";
 
 export interface ProtectedSource {
   file: string;
@@ -81,7 +81,7 @@ export class ProtectedText {
 
 /** Load all evaluation JSONL, including calibration, without exposing its wording. */
 export function loadProtectedText(): ProtectedText {
-  const training = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+  const training = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const evaluation = resolve(training, "../evaluation");
 
   const paths = readdirSync(evaluation)

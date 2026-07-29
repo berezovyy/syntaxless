@@ -14,11 +14,3 @@ export function faAtCoverage(input: {
 
   return { fa, coverage, formatted: `${fa}@${coverage}` };
 }
-
-export function faAtCovMeetsTarget(formatted: string, faMax = 0.01, coverageMin = 0.9): boolean {
-  const match = /^([0-9.]+)@([0-9.]+)$/.exec(formatted.trim());
-
-  if (match === null) return false;
-
-  return Number(match[1]) <= faMax && Number(match[2]) >= coverageMin;
-}

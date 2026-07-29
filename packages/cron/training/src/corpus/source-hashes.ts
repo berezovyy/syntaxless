@@ -25,7 +25,7 @@ export function fileHash(path: string | URL): string {
 }
 
 export function corpusCodeHashes(entryUrl: string): Record<string, string> {
-  const cron = fileURLToPath(new URL("../../../../", import.meta.url));
+  const cron = fileURLToPath(new URL("../../../", import.meta.url));
   const result: Record<string, string> = {};
   const visited = new Set<string>();
   const scanner = new Bun.Transpiler({ loader: "ts" });
@@ -48,15 +48,14 @@ export function corpusCodeHashes(entryUrl: string): Record<string, string> {
   visit(fileURLToPath(entryUrl));
   result["$bun.version"] = createHash("sha256").update(Bun.version).digest("hex");
 
-  // Bare package imports are pinned by the lockfiles. Keep the Python loader
-  // and verifier pinned too: their consumption checks are part of publication.
+  // Bare package imports are pinned by the lockfiles. The Python shard loader
+  // is pinned too because it defines how the written features are consumed.
   for (const path of [
     join(cron, "package.json"),
     join(cron, "training/package.json"),
     join(cron, "../../package.json"),
     join(cron, "../../bun.lock"),
     join(cron, "../../training/cron/dataset.py"),
-    join(cron, "../../training/cron/verify_production_shards.py"),
     join(cron, "../../training/cron/uv.lock"),
   ]) {
     result[relative(cron, path)] = fileHash(path);

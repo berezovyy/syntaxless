@@ -17,7 +17,6 @@ from calibrate import THRESHOLD_GRID, boundary_f1, calibrate, count_boundaries
 from dataset import ROLE_LABELS, SequenceLengths, Dataset
 from model import SCHEDULE_KIND_NAMES, SPEECH_ACT_NAMES, Tagger
 from test_dataset import _write_tiny_shard
-from verify_production_shards import array_digest, blocks_digest, lengths_within
 
 
 def test_loader_fields_stay_memory_mapped() -> None:
@@ -36,9 +35,6 @@ def test_block_scans_equal_whole_array_answers() -> None:
         assert dataset.population_counts() == {"R": 1, "H": 0, "E": 2}
         kinds = np.concatenate(list(dataset.schedule_kind_blocks()))
         np.testing.assert_array_equal(kinds, dataset.frame_schedule_kinds[np.asarray(dataset.frames)])
-        assert blocks_digest(dataset.schedule_kind_blocks(), np.uint8) == array_digest(kinds, np.uint8)
-        assert lengths_within(dataset, 1, 3)
-        assert not lengths_within(dataset, 2, 3)
 
 
 def _tiny_model() -> Tagger:
@@ -54,7 +50,7 @@ def test_streamed_calibration_counts_equal_the_collected_logit_reference() -> No
     with tempfile.TemporaryDirectory() as directory:
         dataset = Dataset(_write_tiny_shard(Path(directory)))
         model = _tiny_model()
-        # Reference: the old whole-split collection, legal here because the
+        # Reference: whole-split collection, acceptable here because the
         # fixture has three sequences.
         logits, targets, masks = [], [], []
         with torch.no_grad():

@@ -21,8 +21,6 @@ const FOSSIL = [
   /rehearsal begins/i,
 ];
 
-const STOP = new Set(["a", "an", "the", "to", "of", "in", "on", "at", "or", "as"]);
-
 export interface BagText {
   bag: string;
   id: string;
@@ -54,54 +52,6 @@ export function allBagTexts(): BagText[] {
   }
 
   return rows;
-}
-
-export function contentWords(text: string): string[] {
-  return normalizeText(text)
-    .split(/[^a-z0-9']+/)
-    .filter((word) => word.length >= 2 && !STOP.has(word));
-}
-
-export function contentTrigrams(text: string): string[] {
-  const words = contentWords(text);
-  const out: string[] = [];
-
-  for (let index = 0; index + 2 < words.length; index++) {
-    out.push(`${words[index]} ${words[index + 1]} ${words[index + 2]}`);
-  }
-
-  return out;
-}
-
-export function intraBagTrigramCollisions(): string[] {
-  const byBag = new Map<string, BagText[]>();
-
-  for (const row of allBagTexts()) {
-    const list = byBag.get(row.bag) ?? [];
-
-    list.push(row);
-    byBag.set(row.bag, list);
-  }
-
-  const hits: string[] = [];
-
-  for (const [bag, rows] of byBag) {
-    const owner = new Map<string, string>();
-
-    for (const row of rows) {
-      for (const trigram of contentTrigrams(row.text)) {
-        const previous = owner.get(trigram);
-
-        if (previous !== undefined && previous !== row.id) {
-          hits.push(`${bag}: "${trigram}" in ${previous} and ${row.id}`);
-        } else {
-          owner.set(trigram, row.id);
-        }
-      }
-    }
-  }
-
-  return hits;
 }
 
 export function fossilHits(text: string): string[] {

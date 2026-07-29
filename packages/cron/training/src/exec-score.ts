@@ -17,7 +17,3 @@ export function execEqual(predicted: ScheduleIntent | null, gold: ScheduleIntent
 
   return false;
 }
-
-export function execRisk(predicted: ScheduleIntent | null, gold: ScheduleIntent | null): number {
-  return execEqual(predicted, gold) ? 0 : 1;
-}

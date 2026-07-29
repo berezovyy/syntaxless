@@ -6,8 +6,8 @@ import { WEEKDAY_SEQUENCE, WORDS } from "../../src/parser/lexicon.js";
 import { normalize } from "../../src/parser/normalize";
 import type { ScheduleIntent, Weekday } from "../../src/types/intent";
 import { copySentence } from "./discourse";
-import type { Family } from "./sampler";
-import { assertValid } from "./sampler";
+import type { Family } from "./family";
+import { assertValid } from "./family";
 import { Sentence } from "./sentence";
 
 export type CorrectionSlot = "A" | "B";

@@ -3,8 +3,8 @@ import { writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { tempDir } from "../../../tests/helpers/temp-dir";
-import { corpusCodeHashes } from "./source-hashes";
+import { corpusCodeHashes } from "../src/corpus/source-hashes";
+import { tempDir } from "./helpers/temp-dir";
 
 test("producer identity follows imports, reexports, data and cycles without executing code", () => {
   const directory = tempDir("syntaxless-code-identity-");
@@ -19,7 +19,7 @@ test("producer identity follows imports, reexports, data and cycles without exec
   writeFileSync(join(directory, "unrelated.ts"), "export const mode = 1;");
   const url = pathToFileURL(entry).href;
   const initial = corpusCodeHashes(url);
-  const cron = fileURLToPath(new URL("../../../../", import.meta.url));
+  const cron = fileURLToPath(new URL("../../", import.meta.url));
 
   for (const name of [
     "entry.ts",

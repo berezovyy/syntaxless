@@ -3,8 +3,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadProtectedText, ProtectedText } from "./corpus/production/protected-text.js";
+import { loadProtectedText, ProtectedText } from "./corpus/protected-text.js";
 import { sha256Hex } from "./fingerprint.js";
+
+const UNAVAILABLE_RECORDS_LIMITATION =
+  "Some consumed historical records are unavailable. " +
+  "Available evaluation wording is excluded, " +
+  "but exclusion of unavailable wording cannot be verified. " +
+  "Fresh reserved acceptance is still required for promotion.";
 
 type Partition = {
   partitionSha256: string;
@@ -95,9 +101,7 @@ export function loadCompactProtection() {
       ledgerPartitions: ledger.acceptancePartitionSha256.length,
       verifiedPartitions: ledger.acceptancePartitionSha256.length - missing.length,
       unavailablePartitionSha256: missing as string[],
-      limitation: missing.length
-        ? "Some consumed historical records are unavailable. Available evaluation wording is excluded, but exclusion of unavailable wording cannot be verified. Fresh reserved acceptance is still required for promotion."
-        : null,
+      limitation: missing.length ? UNAVAILABLE_RECORDS_LIMITATION : null,
     },
   };
 }
