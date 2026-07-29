@@ -20,18 +20,17 @@ import {
   fingerprintExample,
   fingerprintPattern,
   structuralPattern,
-} from "./fingerprint";
-import type { CorpusRecord, Split } from "./generate";
-import { expandKinds, iterateKinds, kindIds } from "./kinds";
-import type { ExampleSplit, KindExample, KindId } from "./kinds";
+} from "./fingerprint.js";
+import { SPLITS } from "./generate.js";
+import type { CorpusRecord, Split } from "./generate.js";
+import { expandKinds, iterateKinds, kindIds } from "./kinds.js";
+import type { ExampleSplit, KindExample, KindId } from "./kinds.js";
 
 /** Provenance seed stored on every record; the expansion is not random. */
 export const BACKWARD_SEED = 20260915;
 
 /** Versioned split salt. Never depend on row order, values, or --kinds filters. */
 export const SPLIT_VERSION = "kinds-frames-v1";
-
-const SPLITS: readonly Split[] = ["train", "validation", "heldout"];
 
 const GENERATOR_SOURCES: readonly string[] = [
   "../../src/parser/lexicon.ts",

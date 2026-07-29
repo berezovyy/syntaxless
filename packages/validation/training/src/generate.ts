@@ -1,12 +1,10 @@
 /**
- * Corpus record contract shared by the backward generator and the featurizer.
- *
- * Sampling-family generate.ts is not the v0 path: kinds × templates in
- * `backward.ts` own the JSONL. This module only names the record shape so
- * Python `dataset.py` and featurize share one schema.
+ * Corpus record contract shared by the corpus generators (`compact.ts` for
+ * training, `backward.ts` for the strict-grammar baseline), the featurizer,
+ * evaluation, and the Python `dataset.py` loader.
  */
-import type { FieldIntent } from "../../src/types/intent";
-import type { Span } from "./sentence";
+import type { FieldIntent } from "../../src/types/intent.js";
+import type { Span } from "./sentence.js";
 
 export type Split = "train" | "validation" | "heldout";
 

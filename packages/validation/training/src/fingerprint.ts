@@ -12,8 +12,8 @@
  */
 import { createHash } from "node:crypto";
 
-import { isStructural } from "../../src/model/labels";
-import type { Span } from "./sentence";
+import { isStructural } from "../../src/model/labels.js";
+import type { Span } from "./sentence.js";
 
 /** The one token a value slot contributes to a pattern. */
 export const SLOT = "slot";

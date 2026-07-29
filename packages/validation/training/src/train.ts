@@ -148,7 +148,9 @@ for (const split of ["train", "validation", "heldout"] as const) {
 storage();
 
 runPython([
-  "training/validation/train.py",
+  "training/shared/train.py",
+  "--package",
+  "validation",
   "--data-prefix",
   prefix,
   "--corpus",

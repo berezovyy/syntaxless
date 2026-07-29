@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import { schema } from "../src/index.ts";
 
-test("schema(manifesto sentence) returns schema and intent", async () => {
+test("schema returns the compiled schema and its intent", async () => {
   const result = await schema("required email with max 100 characters");
 
   expect(result.supported).toBe(true);
@@ -19,7 +19,7 @@ test("schema(manifesto sentence) returns schema and intent", async () => {
   }
 });
 
-test("schema(cron sentence) fails closed with null intent", async () => {
+test("schema refuses an off-domain schedule sentence with a null intent", async () => {
   const result = await schema("every weekday at 9");
 
   expect(result.supported).toBe(false);

@@ -9,8 +9,8 @@
  *
  * Surfaces come only from the runtime lexicon. No LLM is consulted here.
  */
-import type { FieldIntent, FieldType } from "../../src/types/intent";
-import type { Family } from "./generate";
+import type { FieldIntent, FieldType } from "../../src/types/intent.js";
+import type { Family } from "./generate.js";
 import {
   type NumberStyle,
   renderField,
@@ -22,8 +22,8 @@ import {
   surfacesForPresence,
   surfacesForType,
   surfacesForUnit,
-} from "./renderer";
-import type { RenderedExample } from "./renderer";
+} from "./renderer.js";
+import type { RenderedExample } from "./renderer.js";
 
 export type KindId =
   | "email-required-maxlength"
@@ -497,8 +497,8 @@ const NUM_BETWEEN: readonly NumberValue[] = [
 const NUM_EXACT: readonly NumberValue[] = [{ exact: 0 }, { exact: 10 }, { exact: 42 }];
 
 /**
- * Negative families. Wording is original to this catalog; it is not copied
- * from `packages/cron/evaluation`. Each line must fail the rule parser.
+ * Negative families. Wording is original to this catalog and each line must
+ * fail the rule parser.
  */
 const NEGATIVES: Record<
   Extract<

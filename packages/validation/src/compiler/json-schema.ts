@@ -2,12 +2,11 @@ import type { Bound, FieldIntent, FieldType } from "../types/intent.js";
 import { validateField } from "./validate.js";
 
 /**
- * JSON Schema is the portable compile target (the cron-string equivalent).
- * Zod/HTML5 are later compilers against the same AST.
+ * JSON Schema 2020-12 target for one field.
  * Never invent `pattern` or `format` beyond the closed FieldType map.
- * `required` on a nameless field: string-like required ⇒ `minLength: 1`
- * (and format for email/url/uuid). Object-level `required` arrays wait for
- * multi-field schemas. v0 compile refuses `nullable`.
+ * A required string-like field compiles to `minLength: 1` (plus `format` for
+ * email/url/uuid); property presence belongs to `compileObject`'s `required`
+ * array. `nullable` intents are refused.
  */
 export type JsonSchema = {
   type: "string" | "number" | "integer" | "boolean";
@@ -66,7 +65,7 @@ export function compile(intent: FieldIntent): CompileResult {
   if (intent.nullable === true) {
     return {
       supported: false,
-      reason: "nullable is not a v0 compile target",
+      reason: "nullable is not a supported compile target",
       code: "nullable",
     };
   }

@@ -19,9 +19,9 @@ export type StringLikeType = "string" | "email" | "url" | "uuid";
 export type NumberLikeType = "number" | "integer";
 
 /**
- * One field constraint. Freeze:
- * - v0 sentences must state required or optional; the object still always has
- *   `required: boolean` once parsed. Do not default.
+ * One field constraint. Invariants:
+ * - Sentences must state required or optional; a parsed intent always has
+ *   `required: boolean`. Presence is never defaulted.
  * - Email is a type, not a `format` flag on the AST.
  * - `minimum`/`maximum` stay Bound, not bare numbers.
  * - Length is a bare integer (always inclusive). Exclusive length is widened

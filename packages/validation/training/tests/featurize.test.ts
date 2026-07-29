@@ -6,7 +6,7 @@ import { featurizeRecord, PADDING_LABEL } from "../src/featurize.ts";
 import type { CorpusRecord } from "../src/generate.ts";
 import { renderField } from "../src/renderer.ts";
 
-test("featurize assigns gold labels to manifesto tokens", () => {
+test("featurize assigns gold labels to a rendered email constraint", () => {
   const rendered = renderField({ type: "email", required: true, maxLength: 100 }, undefined, {
     order: "presence-type-glue-comparison",
     typeSurface: "email",

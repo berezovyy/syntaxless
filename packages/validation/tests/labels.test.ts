@@ -3,12 +3,12 @@ import { expect, test } from "bun:test";
 import { LABELS } from "../src/model/labels.ts";
 import { fixtureArtifact } from "./helpers/artifact.ts";
 
-test("legacy formats and reordered vocabularies fail before inference", async () => {
+test("older format versions and reordered vocabularies fail before inference", async () => {
   const { getEngine } = await import("../src/model/engine.ts");
-  const legacy = { ...fixtureArtifact(), version: 1 };
+  const older = { ...fixtureArtifact(), version: 1 };
 
   await expect(
-    getEngine({ weights: new TextEncoder().encode(JSON.stringify(legacy)) }),
+    getEngine({ weights: new TextEncoder().encode(JSON.stringify(older)) }),
   ).rejects.toThrow("unsupported-weights-version");
 
   const reordered = { ...fixtureArtifact(), labels: [...LABELS].reverse() };
