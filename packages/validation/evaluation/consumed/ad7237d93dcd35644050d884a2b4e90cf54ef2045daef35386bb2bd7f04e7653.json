@@ -1,7 +1,8 @@
 {
   "sha256": "ad7237d93dcd35644050d884a2b4e90cf54ef2045daef35386bb2bd7f04e7653",
+  "acceptance": "packages/validation/evaluation/reserved/ai-v2.jsonl",
   "candidateSha256": "d5f497831079fc1199abcedb0456e6a1d7981ad3baa7729c28ffad7c20dd4e76",
-  "run": "/home/berezovyy/Projects/syntaxless/training/validation/runs/coverage64-2026-10-11T18-05-54-584Z",
+  "run": "training/validation/runs/coverage64-2026-10-11T18-05-54-584Z",
   "consumedAt": "2026-10-11T18:09:23.496Z",
   "authorship": "AI-authored by the implementation assistant, using a separate evaluation writer without training renderer, parser, or model inference",
   "independenceLimits": "Same assistant designed implementation and evaluation; generated variations of a limited number of authored constructions. This is not independent human evidence, nor a population accuracy estimate."

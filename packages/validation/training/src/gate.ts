@@ -13,6 +13,7 @@ import {
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
+import { fromRepository, toRepository } from "../../../shared/training/paths.js";
 import { runSizeGate } from "../../scripts/size-gate.js";
 import { compile } from "../../src/compiler/index.js";
 import type { JsonSchema } from "../../src/compiler/index.js";
@@ -85,10 +86,15 @@ function sourceIdentity(): string {
     );
   }
 
-  for (const name of ["train.py", "model.py", "dataset.py", "export.py", "calibrate.py"]) {
-    inventory[`training/validation/${name}`] = sha256(
-      readFileSync(resolve(root, "training/validation", name)),
-    );
+  for (const path of [
+    "training/validation/export.py",
+    "training/shared/train.py",
+    "training/shared/artifact.py",
+    "training/shared/calibrate.py",
+    "training/shared/model.py",
+    "training/shared/dataset.py",
+  ]) {
+    inventory[path] = sha256(readFileSync(resolve(root, path)));
   }
 
   for (const name of ["gate", "evaluate", "parity", "freeze"]) {
@@ -207,6 +213,9 @@ export async function runGate(run: string, acceptance: string, promote = false) 
     throw new Error("candidate or runtime scope changed after freeze");
   }
 
+  // Consumed records store repository-relative paths, so both must be inside it.
+  const recordedAcceptance = toRepository(acceptance);
+  const recordedRun = toRepository(run);
   const bytes = readFileSync(acceptance);
   const digest = sha256(bytes);
   const authored = JSON.parse(readFileSync(`${acceptance}.meta.json`, "utf8"));
@@ -227,14 +236,14 @@ export async function runGate(run: string, acceptance: string, promote = false) 
   const corpusPath = JSON.parse(readFileSync(join(run, "report.json"), "utf8")).config?.corpus;
 
   if (!corpusPath) throw new Error("training report lacks corpus provenance");
-  const trainingBytes = readFileSync(resolve(root, corpusPath));
+  const trainingBytes = readFileSync(fromRepository(corpusPath));
 
   if (sha256(trainingBytes) !== identity.calibrationCorpusSha256) {
     throw new Error("training/calibration corpus changed");
   }
 
   const trainingTexts = new Set(
-    readCorpus(resolve(root, corpusPath)).map((row) => row.text.trim().toLowerCase()),
+    readCorpus(fromRepository(corpusPath)).map((row) => row.text.trim().toLowerCase()),
   );
 
   if (rows.some((row) => trainingTexts.has(row.text.trim().toLowerCase()))) {
@@ -282,7 +291,7 @@ export async function runGate(run: string, acceptance: string, promote = false) 
   for (const name of ["test_model.py", "test_export.py", "test_dataset.py"]) {
     execFileSync(
       resolve(root, "training/cron/.venv/bin/python"),
-      [resolve(root, "training/validation", name)],
+      [resolve(root, "training/shared", name)],
       { cwd: root, stdio: "inherit" },
     );
   }
@@ -304,7 +313,7 @@ export async function runGate(run: string, acceptance: string, promote = false) 
   const weights = readFileSync(join(frozen, "weights.json"));
 
   const synthetic = await evaluateRecords(
-    readCorpus(resolve(root, corpusPath)).filter((row) => row.split === "heldout"),
+    readCorpus(fromRepository(corpusPath)).filter((row) => row.split === "heldout"),
     async (row) => parse(row.text, { source: "model", weights }),
   );
 
@@ -353,8 +362,9 @@ export async function runGate(run: string, acceptance: string, promote = false) 
     JSON.stringify(
       {
         sha256: digest,
+        acceptance: recordedAcceptance,
         candidateSha256: identity.artifactFileSha256,
-        run,
+        run: recordedRun,
         consumedAt: new Date().toISOString(),
         authorship: authored.authorship,
         independenceLimits: authored.independenceLimits,
