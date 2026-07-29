@@ -5,7 +5,7 @@
  * fragment. Nothing here or in the renderer reads `parse()` output, and no label
  * is ever inferred from rendered text.
  *
- * Alignment contract (enforced by Phase 13): each `add()` inserts one fragment
+ * Alignment contract (checked by the featurizer tests): each `add()` inserts one fragment
  * whose `[start, end)` covers a whole number of tokenizer tokens, so a fragment
  * never straddles a token boundary. JS strings are UTF-16, so offsets recorded
  * here line up with the tokenizer's `RawToken` offsets.

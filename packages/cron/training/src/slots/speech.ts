@@ -21,8 +21,8 @@ function frame(
   };
 }
 
-/** Former `POSITIVE_CARRIERS` — request-shaped prefixes, hole on the right. */
-const REQUEST_LEGACY: readonly SpeechFrame[] = [
+/** Request-shaped prefixes with the schedule hole on the right. */
+const REQUEST_PREFIXES: readonly SpeechFrame[] = [
   frame("request", "set-reminder", "set a reminder for"),
   frame("request", "schedule-this", "can you schedule this for"),
   frame("request", "make-happen", "please make this happen"),
@@ -70,8 +70,7 @@ const REQUEST_EXTRA: readonly SpeechFrame[] = [
 ];
 
 const DESCRIPTIVE: readonly SpeechFrame[] = [
-  // Reporting an event is not an instruction to create it. These were
-  // previously inherited from the legacy positive-carrier inventory.
+  // Reporting an event is not an instruction to create it.
   frame("descriptive", "next-occurrence", "the next occurrence is at"),
   frame("descriptive", "shuttle-departs", "the shuttle departs at"),
   frame("descriptive", "ferry-pulls", "the ferry pulls out at"),
@@ -247,7 +246,7 @@ const INCOMPLETE: readonly SpeechFrame[] = [
 ];
 
 export const SPEECH_FRAMES: readonly SpeechFrame[] = [
-  ...REQUEST_LEGACY,
+  ...REQUEST_PREFIXES,
   ...REQUEST_EXTRA,
   ...DESCRIPTIVE,
   ...QUESTION,

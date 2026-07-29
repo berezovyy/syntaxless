@@ -1,5 +1,5 @@
 /**
- * Seeded draws from production bags. The product is sampled, never dumped.
+ * Seeded draws from the carrier phrase bags. The product is sampled, never dumped.
  */
 import { createRng, type Rng } from "../rng";
 import { Sentence } from "../sentence";

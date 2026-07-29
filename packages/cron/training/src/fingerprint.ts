@@ -76,16 +76,8 @@ export function fingerprintSpans(text: string, spans: readonly Span[]): string {
   return sha256Hex(JSON.stringify(fingerprintPattern(text, spans)));
 }
 
-function inferLegacySpeechAct(spans: readonly Span[]): SpeechAct {
+function inferSpeechAct(spans: readonly Span[]): SpeechAct {
   return spans.some((span) => isScheduleLabel(span.label)) ? "request" : "none";
-}
-
-/**
- * Structural pattern prefixed with speech-act so a descriptive wrap of the
- * same inner schedule cannot share a split-assignment key with the request.
- */
-export function framePattern(text: string, spans: readonly Span[], speechAct: SpeechAct): string[] {
-  return [speechAct, ...structuralPattern(text, spans)];
 }
 
 /** Fingerprint a rendered example. Speech-act is part of the hash. */
@@ -94,7 +86,7 @@ export function fingerprintExample(example: {
   spans: readonly Span[];
   speechAct?: SpeechAct;
 }): string {
-  const speechAct = example.speechAct ?? inferLegacySpeechAct(example.spans);
+  const speechAct = example.speechAct ?? inferSpeechAct(example.spans);
 
   return sha256Hex(
     JSON.stringify({

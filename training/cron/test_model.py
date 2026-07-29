@@ -81,7 +81,6 @@ def test_factorized_padding_neutrality() -> None:
             continue
         aligned = right if left.shape == right.shape else right[:, :content]
         torch.testing.assert_close(left, aligned)
-    print("factorized padding neutrality: ok")
 
 
 def test_padding_neutrality() -> None:
@@ -132,7 +131,6 @@ def test_padding_neutrality() -> None:
             atol=1e-5,
             rtol=1e-4,
         ), f"actionable logits changed under padding (qat={qat})"
-    print(f"padding neutrality: ok (content={content}, padded width {padded[0].shape[1]})")
 
 
 def test_finite_gradients() -> None:
@@ -164,7 +162,6 @@ def test_finite_gradients() -> None:
         assert torch.isfinite(parameter.grad).all(), f"non-finite gradient: {name}"
         checked += 1
     assert checked > 0, "no parameter received a gradient"
-    print(f"finite qat gradients: ok ({checked} tensors)")
 
 
 if __name__ == "__main__":

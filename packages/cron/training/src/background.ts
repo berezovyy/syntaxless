@@ -4,7 +4,7 @@
  * Carriers give positive expressions an ordinary-language context and supply
  * the all-`O` negatives. Every candidate is normalized and rejected while it
  * collides with {@link RESERVED_PHRASES}; the reserved list is registered here
- * exactly once and reused by Phase 08's held-out split.
+ * exactly once and shared with the protected-wording checks.
  */
 import { ORDINAL_WORDS } from "../../src/parser/lexicon.js";
 import type { Rng } from "./rng";

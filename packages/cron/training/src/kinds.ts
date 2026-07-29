@@ -12,7 +12,7 @@ import {
 import type { Label } from "../../src/model/labels.js";
 import type { SpeechAct } from "../../src/model/speech-acts";
 /**
- * Sentence-kind catalog for the backward corpus generator.
+ * Sentence-kind catalog for the compact corpus generator.
  *
  * Coverage is kinds, not paraphrases of one frame. A kind is one way a
  * schedule is said (unit interval, day group, every-other, compound time,
@@ -20,8 +20,8 @@ import type { SpeechAct } from "../../src/model/speech-acts";
  * wordings of that kind; held-out templates use a different frame so train
  * and held-out fingerprints cannot collide.
  *
- * Surfaces come only from the runtime lexicon. Labels match the Phase 07
- * renderer / Phase 17 decoder contract: unit words are `GLUE`, numbers are
+ * Surfaces come only from the runtime lexicon. Labels match the
+ * runtime decoder contract: unit words are `GLUE`, numbers are
  * `INTERVAL`, adverbs `hourly`/`daily` are `INTERVAL`, groups are `DAYGROUP`.
  *
  * No LLM is consulted here. Wording variety is the template list.
@@ -66,10 +66,10 @@ import { requireClock } from "./clock.js";
 import { CORRECTION_FRAMES, correctionPairs, wrapCorrection } from "./correction";
 import { copySentence, wrapDiscourse } from "./discourse";
 import type { DiscourseWrap } from "./discourse";
+import type { Family } from "./family";
+import { assertValid } from "./family";
 import { spellingVariant } from "./noise";
 import type { RenderedExample } from "./renderer";
-import type { Family } from "./sampler";
-import { assertValid } from "./sampler";
 import { Sentence } from "./sentence";
 import { wrapsForKernel } from "./slots/sample";
 
@@ -207,11 +207,9 @@ const MONTH_RANGES_2026: readonly { start: string; end: string }[] = integers(1,
 );
 
 /**
- * Ordinary all-O leftovers. Schedule-bearing groups (quoted, temporal,
- * conversational, ambiguous, …) used to paint `every Monday` as `O` and are
- * gone. Hard-no is a labeled hole + non-request wrap from `src/mix`. Easy-no
- * mass comes from pinned Tatoeba. This list is retired as E mass once Tatoeba
- * is on; kept so the `negative` kind still has ≥3 frames.
+ * Ordinary all-O sentences for the `negative` kind, which needs at least three
+ * frames. Schedule-bearing negatives come from labeled schedules wrapped in a
+ * non-request speech act, never from labeling schedule words as `O`.
  */
 const NEGATIVE_GROUPS = {
   ordinary: [
@@ -4175,8 +4173,8 @@ export function* iterateKinds(wanted?: ReadonlySet<KindId>): Generator<KindExamp
 
 /**
  * Bounded catalog oracle: each KindDef template × up to `seedsPerTemplate`
- * intents, clean renders only (no carriers, no noise). Used by Phase 0 to
- * measure decoder/gold round-trip without expanding the full mix.
+ * intents, clean renders only (no carriers, no noise). The oracle gate uses it to
+ * measure decoder/gold round-trip without expanding the full corpus.
  */
 export function* iterateKindOracleSeeds(seedsPerTemplate = 50): Generator<KindExample> {
   const perNegativeTemplate = new Map<string, number>();
@@ -4265,64 +4263,6 @@ export function* iterateKindOracleSeeds(seedsPerTemplate = 50): Generator<KindEx
 
         collected += 1;
       }
-    }
-  }
-}
-
-export interface ScheduleKernel {
-  kernel: KindExample;
-  hole: Sentence;
-}
-
-/**
- * Kernel-only schedule rows (no slot wraps, no noise, no all-O negatives).
- * Mix draws R/H wraps from this pool instead of walking catalog order.
- */
-export function* iterateScheduleKernels(
-  perKind = 16,
-  wanted?: ReadonlySet<KindId>,
-): Generator<ScheduleKernel> {
-  for (const kind of KINDS) {
-    if (wanted !== undefined && !wanted.has(kind.id)) continue;
-    if (kind.id === "negative" || isDiscourseKind(kind.id) || kind.id === "correction") continue;
-    const trainTemplates = kind.templates.filter((template) => template.split === "train");
-
-    const intents = kind.intents.filter((intent): intent is NonNullable<typeof intent> => {
-      if (intent === null) return false;
-      assertValid(intent);
-
-      return true;
-    });
-
-    if (trainTemplates.length === 0 || intents.length === 0) continue;
-    let taken = 0;
-    let attempts = 0;
-    const budget = perKind * 8;
-
-    while (taken < perKind && attempts < budget) {
-      const intent = intents[Math.floor((taken * intents.length) / perKind) % intents.length]!;
-      const template = trainTemplates[attempts % trainTemplates.length]!;
-
-      attempts += 1;
-      const sentence = new Sentence();
-
-      sentence.clause();
-      if (!kind.render(sentence, intent, template.id)) continue;
-      const name = `${kind.id}/${template.id}`;
-
-      yield {
-        kernel: {
-          kind: kind.id,
-          family: kind.family,
-          template: name,
-          split: "train",
-          intent,
-          example: finish(sentence, name, "request"),
-        },
-        hole: sentence,
-      };
-
-      taken += 1;
     }
   }
 }

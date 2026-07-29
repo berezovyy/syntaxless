@@ -208,9 +208,9 @@ def schedule_kind_for_frame(frame_name: str) -> int:
     """Map a detailed generator kind onto the compact utterance-level head."""
     parts = frame_name.split("/")
     kind = parts[0]
-    # Whole-utterance production sources name their semantic family, not the
-    # legacy renderer kind. Never let ordinary negatives, clocks, bounds, or
-    # corrections silently inherit the old catch-all "weekly" target.
+    # Whole-utterance sources name their semantic family rather than a renderer
+    # kind. Ordinary negatives, clocks, bounds and corrections must never fall
+    # through to the catch-all "weekly" target.
     production_kinds = {
         "easy-no": "none",
         "minute-interval": "interval",
@@ -561,7 +561,7 @@ class Dataset:
         never a Python loop that slices the memmap per sequence.
 
         Unused rows hold the manifest's `featureRows` sentinel. Whitespace and
-        any label at or above `roleClasses` (the Phase 13 padding sentinel) are
+        any label at or above `roleClasses` (the featurizer's padding sentinel) are
         set to `-100`, the cross-entropy ignore index, so they contribute no
         role or boundary loss.
         """

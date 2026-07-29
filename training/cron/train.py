@@ -1,4 +1,4 @@
-"""The fixed production trainer used internally by `bun run train`.
+"""The fixed trainer that `bun run train:cron` runs after corpus preparation.
 
 Train each verified row once per epoch, select with actual calibrated TypeScript
 intent parsing on complete validation and export the selected checkpoint. The
@@ -79,11 +79,10 @@ def git_revision() -> str:
 def assert_disjoint(
     left: Dataset, right: Dataset, left_name: str = "train", right_name: str = "heldout"
 ) -> None:
-    """Check manifest fingerprint lists, which only legacy/small shards carry.
+    """Reject fingerprints shared by two splits when the manifests list them.
 
-    Production shards write an empty list: a per-row list would make every
-    manifest corpus-sized. Their split disjointness is proved upstream, where
-    the union keeps exactly one row per runtime-normalized text corpus-wide.
+    Shards may write an empty list to keep manifests small; their split
+    disjointness is then checked during corpus preparation.
     """
     overlap = set(left.fingerprints) & set(right.fingerprints)
     if overlap:
@@ -577,7 +576,7 @@ def validate_training_splits(datasets: tuple[Dataset, ...]) -> None:
 
 def main() -> int:
     if sys.argv[1:]:
-        raise ValueError("Training takes no flags. Use: bun run train")
+        raise ValueError("Training takes no flags. Use: bun run train:cron")
     started = time.perf_counter()
     config = production_config()
     if config.device == "cpu":

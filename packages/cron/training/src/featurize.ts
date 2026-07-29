@@ -6,7 +6,7 @@
  * and rejects a span that does not cover a complete token. It never guesses
  * a label or falls back to a parser: misalignment is a generator bug.
  *
- * Rule and LLM records take the identical path. The shard contract is owned
+ * Every corpus record takes the same path. The shard contract is owned
  * here and is authoritative for the Python reader: `uint16` sparse feature rows
  * per token, `uint8` labels/boundaries/kinds/speech/actionable, `int16` neighbour
  * pairs, a `uint32` sequence-offset table of length `N + 1`, and one `uint32`

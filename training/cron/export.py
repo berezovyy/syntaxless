@@ -11,9 +11,8 @@ computed from the decoded wire artifact.
 The int6 range is `[-31, 31]`, so a symbol is `value + 31` in `[0, 62]`. One
 segment per parameter records `name`, `offset`, `length`, `shape`, and `scale`.
 `artifactSha256` identifies the complete calibrated wire artifact, including
-layout, scales and vocabularies. Historical reports hashed only `q`; their
-identities must not be mixed with new evidence. The report is written last and
-is the commit marker: an export without a report is not valid.
+layout, scales and vocabularies. `export.json` is written after the module and
+parity fixtures and is the commit marker: an export without it is not valid.
 """
 from __future__ import annotations
 
@@ -100,7 +99,7 @@ def display_path(path: Path) -> str:
 
 
 def load_labels() -> list[str]:
-    """Read the one label vocabulary from the Phase 07 TypeScript source."""
+    """Read the label vocabulary from the runtime TypeScript source."""
     source = repo_root() / "packages" / "cron" / "src" / "model" / "labels.ts"
     text = source.read_text()
     start = text.index("export const LABELS")

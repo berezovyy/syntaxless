@@ -304,7 +304,6 @@ def test_round_trip_reproduces_quantized_parameters() -> None:
     assert set(decoded) == set(reference)
     for name, expected in reference.items():
         assert torch.equal(decoded[name], expected), f"parameter mismatch: {name}"
-    print(f"parameter round-trip: ok ({len(decoded)} tensors)")
 
 
 def test_round_trip_reproduces_reference_logits() -> None:
@@ -358,14 +357,9 @@ def test_round_trip_reproduces_reference_logits() -> None:
     assert actionable_error <= ATOL, (
         f"actionable logit error {actionable_error} exceeds {ATOL}"
     )
-    print(
-        "logit round-trip: ok "
-        f"(role {role_error:.2e}, boundary {boundary_error:.2e}, kind {kind_error:.2e}, "
-        f"speech {speech_error:.2e}, actionable {actionable_error:.2e})"
-    )
 
 
-def test_legacy_artifact_without_schedule_kind_head() -> None:
+def test_artifact_without_schedule_kind_head() -> None:
     model = build_model(
         schedule_kind_classes=0, speech_act_classes=0, actionable_head=False
     )
@@ -382,10 +376,9 @@ def test_legacy_artifact_without_schedule_kind_head() -> None:
     assert schedule_kind.numel() == 0
     assert speech_act.numel() == 0
     assert actionable.numel() == 0
-    print("legacy artifact without schedule-kind head: ok")
 
 
-def test_legacy_artifact_without_discourse_heads() -> None:
+def test_artifact_without_discourse_heads() -> None:
     model = build_model(
         schedule_kind_classes=len(SCHEDULE_KIND_NAMES),
         speech_act_classes=0,
@@ -405,12 +398,11 @@ def test_legacy_artifact_without_discourse_heads() -> None:
         _, _, _, speech_act, actionable = decoded(*make_batch())
     assert speech_act.numel() == 0
     assert actionable.numel() == 0
-    print("legacy artifact without discourse heads: ok")
 
 
 if __name__ == "__main__":
     test_round_trip_reproduces_quantized_parameters()
     test_round_trip_reproduces_reference_logits()
-    test_legacy_artifact_without_schedule_kind_head()
-    test_legacy_artifact_without_discourse_heads()
+    test_artifact_without_schedule_kind_head()
+    test_artifact_without_discourse_heads()
     print("test_export: all checks passed")

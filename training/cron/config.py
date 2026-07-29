@@ -1,4 +1,4 @@
-"""The current compact training recipe, serialized with every checkpoint.
+"""The compact training recipe, serialized with every checkpoint.
 
 The TypeScript coordinator supplies verified paths. Training parameters live
 here; there is no training-mode or hyperparameter command-line interface.
@@ -16,12 +16,12 @@ class Config:
     storage: str
     data_prefix: str
     device: str
-    seed: int = 20260913
-    epochs: int = 2
-    batch: int = 512
+    seed: int = 20261012
+    epochs: int = 24
+    batch: int = 128
     hidden: int = 64
     learning_rate: float = 3.0e-3
-    warmup_steps: int = 50
+    warmup_steps: int = 10
     qat_start: int = 1
     quantization_bits: int = 6
     amp: bool = False
@@ -39,7 +39,7 @@ def production_config() -> Config:
     prefix_value = os.environ.get("SYNTAXLESS_TRAIN_DATA_PREFIX")
     run_value = os.environ.get("SYNTAXLESS_TRAIN_RUN_DIRECTORY")
     if not prefix_value or not run_value:
-        raise ValueError("Start training from the repository root with: bun run train")
+        raise ValueError("Start training from the repository root with: bun run train:cron")
     prefix = Path(prefix_value)
     run = Path(run_value)
     if not prefix.is_absolute() or not run.is_absolute():
@@ -50,11 +50,6 @@ def production_config() -> Config:
         storage=str(run.parent),
         data_prefix=str(prefix),
         device="cuda" if cuda else "cpu",
-        seed=20261012,
-        epochs=24,
-        batch=128,
-        hidden=64,
-        warmup_steps=10,
         amp=cuda,
         prefetch=cuda,
         compile_model=cuda,

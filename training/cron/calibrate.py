@@ -1,15 +1,15 @@
 """Boundary-threshold calibration on development data only.
 
 The boundary head emits a raw logit. The runtime applies
-`boundaryLogit >= boundaryThreshold` (Phase 16), so the threshold lives in
+`boundaryLogit >= boundaryThreshold`, so the threshold lives in
 logit space, where `0.0` is the uncalibrated `sigmoid(0.5)` boundary.
 
 A single threshold has to serve two development distributions: the same-frame
 validation split and the reordered-frame held-out split. We sweep a fixed grid
 and pick the threshold that maximizes the *worst* boundary F1 across both, so a
 threshold that looks good on one frame ordering cannot win by starving the
-other. The held-out split is development data here; the reserved-carrier test
-set gates promotion only in Phase 19.
+other. The held-out split is development data here; only fresh reserved
+acceptance data can gate promotion.
 """
 from __future__ import annotations
 
