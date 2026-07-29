@@ -283,7 +283,8 @@ function author(): AcceptanceRow[] {
       const type = choose(types);
       const noun = choose(names[type]);
 
-      const base = `${p.text} ${noun} with at most ${n}${type === "number" || type === "integer" ? "" : " characters"}`;
+      const unitSuffix = type === "number" || type === "integer" ? "" : " characters";
+      const base = `${p.text} ${noun} with at most ${n}${unitSuffix}`;
 
       const text = {
         question: revision === 2 ? `Should this input be ${base}?` : `Would you recommend ${base}?`,
@@ -300,7 +301,8 @@ function author(): AcceptanceRow[] {
         conflict: `${choose(carriers)(`required optional ${noun}`)} Max ${n} characters.`,
         inverted: choose(carriers)(`required number at least ${n + 3} and at most ${n}`),
         incomplete: choose(carriers)(
-          `${p.text} ${noun} with ${choose(["at least", "less than", "between", "more than", "exactly"])}`,
+          `${p.text} ${noun} with ` +
+            choose(["at least", "less than", "between", "more than", "exactly"]),
         ),
         "unsupported-unit": choose(carriers)(
           `required ${noun} at most ${n} ${choose(["bytes", "words", "seconds", "lines"])}`,
@@ -309,7 +311,8 @@ function author(): AcceptanceRow[] {
         "unsupported-pattern": choose(carriers)(`required string matching the pattern code-${n}`),
         "unsafe-number": choose(carriers)(`required number at least 900719925474${10000 + n}`),
         approximate: choose(carriers)(
-          `required ${noun} ${choose(["around", "roughly", "about", "approximately", "~"])} ${n}${type === "number" || type === "integer" ? "" : " characters"}`,
+          `required ${noun} ` +
+            `${choose(["around", "roughly", "about", "approximately", "~"])} ${n}${unitSuffix}`,
         ),
       }[family]!;
 
@@ -455,9 +458,12 @@ if (import.meta.main) {
     authoringRevision: revision,
     createdAt: new Date().toISOString(),
     authorship:
-      "AI-authored by the implementation assistant, using a separate evaluation writer without training renderer, parser, or model inference",
+      "AI-authored by the implementation assistant, using a separate evaluation writer " +
+      "without training renderer, parser, or model inference",
     independenceLimits:
-      "Same assistant designed implementation and evaluation; generated variations of a limited number of authored constructions. This is not independent human evidence, nor a population accuracy estimate.",
+      "Same assistant designed implementation and evaluation; " +
+      "generated variations of a limited number of authored constructions. " +
+      "This is not independent human evidence, nor a population accuracy estimate.",
     authorSourceSha256: hash(readFileSync(import.meta.filename)),
     trainingEligible: false,
   };
