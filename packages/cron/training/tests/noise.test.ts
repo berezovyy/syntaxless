@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 
 import { tokenize } from "../../src/model/tokenizer";
-import { spellingVariant } from "./noise";
-import type { RenderedExample } from "./renderer";
+import { spellingVariant } from "../src/noise";
+import type { RenderedExample } from "../src/renderer";
 
 const clean: RenderedExample = {
   template: "noise-fixture",

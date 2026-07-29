@@ -1,6 +1,6 @@
 import type { WeightsArtifact } from "../../../src/model/decode";
 import { LABEL_COUNT, labelId, LABELS } from "../../../src/model/labels";
-import { weights as legacy } from "../../../src/model/weights.gen";
+import { weights as bundled } from "../../../src/model/weights.gen";
 
 /**
  * Exercise real candidate loading and inference without a local training run.
@@ -8,29 +8,29 @@ import { weights as legacy } from "../../../src/model/weights.gen";
  * test weights, not a trained candidate or evidence of parsing accuracy.
  */
 export function createTestWeights(role = labelId.WEEKDAY_MON, fixedRequest = false) {
-  const roleWeight = "f".repeat(LABEL_COUNT * legacy.hidden); // int6 zero
+  const roleWeight = "f".repeat(LABEL_COUNT * bundled.hidden); // int6 zero
 
   const roleBias = Array.from({ length: LABEL_COUNT }, (_, id) => (id === role ? "p" : "f")).join(
     "",
   );
 
   let weights: WeightsArtifact = {
-    ...legacy,
+    ...bundled,
     roleClasses: LABEL_COUNT,
     labels: LABELS,
-    q: legacy.q + roleWeight + roleBias,
+    q: bundled.q + roleWeight + roleBias,
     segments: [
-      ...legacy.segments.filter((segment) => !segment.name.startsWith("role_head.")),
+      ...bundled.segments.filter((segment) => !segment.name.startsWith("role_head.")),
       {
         name: "role_head.weight",
-        offset: legacy.q.length,
+        offset: bundled.q.length,
         length: roleWeight.length,
-        shape: [LABEL_COUNT, legacy.hidden],
+        shape: [LABEL_COUNT, bundled.hidden],
         scale: 1,
       },
       {
         name: "role_head.bias",
-        offset: legacy.q.length + roleWeight.length,
+        offset: bundled.q.length + roleWeight.length,
         length: roleBias.length,
         shape: [LABEL_COUNT],
         scale: 1,

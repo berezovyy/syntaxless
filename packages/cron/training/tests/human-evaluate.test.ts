@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import { resolveRepo } from "./evaluate";
+import { resolveRepo } from "../src/evaluate";
 import {
   assertAcceptanceFresh,
   assertHumanIsolation,
   decideHumanPromotion,
   parseHumanCorpus,
   selectCalibrationThreshold,
-} from "./human-evaluate";
-import type { HumanEvaluationRecord, HumanOverlayRates } from "./human-evaluate";
+} from "../src/human-evaluate";
+import type { HumanEvaluationRecord, HumanRates } from "../src/human-evaluate";
 
 const valid = {
   version: 1,
@@ -66,8 +66,8 @@ describe("assertHumanIsolation", () => {
 });
 
 describe("human evaluation policy", () => {
-  test("calibration cannot set promotion.eligible even when overlay-off meets bars", () => {
-    const passing: HumanOverlayRates = {
+  test("calibration reports bar failures but is never promotion-eligible", () => {
+    const passing: HumanRates = {
       accuracy: 1,
       silentMeaningChangeRate: 0,
       negativeFalseAcceptanceRate: 0,
@@ -75,15 +75,19 @@ describe("human evaluation policy", () => {
       criticalFailures: [],
     };
 
-    const decision = decideHumanPromotion("calibration", passing, passing);
+    expect(decideHumanPromotion("calibration", passing)).toEqual({
+      eligible: false,
+      passed: false,
+      failures: [],
+    });
 
-    expect(decision.eligible).toBe(false);
-    expect(decision.passed).toBe(false);
-    expect(decision.overlayOffEligibleForDefault).toBe(true);
+    expect(decideHumanPromotion("calibration", { ...passing, accuracy: 0.5 }).failures).toEqual([
+      "overall accuracy below 0.95",
+    ]);
   });
 
   test("regression is never promotion-eligible", () => {
-    const passing: HumanOverlayRates = {
+    const passing: HumanRates = {
       accuracy: 1,
       silentMeaningChangeRate: 0,
       negativeFalseAcceptanceRate: 0,
@@ -91,11 +95,10 @@ describe("human evaluation policy", () => {
       criticalFailures: [],
     };
 
-    const decision = decideHumanPromotion("regression", passing, passing);
+    const decision = decideHumanPromotion("regression", passing);
 
     expect(decision.eligible).toBe(false);
     expect(decision.passed).toBe(false);
-    expect(decision.overlayOffEligibleForDefault).toBe(false);
   });
 
   test("selects maximum coverage that satisfies both safety limits", () => {
@@ -136,7 +139,7 @@ describe("human evaluation policy", () => {
   });
 });
 
-const passing: HumanOverlayRates = {
+const passing: HumanRates = {
   accuracy: 1,
   silentMeaningChangeRate: 0,
   negativeFalseAcceptanceRate: 0,
@@ -185,13 +188,5 @@ test.each([
 ])("promotion: $name", ({ rates, passed }) => {
   const scores = { ...passing, ...rates };
 
-  expect(decideHumanPromotion("acceptance", scores, scores).passed).toBe(passed);
-});
-
-test("missing overlay-off evidence cannot pass promotion", () => {
-  expect(decideHumanPromotion("acceptance", passing, undefined)).toMatchObject({
-    eligible: true,
-    passed: false,
-    failures: ["missing overlay-off"],
-  });
+  expect(decideHumanPromotion("acceptance", scores).passed).toBe(passed);
 });

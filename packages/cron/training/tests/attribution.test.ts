@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { attributeMiss, type AttributionInput, goldViolatesSemantics } from "./attribution";
+import { attributeMiss, type AttributionInput, goldViolatesSemantics } from "../src/attribution";
 
 test("an unqualified 1:30 labeled as 13:30 is a gold error, not a model error", () => {
   const input: AttributionInput = {

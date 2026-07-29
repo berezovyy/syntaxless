@@ -7,7 +7,7 @@ import {
   type OracleRecord,
   recordOracleOutcome,
   summarizeOracleReport,
-} from "./oracle";
+} from "../src/oracle";
 
 const intervalGlue: OracleRecord = {
   id: "glue-drop",
@@ -57,22 +57,26 @@ const twelveHour: OracleRecord = {
   speechAct: "request",
 };
 
-test("gold alignment preserves labels, clause boundaries, and actionability while skipping spaces", () => {
-  const labeled = labeledTokensFromGold(intervalGlue.text, intervalGlue.spans);
+test(
+  "gold alignment preserves labels, clause boundaries, " +
+    "and actionability while skipping spaces",
+  () => {
+    const labeled = labeledTokensFromGold(intervalGlue.text, intervalGlue.spans);
 
-  expect(
-    labeled.map(({ token, role, boundary, actionable }) => ({
-      text: token.text,
-      role,
-      boundary,
-      actionable,
-    })),
-  ).toEqual([
-    { text: "every", role: labelId.RECUR, boundary: false, actionable: false },
-    { text: "5", role: labelId.INTERVAL_5, boundary: true, actionable: true },
-    { text: "minutes", role: labelId.UNIT_MIN, boundary: false, actionable: true },
-  ]);
-});
+    expect(
+      labeled.map(({ token, role, boundary, actionable }) => ({
+        text: token.text,
+        role,
+        boundary,
+        actionable,
+      })),
+    ).toEqual([
+      { text: "every", role: labelId.RECUR, boundary: false, actionable: false },
+      { text: "5", role: labelId.INTERVAL_5, boundary: true, actionable: true },
+      { text: "minutes", role: labelId.UNIT_MIN, boundary: false, actionable: true },
+    ]);
+  },
+);
 
 test("oracle summaries count successes and mismatches by source and template", () => {
   const report = emptyOracleReport();

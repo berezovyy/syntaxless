@@ -17,11 +17,11 @@ import { LABEL_COUNT, labelId } from "../../src/model/labels";
 import { SPEECH_ACTS, speechActId } from "../../src/model/speech-acts";
 import { EMBEDDING_ROWS, FEATURE_COUNT, tokenize } from "../../src/model/tokenizer";
 import type { ScheduleIntent } from "../../src/types/intent";
-import type { CorpusRecord } from "./corpus/merge";
-import { featurizeRecord, PADDING_LABEL, SHARD_FORMAT } from "./featurize";
-import type { FeaturizeManifest } from "./featurize";
-import { featurizeKindsStreaming } from "./featurize-kinds";
-import { Sentence } from "./sentence";
+import type { CorpusRecord } from "../src/corpus/merge";
+import { featurizeRecord, PADDING_LABEL, SHARD_FORMAT } from "../src/featurize";
+import type { FeaturizeManifest } from "../src/featurize";
+import { featurizeKindsStreaming } from "../src/featurize-kinds";
+import { Sentence } from "../src/sentence";
 
 const workdir = mkdtempSync(join(tmpdir(), "syntaxless-featurize-"));
 

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { weights } from "../../src/model/weights.gen";
-import { artifactSha256 } from "./weights-hash";
+import { artifactSha256 } from "../src/weights-hash";
 
 test("weight identity covers vocabulary, layout, scales and calibration", () => {
   const original = artifactSha256(weights);
