@@ -1,21 +1,23 @@
 # @syntaxless/sort
 
-Convert English ordering requests to typed sort keys, a JavaScript comparator,
-and a SQLite ORDER BY fragment. The parser uses a local model with no runtime
-network requests. Callers provide field types, aliases, null defaults and SQL
-identifier mappings.
+Turn natural-language ordering requests into typed sort keys, a JavaScript
+comparator and SQLite `ORDER BY` fragments. Parsing runs a small bundled model
+locally. No user text leaves the device, and there are no runtime dependencies.
 
-Semantic ordering aliases have caller-defined directions. For example, a caller
-can map "newest" to a timestamp field descending and "cheapest" to a price field
-ascending. The parser never infers either meaning from a field name. Directions
-must be stated or supplied by an ordering alias. Null placement must be explicit
-or supplied as `defaultNulls`; explanations label caller defaults.
+## Install
 
-## Usage
+```sh
+npm install @syntaxless/sort
+```
+
+The package is ESM-only and runs in Node 18+, Bun and modern browsers.
+
+## Quick start
 
 ```ts
 import { compile, explain, parse, sortRecords } from "@syntaxless/sort";
 import type { Context } from "@syntaxless/sort";
+
 const context: Context = {
   defaultNulls: "last",
   tieBreaker: "id",
@@ -29,70 +31,159 @@ const context: Context = {
     {
       id: "price",
       type: "number",
-      aliases: ["prices"],
       column: "price",
+      aliases: ["prices"],
       orderingAliases: [{ text: "cheapest", direction: "asc" }],
     },
     { id: "id", type: "number", column: "id" },
   ],
 };
+const records = [
+  { id: 1, created: 2, price: 30 },
+  { id: 2, created: 2, price: 10 },
+  { id: 3, created: null, price: 5 },
+];
+
 const result = await parse("newest first, then cheapest, missing prices last", context);
 if (result.ok) {
-  console.log(explain(result.intent));
-  const ordered = sortRecords(records, result.intent, context);
-  const sql = compile(result.intent, context);
+  sortRecords(records, result.intent, context).map((r) => r.id); // [2, 1, 3]
+  compile(result.intent, context).supported; // true
+  explain(result.intent);
+  // 1. "created" descending, null values last (caller default). 2. "price" ascending, ...
+} else {
+  console.log(result.code, result.reason);
 }
 ```
 
-## Comparison and ties
+## API
 
-The initial types are string, finite safe number and boolean. Numeric timestamps
-use the caller's existing units. Missing properties, null and wrongly typed values
-use the key's null placement, independent of direction. No value coercion occurs.
-Strings use Unicode scalar order with SQLite BINARY, without locale or case folding.
-JavaScript strings must contain valid Unicode without NUL; SQLite text must have
-valid UTF-8. Boolean SQL values use integer 0/1. Compare JavaScript records with
-values after SQLite column affinity; use ANY columns in STRICT tables to preserve
-storage types.
+### Context
 
-Without a tie breaker, `sortRecords` preserves JavaScript input order on equal
-keys. Reproducible SQL requires a caller-provided unique, non-null tie-breaker
-field. The compiler appends it ascending unless already included in the keys.
-`sortRecords` checks uniqueness and non-null values; a standalone comparator
-assumes the caller has checked the tie-breaker contract. The package doesn't
-execute SQL or verify a database uniqueness constraint.
+```ts
+interface Field {
+  id: string; // stable identifier, 1–128 chars
+  type: "string" | "number" | "boolean";
+  aliases?: readonly string[]; // up to 16 names the user may say
+  orderingAliases?: readonly { text: string; direction: "asc" | "desc" }[]; // up to 16, e.g. "newest"
+  column?: string | readonly string[]; // trusted SQL identifier segments (1–3)
+}
+interface Context {
+  fields: readonly Field[]; // 1–64 fields
+  defaultNulls?: "first" | "last"; // used when a request does not place nulls
+  tieBreaker?: string; // unique, non-null field for reproducible ties
+}
+```
 
-SQL mappings are trusted identifier segments, never expressions. A string maps
-one identifier; an array maps qualified segments. The compiler quotes each segment
-and uses type guards and explicit null ordering. Unsupported dialects, missing
-mappings, unknown fields, duplicate keys and conflicting directions refuse.
-Edited intents are checked against the same caller context.
+### `parse(text, options): Promise<ParseResult>`
 
-## Supported language
+`options` is a `Context` plus optional `weights: Uint8Array` (a self-hosted
+UTF-8 JSON artifact). The result is one of:
 
-The first scope includes explicit ascending/descending direction, caller ordering
-aliases, ordered keys separated by "then" or commas, and first/last null placement.
-A later null clause must name an earlier key unless only one key exists. The
-initial maximum is eight keys. Questions, descriptions, uncertain requests,
-unknown fields, random ordering, custom expressions, locale collation and implicit
-null policies are unsupported. No rules fallback supplies a model refusal.
+- `{ ok: true, intent: SortIntent, confidence: number, source: "model" }`
+- `{ ok: false, code, reason: string, source: "model" }`
 
-`preload` initializes the same engine as parsing; `dispose` releases cached engines.
-Custom `weights` bytes own an isolated engine and are copied before asynchronous
-initialization. The bundled model passed the complete gate and is the default parser.
+Failure codes:
 
-## Current evidence
+| Code                     | Meaning                                                                |
+| ------------------------ | ---------------------------------------------------------------------- |
+| `invalid-input`          | Empty or over-long text (4096 chars, 128 lexemes), unsupported wording |
+| `ambiguous`              | Several fields in one clause, or a null clause without a clear key     |
+| `conflict`               | Contradictory directions or null placements, or a repeated field       |
+| `missing-direction`      | A key has no direction and no ordering alias                           |
+| `missing-null-placement` | No explicit placement and no `defaultNulls`                            |
+| `invalid-catalog`        | Malformed context                                                      |
+| `invalid-intent`         | The decoded intent fails validation                                    |
+| `unknown-field`          | A field mention or tie breaker is not in the catalog                   |
+| `low-confidence`         | Model confidence is below its calibrated floor                         |
+| `incompatible-model`     | Custom weights cannot be decoded or have the wrong format version      |
+| `model-error`            | Unexpected internal failure                                            |
 
-The bundled hidden-32 model uses 8,000 generated rows. Synthetic heldout matches
-512/512 positives exactly, with no wrong accepted meanings or false accepts among
-295 negatives. Fresh AI-authored acceptance matches 548/548 positives, with no wrong
-accepted meanings or false accepts among 637 negatives. Every declared family
-and all nine critical controls pass. Exported-wire parity, actual paired SQLite
-order, packed offline consumers and Chromium checks pass.
+### `SortIntent`
 
-Runtime code is 8,421 B and the model is 23,288 B Brotli, counting every JavaScript
-chunk. Acceptance was authored by the same implementation assistant through a
-separate writer; bounded generated variations do not establish independent human
-evidence, population accuracy or absence of errors. Future candidates need fresh
-reserved wording. See [training](training/README.md) and
-[evaluation](evaluation/README.md) for provenance and gates.
+```ts
+interface SortKey {
+  field: string;
+  direction: "asc" | "desc";
+  nulls: "first" | "last";
+  nullsSource: "explicit" | "caller-default";
+}
+interface SortIntent {
+  keys: readonly SortKey[]; // 1–8 keys in priority order
+  tieBreaker?: string; // copied from the context
+}
+```
+
+### `compile(intent, context & { dialect?: "sqlite" }): Result<{ sql, dialect }>`
+
+Returns an `ORDER BY` fragment (without the keywords) or
+`{ supported: false, code, reason }`. SQL compilation requires a tie breaker
+(`missing-tie-breaker`); it is appended ascending unless already a key. Each key
+is type-guarded, so wrongly stored values sort as nulls, and strings use
+`COLLATE BINARY`.
+
+### `sortRecords(records, intent, context): T[]` and `comparator(intent, context)`
+
+`sortRecords` returns a stably sorted copy. With a tie breaker, it first checks
+that every record has a unique, non-null tie-breaker value. `comparator` returns
+the same ordering function without that check. Both throw `InputError` for an
+invalid intent or context.
+
+### `validate(intent, context): Map<string, Field>`
+
+Checks an edited intent against the catalog. Throws `InputError` with a `code`.
+
+### `explain(intent): string`
+
+Describes each key, its null placement and whether it came from the caller
+default, plus the tie policy.
+
+### `preload(config?)` and `dispose()`
+
+`preload` initializes the same engine `parse` uses. `dispose` drops cached
+engines. Custom weight buffers are copied before initialization and cached per
+buffer.
+
+## How it works
+
+`parse` replaces caller field names and ordering aliases with typed markers,
+runs a 32-unit token tagger that predicts direction, null-placement and
+key-separator roles, and resolves them deterministically into keys. Directions
+and null placement are never guessed from field names. There is no rules
+fallback: low confidence and unknown constructions refuse.
+
+The bundled build is 8,416 B of runtime and 23,276 B of lazily loaded model
+(Brotli, all JavaScript chunks).
+
+## Semantics and limitations
+
+- Types: string, finite safe-integer-range number, boolean (booleans bind as
+  `0`/`1` in SQL). Timestamps are numbers in the caller's units.
+- Missing, null and wrongly typed values follow the key's null placement,
+  regardless of direction. No value coercion occurs.
+- Strings use Unicode scalar order, matching SQLite `BINARY` on valid UTF-8,
+  without locale collation or case folding.
+- Supported language: explicit ascending/descending, caller ordering aliases,
+  keys separated by "then" or commas, and first/last null placement. A later
+  null clause must name an earlier key unless there is only one.
+- Out of scope: questions, random order, custom expressions, locale collation
+  and implicit null policies. The package does not execute SQL or verify a
+  database uniqueness constraint.
+
+## Development
+
+```sh
+bun run --cwd packages/sort typecheck
+bun run --cwd packages/sort test
+bun run --cwd packages/sort build          # also runs the size gate
+bun run --cwd packages/sort check:package  # packed Bun and Node consumers
+bun run --cwd packages/sort test:browser   # needs Playwright Chromium
+```
+
+## Training and evaluation
+
+- [Training](training/README.md): corpus generation, model training and promotion.
+- [Evaluation](evaluation/README.md): held-out acceptance sets and gate policy.
+
+## License
+
+MIT

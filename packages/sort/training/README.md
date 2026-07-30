@@ -1,49 +1,83 @@
 # Sort training
 
-Run `bun run train:sort` from the repository root. The coordinator writes a seeded
-8,000-row corpus with structurally disjoint splits and role supervision checked
-against the production resolver. It uses the existing cron Python environment,
-validation's numerical model and dataset, and the shared bounded trainer. Hidden
-size is 32 with six-bit quantization-aware training for 24 epochs. Checkpoint
-selection measures decoded intents, wrong accepted meanings and false accepts.
+Corpus generation, model training, calibration and promotion for
+`@syntaxless/sort`. Candidates stay inactive until the promotion gate passes.
 
-Caller fields and ordering aliases become typed canonical markers with preserved
-field/direction payloads. Exact priorities, null placement and tie policy resolve
-in TypeScript. Training and runtime share preparation and tokenization. Gold
-language constructions determine split assignment before adding negative wording
-or changing caller context. Questions and their original statements remain in
-one split, and caller IDs cannot separate identical language constructions.
+## Run
 
-Corpus serialization streams into a unique timestamped path and refuses to
-overwrite evidence. Generation excludes verified reserved and consumed wording
-without reading evaluation labels. Feature writing uses the private shared
-8192-token buffer, with local field-only boundary labels and whitespace padding.
-Bounded row records, deduplication, fingerprints and frame metadata remain
-O(rows); feature vectors are not retained for the whole corpus. Preparation
-checks group ownership across all splits even when writing one selected split.
+From the repository root:
 
-Candidates stay run-local and inactive. Validation-only calibration freezes the
-artifact and confidence floor; exported-wire parity uses 32 frozen sequences and
-checks padding invariance. The full gate verifies fresh reserved wording, exact
-intent accuracy, per-family coverage, both wrong-meaning denominators, negative
-false acceptance and critical controls. Paired positive targets use independently
-authored order over eight witnesses, checked in actual SQLite and JavaScript.
+```sh
+bun run train:sort
+```
+
+Training uses the Python environment at `training/cron/.venv` (create it with
+`uv sync --project training/cron --locked`) and the shared Python harness in
+[`training/shared`](../../../training/shared/README.md).
+
+## Pipeline
+
+1. **Corpus** (`src/corpus.ts`): 8,000 seeded rows (seed `20261011`) across
+   the families `explicit-direction`, `ordering-alias`, `priority`,
+   `null-first`, `null-last`, `null-update` and `caller-default`, plus
+   negatives. Caller fields and ordering aliases become typed markers that
+   keep their field and direction payloads. Every gold role sequence is checked
+   through the production resolver. Rows are split 80/10/10 into
+   train/validation/held-out by a hash of the language construction, assigned
+   before negative wording or caller context changes, so questions and their
+   base statements share a split. Text from reserved or consumed evaluation
+   sets is excluded.
+2. **Features** (`src/featurize.ts`): per-split binary shards using the runtime
+   tokenizer; at most 128 tokens per row. Featurization rejects any language
+   group that crosses splits.
+3. **Train** (`training/shared/train.py --package sort`): hidden size 32, 24 epochs, AdamW
+   (lr 0.003), six-bit quantization-aware training from epoch 3. Checkpoint
+   selection decodes intents through the TypeScript resolver and penalizes
+   wrong accepted meanings and negative false accepts.
+4. **Export** (`training/shared/export.py --package sort`): packs the checkpoint into the wire
+   artifact, decodes it back into PyTorch and freezes 32 parity sequences.
+5. **Freeze** (`src/freeze.ts`): calibrates the confidence floor on the
+   validation split only, choosing the passing floor with the best exact rate
+   (ties go to the floor nearest 0.5).
+6. **Parity** (`src/parity.ts`): the TypeScript engine must match PyTorch role
+   and boundary logits within 1e-4, including padding invariance.
+7. **Synthetic evaluation** (`src/evaluate.ts`): validation and held-out
+   reports. The synthetic gate requires exact positives ≥ 95%, wrong meanings
+   ≤ 0.5%, negative false acceptance ≤ 1% and every family ≥ 90%.
+
+## Outputs
+
+- `packages/sort/training/data/synth/corpus-8k-<timestamp>.jsonl` with a
+  manifest and binary shards.
+- `training/sort/runs/run-<timestamp>/`: checkpoints, `candidate/`,
+  `frozen/`, runtime reports and `storage.json`.
+
+Both locations are git-ignored. Corpus files and frozen candidates refuse to
+overwrite existing files.
+
+## Promotion
 
 ```sh
 bun run packages/sort/training/src/gate.ts prepare <run-directory>
-bun run packages/sort/evaluation/author.ts <run-directory>/scope-freeze.json <new-reserved.jsonl> <revision>
-bun run packages/sort/training/src/gate.ts promote <run-directory> <new-reserved.jsonl>
+bun run packages/sort/evaluation/author.ts <run-directory>/scope-freeze.json packages/sort/evaluation/reserved/<set>.jsonl <revision>
+bun run packages/sort/training/src/gate.ts promote <run-directory> packages/sort/evaluation/reserved/<set>.jsonl
 ```
 
-Never reuse consumed wording as fresh evidence, training or calibration. Writer
-revisions already consumed are regression-only and require new wording for later
-candidates. The same implementation assistant authors these bounded generated
-variations; no independent human evidence or population accuracy is claimed.
-The gate checks actual packed declarations, offline public consumers and Chromium
-lazy/concurrent/offline parsing before consumption. Successful promotion atomically
-replaces model plus calibration and retains the previous module as rollback.
+`prepare` freezes the candidate identity. `promote` runs the checks in the
+[evaluation protocol](../evaluation/README.md), consumes the reserved set, and
+on success atomically replaces `src/model/weights.gen.ts`, keeping the previous
+module in the run directory for rollback. Each reserved set can be consumed
+once; later candidates need newly authored wording.
 
-Generated sort work is bounded to 512 MiB. Keep the active corpus, chosen best and
-latest checkpoint only while its run is active, rollback and compact unique evidence.
-The bounded trainer has no resume command. Remove redundant
-artifacts only through verified exact paths, and preserve pre-existing cron work.
+## Reproducibility
+
+The corpus generator is deterministic for a given seed, row count and reserved
+set. Training seeds Python, NumPy and PyTorch with the same seed. The training
+coordinator checks that generated data stays under 512 MiB.
+
+## Tests
+
+```sh
+bun run --cwd packages/sort/training typecheck
+bun run --cwd packages/sort/training test
+```
