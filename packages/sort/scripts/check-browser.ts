@@ -35,13 +35,17 @@ try {
   const page = await browser.newPage();
 
   await page.route("**/*", async (route) => {
-    const r = route.request();
+    const request = route.request();
 
-    if (new URL(r.url()).origin !== origin || r.method() !== "GET" || r.postData() !== null) {
+    if (
+      new URL(request.url()).origin !== origin ||
+      request.method() !== "GET" ||
+      request.postData() !== null
+    ) {
       throw new Error("unexpected browser request");
     }
 
-    requests.push(new URL(r.url()).pathname);
+    requests.push(new URL(request.url()).pathname);
     await route.continue();
   });
 
@@ -100,7 +104,7 @@ try {
             result.intent,
             context,
           )
-          .map((r: any) => r.id),
+          .map((r: { id: number }) => r.id),
       };
     },
     { entry: "/index.js", context },

@@ -5,11 +5,7 @@ import type { Context, Field, Result, SortIntent, SortKey } from "./types.js";
 
 export type RecordValue = Readonly<Record<string, unknown>>;
 
-export function comparator(
-  intent: SortIntent,
-  context: Context,
-): (a: RecordValue, b: RecordValue) => number {
-  const fields = validate(intent, context);
+function ordered(intent: SortIntent): SortKey[] {
   const keys = [...intent.keys];
 
   if (intent.tieBreaker && !keys.some((key) => key.field === intent.tieBreaker)) {
@@ -21,6 +17,13 @@ export function comparator(
     });
   }
 
+  return keys;
+}
+
+function compareWith(
+  keys: readonly SortKey[],
+  fields: ReadonlyMap<string, Field>,
+): (a: RecordValue, b: RecordValue) => number {
   const value = (row: RecordValue, field: Field) =>
     Object.hasOwn(row, field.id) && validScalar(row[field.id], field.type)
       ? (row[field.id] as string | number | boolean)
@@ -47,15 +50,24 @@ export function comparator(
   };
 }
 
+/** A validated comparator; it assumes the caller already checked tie-breaker uniqueness. */
+export function comparator(
+  intent: SortIntent,
+  context: Context,
+): (a: RecordValue, b: RecordValue) => number {
+  return compareWith(ordered(intent), validate(intent, context));
+}
+
+/** Stable sort that also checks the tie-breaker is unique and non-null. */
 export function sortRecords<T extends RecordValue>(
   records: readonly T[],
   intent: SortIntent,
   context: Context,
 ): T[] {
-  const compare = comparator(intent, context);
+  const fields = validate(intent, context);
 
   if (intent.tieBreaker) {
-    const field = catalogTie(intent, context);
+    const field = fields.get(intent.tieBreaker)!;
     const seen = new Set<unknown>();
 
     for (const row of records) {
@@ -69,11 +81,7 @@ export function sortRecords<T extends RecordValue>(
     }
   }
 
-  return [...records].sort(compare);
-}
-
-function catalogTie(intent: SortIntent, context: Context): Field {
-  return validate(intent, context).get(intent.tieBreaker!)!;
+  return [...records].sort(compareWith(ordered(intent), fields));
 }
 
 export function compile(
@@ -94,18 +102,7 @@ export function compile(
       );
     }
 
-    const keys: SortKey[] = [...intent.keys];
-
-    if (!keys.some((key) => key.field === intent.tieBreaker)) {
-      keys.push({
-        field: intent.tieBreaker,
-        direction: "asc",
-        nulls: "last",
-        nullsSource: "explicit",
-      });
-    }
-
-    const terms = keys.map((key) => {
+    const terms = ordered(intent).map((key) => {
       const field = fields.get(key.field)!;
       let column;
 
