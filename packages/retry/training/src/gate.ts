@@ -13,6 +13,7 @@ import {
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
+import { fromRepository, toRepository } from "../../../shared/training/paths.js";
 import type { Acceptance } from "../../evaluation/author.js";
 import { runSizeGate } from "../../scripts/size-gate.js";
 import { compile } from "../../src/compile.js";
@@ -70,12 +71,10 @@ function identity(run: string) {
 
   for (const path of [
     "training/shared/train.py",
-    "training/retry/train.py",
-    "training/retry/export.py",
-    "training/validation/model.py",
-    "training/validation/dataset.py",
-    "training/validation/export.py",
-    "training/validation/calibrate.py",
+    "training/shared/export.py",
+    "training/shared/artifact.py",
+    "training/shared/model.py",
+    "training/shared/dataset.py",
   ]) {
     sources[path] = hash(readFileSync(join(root, path)));
   }
@@ -109,6 +108,15 @@ function paired(rows: readonly Acceptance[]): void {
       throw new Error(`invalid paired schedule target: ${row.text}`);
     }
   }
+}
+
+function summarize(rows: readonly Acceptance[], sha256: string) {
+  return {
+    sha256,
+    rows: rows.length,
+    critical: rows.filter((r) => r.critical),
+    textHashes: [...new Set(rows.map((r) => hash(r.text.trim().toLowerCase())))].sort(),
+  };
 }
 
 export async function gate(run: string, acceptance: string) {
@@ -179,20 +187,48 @@ export async function gate(run: string, acceptance: string) {
   }
 
   const prior = existsSync(consumed)
-    ? readdirSync(consumed).map((name) => JSON.parse(readFileSync(join(consumed, name), "utf8")))
+    ? readdirSync(consumed)
+        .filter((name) => /^[a-f0-9]{64}\.json$/u.test(name))
+        .map((name) => {
+          const record = JSON.parse(readFileSync(join(consumed, name), "utf8"));
+
+          return { ...record, acceptance: fromRepository(record.acceptance) };
+        })
     : [];
 
   const previous = prior.map((entry) => {
+    if (entry.archiveSha256) {
+      const archived = readFileSync(join(consumed, entry.sha256 + ".archive.json"));
+
+      if (hash(archived) !== entry.archiveSha256) {
+        throw new Error("previous acceptance archive changed");
+      }
+
+      const summary = JSON.parse(archived.toString()) as {
+        sha256: string;
+        critical: Acceptance[];
+        textHashes: string[];
+      };
+
+      if (summary.sha256 !== entry.sha256) throw new Error("acceptance archive provenance changed");
+
+      if (existsSync(entry.acceptance) && hash(readFileSync(entry.acceptance)) !== entry.sha256) {
+        throw new Error("previous acceptance changed");
+      }
+
+      return summary;
+    }
+
     const priorBytes = readFileSync(entry.acceptance);
 
     if (hash(priorBytes) !== entry.sha256) throw new Error("previous acceptance changed");
 
-    return readRows(entry.acceptance) as Acceptance[];
+    return summarize(readRows(entry.acceptance) as Acceptance[], entry.sha256);
   });
 
-  const oldTexts = new Set(previous.flatMap((rs) => rs.map((r) => r.text.trim().toLowerCase())));
+  const oldTexts = new Set(previous.flatMap((summary) => summary.textHashes));
 
-  if (rows.some((r) => oldTexts.has(r.text.trim().toLowerCase()))) {
+  if (rows.some((r) => oldTexts.has(hash(r.text.trim().toLowerCase())))) {
     throw new Error("fresh wording overlaps consumed acceptance");
   }
 
@@ -228,29 +264,32 @@ export async function gate(run: string, acceptance: string) {
 
   const regression = { protectedPositives: 0, protectedNegatives: 0 };
 
-  // Preserve previously correct public behavior before looking at fresh acceptance.
-  for (const row of previous.flat()) {
-    const baseline = await parse(row.text, row.context);
-    const candidate = await parse(row.text, { ...row.context, weights });
+  for (const entry of prior) {
+    if (!existsSync(entry.acceptance)) continue;
 
-    if (row.intent) {
-      if (baseline.ok && isDeepStrictEqual(baseline.intent, row.intent)) {
-        regression.protectedPositives++;
+    for (const row of readRows(entry.acceptance)) {
+      const baseline = await parse(row.text, row.context);
+      const candidate = await parse(row.text, { ...row.context, weights });
 
-        if (!candidate.ok || !isDeepStrictEqual(candidate.intent, row.intent)) {
-          throw Error("prior positive regression failed; reserved remains unconsumed");
+      if (row.intent) {
+        if (baseline.ok && isDeepStrictEqual(baseline.intent, row.intent)) {
+          regression.protectedPositives++;
+
+          if (!candidate.ok || !isDeepStrictEqual(candidate.intent, row.intent)) {
+            throw Error("prior positive regression failed; reserved remains unconsumed");
+          }
         }
-      }
-    } else if (!baseline.ok) {
-      regression.protectedNegatives++;
+      } else if (!baseline.ok) {
+        regression.protectedNegatives++;
 
-      if (candidate.ok) {
-        throw Error("prior negative regression failed; reserved remains unconsumed");
+        if (candidate.ok) {
+          throw Error("prior negative regression failed; reserved remains unconsumed");
+        }
       }
     }
   }
 
-  for (const row of previous.flatMap((rs) => rs.filter((r) => r.critical))) {
+  for (const row of previous.flatMap((summary) => summary.critical)) {
     const result = await parse(row.text, { ...row.context, weights });
 
     if (row.intent ? !result.ok || !isDeepStrictEqual(result.intent, row.intent) : result.ok) {
@@ -280,15 +319,19 @@ export async function gate(run: string, acceptance: string) {
     const size = runSizeGate(join(staged, "dist"));
 
     mkdirSync(consumed, { recursive: true });
+    const archive = JSON.stringify(summarize(rows, digest)) + "\n";
+
+    writeFileSync(join(consumed, digest + ".archive.json"), archive, { flag: "wx" });
 
     writeFileSync(
       join(consumed, digest + ".json"),
       JSON.stringify(
         {
           sha256: digest,
-          acceptance,
+          acceptance: toRepository(acceptance),
           candidateSha256: scope.artifactFileSha256,
           consumedAt: new Date().toISOString(),
+          archiveSha256: hash(archive),
           authorship: meta.authorship,
           independenceLimits: meta.independenceLimits,
         },

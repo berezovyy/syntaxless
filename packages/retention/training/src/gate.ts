@@ -13,6 +13,7 @@ import {
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
+import { fromRepository, toRepository } from "../../../shared/training/paths.js";
 import type { Acceptance } from "../../evaluation/author.js";
 import { runSizeGate } from "../../scripts/size-gate.js";
 import { compile } from "../../src/compile.js";
@@ -70,12 +71,10 @@ function identity(run: string) {
 
   for (const path of [
     "training/shared/train.py",
-    "training/retention/train.py",
-    "training/retention/export.py",
-    "training/validation/model.py",
-    "training/validation/dataset.py",
-    "training/validation/export.py",
-    "training/validation/calibrate.py",
+    "training/shared/export.py",
+    "training/shared/artifact.py",
+    "training/shared/model.py",
+    "training/shared/dataset.py",
   ]) {
     sources[path] = hash(readFileSync(join(root, path)));
   }
@@ -190,7 +189,11 @@ export async function gate(run: string, acceptance: string) {
   const prior = existsSync(consumed)
     ? readdirSync(consumed)
         .filter((name) => /^[a-f0-9]{64}\.json$/u.test(name))
-        .map((name) => JSON.parse(readFileSync(join(consumed, name), "utf8")))
+        .map((name) => {
+          const record = JSON.parse(readFileSync(join(consumed, name), "utf8"));
+
+          return { ...record, acceptance: fromRepository(record.acceptance) };
+        })
     : [];
 
   const previous = prior.map((entry) => {
@@ -325,7 +328,7 @@ export async function gate(run: string, acceptance: string) {
       JSON.stringify(
         {
           sha256: digest,
-          acceptance,
+          acceptance: toRepository(acceptance),
           candidateSha256: scope.artifactFileSha256,
           consumedAt: new Date().toISOString(),
           archiveSha256: hash(archive),

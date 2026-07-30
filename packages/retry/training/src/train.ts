@@ -14,7 +14,7 @@ const root = resolve(import.meta.dir, "../../../..");
 const prefix = resolve(root, "packages/retry/training/data/synth", "compact-v13-8k-" + timestamp);
 const corpus = prefix + ".jsonl";
 
-const run = "requests32-" + timestamp;
+const run = "hidden32-" + timestamp;
 const directory = resolve(root, "training/retry/runs", run);
 
 const python = resolve(root, "training/cron/.venv/bin/python");
@@ -63,7 +63,9 @@ writeFileSync(resolve(directory, "storage.json"), JSON.stringify(history, null, 
 execFileSync(
   python,
   [
-    "training/retry/train.py",
+    "training/shared/train.py",
+    "--package",
+    "retry",
     "--data-prefix",
     prefix,
     "--corpus",
@@ -79,7 +81,9 @@ execFileSync(
 execFileSync(
   python,
   [
-    "training/retry/export.py",
+    "training/shared/export.py",
+    "--package",
+    "retry",
     "--checkpoint",
     resolve(directory, "best.pt"),
     "--out",
