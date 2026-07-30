@@ -14,6 +14,7 @@ import {
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
+import { fromRepository, toRepository } from "../../../shared/training/paths.js";
 import type { Acceptance } from "../../evaluation/author.js";
 import { WITNESSES } from "../../evaluation/fixtures.js";
 import { runSizeGate } from "../../scripts/size-gate.js";
@@ -60,7 +61,16 @@ function identity(run: string) {
   visit(join(root, "packages/shared"));
   sources["scripts/declarations.ts"] = hash(readFileSync(join(root, "scripts/declarations.ts")));
   sources["scripts/check-package.ts"] = hash(readFileSync(join(root, "scripts/check-package.ts")));
-  sources["training/shared/train.py"] = hash(readFileSync(join(root, "training/shared/train.py")));
+
+  for (const path of [
+    "training/shared/train.py",
+    "training/shared/export.py",
+    "training/shared/artifact.py",
+    "training/shared/model.py",
+    "training/shared/dataset.py",
+  ]) {
+    sources[path] = hash(readFileSync(join(root, path)));
+  }
 
   sources["packages/filter/evaluation/README.md"] = hash(
     readFileSync(join(base, "evaluation/README.md")),
@@ -198,11 +208,11 @@ export async function gate(run: string, acceptance: string) {
     : [];
 
   const previous = prior.map((entry) => {
-    const priorBytes = readFileSync(entry.acceptance);
+    const path = fromRepository(entry.acceptance);
 
-    if (hash(priorBytes) !== entry.sha256) throw new Error("previous acceptance changed");
+    if (hash(readFileSync(path)) !== entry.sha256) throw new Error("previous acceptance changed");
 
-    return readRows(entry.acceptance) as Acceptance[];
+    return readRows(path) as Acceptance[];
   });
 
   const oldTexts = new Set(previous.flatMap((rs) => rs.map((r) => r.text.trim().toLowerCase())));
@@ -277,7 +287,7 @@ export async function gate(run: string, acceptance: string) {
       JSON.stringify(
         {
           sha256: digest,
-          acceptance,
+          acceptance: toRepository(acceptance),
           candidateSha256: scope.artifactFileSha256,
           consumedAt: new Date().toISOString(),
           authorship: meta.authorship,

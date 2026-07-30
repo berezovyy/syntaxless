@@ -1,6 +1,6 @@
 {
   "sha256": "8a8d6f2f915fee8eba287fc5f78202ac57243b69a4a951889463f01e0b0a04d7",
-  "acceptance": "/home/berezovyy/Projects/syntaxless/packages/filter/evaluation/reserved/ai-v2-revised.jsonl",
+  "acceptance": "packages/filter/evaluation/reserved/ai-v2-revised.jsonl",
   "candidateSha256": "d19f181053858086cff23ea1f56a64b830f54c9559e3efc6ab855bdb5853e1ec",
   "consumedAt": "2026-10-11T19:58:50.266Z",
   "authorship": "AI-authored by the implementation assistant using a separate writer without training renderer or model inference",
