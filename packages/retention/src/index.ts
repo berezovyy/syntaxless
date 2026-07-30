@@ -7,6 +7,7 @@ export type {
   Bucket,
   Context,
   CompileOptions,
+  FailureCode,
   Preview,
   RetentionIntent,
   Result,
