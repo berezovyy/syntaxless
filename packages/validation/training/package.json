@@ -1,6 +1,7 @@
 {
   "name": "@syntaxless/validation-training",
   "private": true,
+  "description": "Corpus generation, training coordination, evaluation and promotion gate for @syntaxless/validation",
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
