@@ -11,10 +11,10 @@ import { verifyParity } from "./parity.js";
 
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 const root = resolve(import.meta.dir, "../../../..");
-const prefix = resolve(root, "packages/sort/training/data/synth", "compact-v3-8k-" + timestamp);
+const prefix = resolve(root, "packages/sort/training/data/synth", "corpus-8k-" + timestamp);
 const corpus = prefix + ".jsonl";
 
-const run = "groups32-" + timestamp;
+const run = "run-" + timestamp;
 const directory = resolve(root, "training/sort/runs", run);
 
 const python = resolve(root, "training/cron/.venv/bin/python");
@@ -63,7 +63,9 @@ writeFileSync(resolve(directory, "storage.json"), JSON.stringify(history, null, 
 execFileSync(
   python,
   [
-    "training/sort/train.py",
+    "training/shared/train.py",
+    "--package",
+    "sort",
     "--data-prefix",
     prefix,
     "--corpus",
@@ -79,7 +81,9 @@ execFileSync(
 execFileSync(
   python,
   [
-    "training/sort/export.py",
+    "training/shared/export.py",
+    "--package",
+    "sort",
     "--checkpoint",
     resolve(directory, "best.pt"),
     "--out",

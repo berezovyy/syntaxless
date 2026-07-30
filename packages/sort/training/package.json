@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "bun test ./src/*.test.ts",
     "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test ./src/*.test.ts",
     "train": "bun run src/train.ts"
   }
 }

@@ -1,8 +1,26 @@
 {
   "name": "@syntaxless/sort",
   "version": "0.1.0",
-  "description": "Local language ordering with matching JavaScript and SQLite behavior",
+  "description": "Natural-language ordering to typed sort keys, a JavaScript comparator and SQLite ORDER BY fragments",
+  "keywords": [
+    "comparator",
+    "natural-language",
+    "order-by",
+    "ordering",
+    "sort",
+    "sqlite",
+    "typescript"
+  ],
+  "homepage": "https://github.com/berezovyy/syntaxless/tree/master/packages/sort#readme",
+  "bugs": {
+    "url": "https://github.com/berezovyy/syntaxless/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/berezovyy/syntaxless.git",
+    "directory": "packages/sort"
+  },
   "files": [
     "dist",
     "README.md",
@@ -15,18 +33,24 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "bun test ./tests/*.test.ts",
     "build": "bun run scripts/build.ts",
-    "check:package": "bun run build && bun run scripts/check-package.ts"
+    "size:gate": "bun run scripts/size-gate.ts",
+    "check:package": "bun run build && bun run scripts/check-package.ts",
+    "test:browser": "bun run build && bun run scripts/check-browser.ts"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@types/bun": "1.4.2",
     "esbuild": "^0.28.2",
     "playwright": "1.62.0",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

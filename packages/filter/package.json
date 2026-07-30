@@ -1,8 +1,26 @@
 {
   "name": "@syntaxless/filter",
   "version": "0.1.0",
-  "description": "Local natural-language predicates with matching JavaScript and parameterized SQLite behavior",
+  "description": "Natural-language filters to typed predicate intents, JavaScript evaluation and parameterized SQLite WHERE fragments",
+  "keywords": [
+    "filter",
+    "natural-language",
+    "predicate",
+    "query",
+    "sqlite",
+    "typescript",
+    "where"
+  ],
+  "homepage": "https://github.com/berezovyy/syntaxless/tree/master/packages/filter#readme",
+  "bugs": {
+    "url": "https://github.com/berezovyy/syntaxless/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/berezovyy/syntaxless.git",
+    "directory": "packages/filter"
+  },
   "files": [
     "dist",
     "README.md",
@@ -15,7 +33,8 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
@@ -26,9 +45,12 @@
     "test:browser": "bun run build && bun run scripts/check-browser.ts"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@types/bun": "1.4.2",
     "esbuild": "^0.28.2",
     "playwright": "1.62.0",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
