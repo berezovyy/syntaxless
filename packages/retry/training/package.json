@@ -5,6 +5,7 @@
   "scripts": {
     "test": "bun test ./src/*.test.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "train": "bun run src/train.ts"
+    "train": "bun run src/train.ts",
+    "replay": "bun run src/replay.ts"
   }
 }
