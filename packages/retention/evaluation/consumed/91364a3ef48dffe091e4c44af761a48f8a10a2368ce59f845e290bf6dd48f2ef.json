@@ -1,6 +1,6 @@
 {
   "sha256": "91364a3ef48dffe091e4c44af761a48f8a10a2368ce59f845e290bf6dd48f2ef",
-  "acceptance": "/home/berezovyy/Projects/syntaxless/packages/retention/evaluation/ai-v1-distinct.jsonl",
+  "acceptance": "packages/retention/evaluation/reserved/ai-v1-distinct.jsonl",
   "candidateSha256": "993c2a23114b79da287ae66c5d2ff263774283f355c61e92a3ee2daea487dcbe",
   "consumedAt": "2026-10-11T21:54:28.383Z",
   "authorship": "AI-authored by the same implementation assistant through an evaluation-only writer",

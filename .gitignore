@@ -1,49 +1,37 @@
+# Dependencies, builds and caches
 node_modules/
 dist/
 coverage/
 .DS_Store
 *.log
 tmp/
-packages/cron/training/data/synth/
-packages/cron/training/data/llm/
-packages/cron/training/candidate/
-packages/cron/training/results/
-training/cron/.venv/
-training/cron/runs/
-training/cron/candidate/
-training/cron/active/
+.venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
-.venv/
+
+# Generated training corpora and runs
 data/synth/
+packages/*/training/data/synth/
+training/*/runs/
 
-packages/validation/training/data/synth/
-packages/validation/training/candidate/
-packages/validation/training/results/
-training/validation/runs/
-training/validation/candidate/
-training/validation/active/
-packages/filter/training/data/synth/
-training/filter/runs/
-training/sort/runs/
-training/retry/runs/
-packages/sort/training/data/synth/
-packages/retry/training/data/synth/
+# Local cron training state outside run directories
+packages/cron/training/candidate/
+training/cron/candidate/
+training/cron/active/
+packages/cron/training/data/llm/
 
-packages/retention/training/data/synth/
-training/retention/runs/
-packages/retention/evaluation/ai-v3-bound-v4.jsonl
-packages/retention/evaluation/ai-v4.jsonl
-packages/retention/evaluation/ai-v1-distinct.jsonl
-packages/retention/evaluation/ai-v2.jsonl
+# Local dated reports from one-off maintenance (never committed)
+training/**/*-20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]*.json
+training/cleanup-*.json
 
-packages/format/training/data/synth/
-training/format/runs/
-
-# Historical full format acceptance stays local; compact consumed archives remain tracked.
-packages/format/evaluation/ai-v1.jsonl
-packages/format/evaluation/ai-v2.jsonl
-packages/format/evaluation/ai-v2-bound-v4.jsonl
-packages/format/evaluation/ai-v3.jsonl
+# Consumed reserved sets kept only as compact archives in evaluation/consumed/;
+# their full rows stay local.
+packages/retention/evaluation/reserved/ai-v1-distinct.jsonl
+packages/retention/evaluation/reserved/ai-v2.jsonl
+packages/retention/evaluation/reserved/ai-v3-bound-v4.jsonl
+packages/retention/evaluation/reserved/ai-v4.jsonl
+packages/format/evaluation/reserved/ai-v1.jsonl
+packages/format/evaluation/reserved/ai-v2-bound-v4.jsonl
+packages/format/evaluation/reserved/ai-v3.jsonl

@@ -1,6 +1,6 @@
 {
   "sha256": "684ee8b7ccf1b9a39f9af08371fc411a9897be40babaa3a9e2bfafdc6abfaf94",
-  "acceptance": "/home/berezovyy/Projects/syntaxless/packages/retry/evaluation/ai-v1-rebound.jsonl",
+  "acceptance": "packages/retry/evaluation/reserved/ai-v1-rebound.jsonl",
   "candidateSha256": "49c47ee80b8eb4912f2d9d9888024ee9acbc392b7aa3258d8b8eedc75693825b",
   "consumedAt": "2026-10-11T20:50:11.377Z",
   "authorship": "AI-authored by the same implementation assistant through a separate evaluation-only writer",

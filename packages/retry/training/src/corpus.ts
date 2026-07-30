@@ -558,7 +558,7 @@ export function writeCorpus(path: string, count = 8000): Row[] {
   const rows: Row[] = [];
 
   const excluded = reservedHashes(
-    resolve(import.meta.dir, "../../evaluation"),
+    resolve(import.meta.dir, "../../evaluation/reserved"),
     resolve(import.meta.dir, "../../evaluation/consumed"),
   );
 
