@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 
 import type { Role } from "../src/labels.js";
 import { prepare } from "../src/prepare.js";
-import { AmbiguousGrouping, resolveRoles } from "../src/resolve.js";
+import { resolveRoles } from "../src/resolve.js";
+import { InputError } from "../src/types.js";
 import type { Context, FilterIntent } from "../src/types.js";
 
 const context: Context = {
@@ -77,7 +78,7 @@ test("unknown catalog names refuse; mixed ungrouped connectors need clarificatio
       "EQ",
       "VALUE",
     ]),
-  ).toThrow(AmbiguousGrouping);
+  ).toThrow(new InputError("ambiguous", "use parentheses to group mixed AND and OR"));
 
   expect(
     decode(`( spending over 100 or status equals "active" ) and trial equals false`, [

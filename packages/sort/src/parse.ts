@@ -8,13 +8,7 @@ export type ParseResult =
   | { ok: true; intent: SortIntent; confidence: number; source: "model" }
   | {
       ok: false;
-      code:
-        | FailureCode
-        | "invalid-input"
-        | "ambiguous"
-        | "low-confidence"
-        | "incompatible-model"
-        | "model-error";
+      code: FailureCode | "low-confidence" | "incompatible-model" | "model-error";
       reason: string;
       source: "model";
     };

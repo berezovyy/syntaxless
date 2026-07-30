@@ -35,6 +35,8 @@ export type FilterIntent =
 export type Truth = boolean | null;
 
 export type FailureCode =
+  | "invalid-input"
+  | "ambiguous"
   | "invalid-catalog"
   | "invalid-intent"
   | "unknown-field"
@@ -44,3 +46,13 @@ export type FailureCode =
 
 export type Result<T> =
   ({ supported: true } & T) | { supported: false; code: FailureCode; reason: string };
+
+/** A refusal with a machine-readable code; never thrown for internal faults. */
+export class InputError extends Error {
+  constructor(
+    readonly code: FailureCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}

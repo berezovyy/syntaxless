@@ -1,13 +1,11 @@
-/** Deterministic grammar over predicted roles; never interpret operator spelling. */
-import { InputError } from "./catalog.js";
 import type { Role } from "./labels.js";
 import type { Lexeme, Prepared } from "./prepare.js";
+import { InputError } from "./types.js";
 import type { CompareOperator, Context, FilterIntent, Scalar } from "./types.js";
+/** Deterministic grammar over predicted roles; never interpret operator spelling. */
 import { validate } from "./validate.js";
 
-export class AmbiguousGrouping extends Error {}
-
-export interface Labeled {
+interface Labeled {
   lexeme: Lexeme;
   role: Role;
   score: number;
@@ -42,14 +40,14 @@ export function resolveRoles(
     }
 
     if (prediction.role === "UNSUPPORTED") {
-      throw new InputError("invalid-intent", "unsupported or non-actionable input");
+      throw new InputError("invalid-input", "unsupported or non-actionable input");
     }
 
     if (
       (lexeme.field !== undefined && prediction.role !== "FIELD") ||
       (lexeme.value !== undefined && prediction.role !== "VALUE")
     ) {
-      throw new InputError("invalid-intent", "model did not preserve a caller field or literal");
+      throw new InputError("invalid-input", "model did not preserve a caller field or literal");
     }
 
     if (prediction.role === "O") continue;
@@ -73,7 +71,7 @@ export function resolveRoles(
   const take = (role: Role): Labeled => {
     const token = tokens[position++];
 
-    if (!token || token.role !== role) throw new InputError("invalid-intent", `expected ${role}`);
+    if (!token || token.role !== role) throw new InputError("invalid-input", `expected ${role}`);
 
     return token;
   };
@@ -82,14 +80,14 @@ export function resolveRoles(
     const token = take("VALUE");
 
     if (token.lexeme.value === undefined) {
-      throw new InputError("invalid-intent", "use an exact number, boolean, or JSON-quoted string");
+      throw new InputError("invalid-input", "use an exact number, boolean, or JSON-quoted string");
     }
 
     return token.lexeme.value;
   }
 
   function atom(): FilterIntent {
-    if (++atoms > 64) throw new InputError("invalid-intent", "predicate exceeds 64 nodes");
+    if (++atoms > 64) throw new InputError("invalid-input", "predicate exceeds 64 nodes");
 
     if (peek() === "NOT") {
       take("NOT");
@@ -111,7 +109,7 @@ export function resolveRoles(
     if (!field) throw new InputError("unknown-field", "unknown field mention");
     const role = peek();
 
-    if (!role) throw new InputError("invalid-intent", "predicate lacks an operator");
+    if (!role) throw new InputError("invalid-input", "predicate lacks an operator");
     const op = comparison[role];
 
     if (op) {
@@ -134,7 +132,7 @@ export function resolveRoles(
       const upper = value();
 
       if (typeof lower === "boolean" || typeof upper === "boolean") {
-        throw new InputError("invalid-intent", "boolean ranges are unsupported");
+        throw new InputError("invalid-input", "boolean ranges are unsupported");
       }
 
       return {
@@ -157,7 +155,7 @@ export function resolveRoles(
       return { kind: "in", field, values };
     }
 
-    throw new InputError("invalid-intent", "unrecognized predicate operator");
+    throw new InputError("invalid-input", "unrecognized predicate operator");
   }
 
   function group(): FilterIntent {
@@ -169,7 +167,7 @@ export function resolveRoles(
       const kind = role === "OR" ? "or" : "and";
 
       if (connective && connective !== kind) {
-        throw new AmbiguousGrouping("use parentheses to group mixed AND and OR");
+        throw new InputError("ambiguous", "use parentheses to group mixed AND and OR");
       }
 
       connective = kind;
@@ -188,10 +186,7 @@ export function resolveRoles(
 
   const intent = group();
 
-  if (position !== tokens.length) {
-    throw new InputError("invalid-intent", "unexpected closing group");
-  }
-
+  if (position !== tokens.length) throw new InputError("invalid-input", "unexpected closing group");
   validate(intent, context);
 
   return { intent, confidence };

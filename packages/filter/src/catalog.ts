@@ -1,14 +1,6 @@
-import { compareScalars, validScalar } from "../../shared/values.js";
-import type { Context, FailureCode, Field, Scalar } from "./types.js";
-
-export class InputError extends Error {
-  constructor(
-    readonly code: FailureCode,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+import { validScalar } from "../../shared/values.js";
+import { InputError } from "./types.js";
+import type { Context, Field, Scalar } from "./types.js";
 
 export function scalar(value: unknown, field: Field): value is Scalar {
   return validScalar(value, field.type);
@@ -93,5 +85,3 @@ export function catalog(context: Context): Map<string, Field> {
 
   return fields;
 }
-
-export const compare = compareScalars;

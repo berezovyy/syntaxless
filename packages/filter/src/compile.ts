@@ -1,5 +1,5 @@
 import { quoteIdentifier, sqlGuard } from "../../shared/values.js";
-import { InputError } from "./catalog.js";
+import { InputError } from "./types.js";
 import type { Context, Field, FilterIntent, Result, Scalar } from "./types.js";
 import { validate } from "./validate.js";
 

@@ -1,20 +1,14 @@
-import { InputError } from "./catalog.js";
 import { LABELS } from "./labels.js";
 import { prepare } from "./prepare.js";
-import { AmbiguousGrouping, resolveRoles } from "./resolve.js";
+import { resolveRoles } from "./resolve.js";
+import { InputError } from "./types.js";
 import type { Context, FailureCode, FilterIntent } from "./types.js";
 
 export type ParseResult =
   | { ok: true; intent: FilterIntent; confidence: number; source: "model" }
   | {
       ok: false;
-      code:
-        | FailureCode
-        | "invalid-input"
-        | "ambiguous"
-        | "low-confidence"
-        | "incompatible-model"
-        | "model-error";
+      code: FailureCode | "low-confidence" | "incompatible-model" | "model-error";
       reason: string;
       source: "model";
     };
@@ -74,12 +68,7 @@ export async function parse(text: string, options: ParseOptions): Promise<ParseR
   } catch (error) {
     return {
       ok: false,
-      code:
-        error instanceof AmbiguousGrouping
-          ? "ambiguous"
-          : error instanceof InputError
-            ? error.code
-            : "model-error",
+      code: error instanceof InputError ? error.code : "model-error",
       reason: error instanceof Error ? error.message : "model error",
       source: "model",
     };

@@ -1,4 +1,6 @@
-import { catalog, compare, InputError, scalar } from "./catalog.js";
+import { compareScalars as compare } from "../../shared/values.js";
+import { catalog, scalar } from "./catalog.js";
+import { InputError } from "./types.js";
 import type { Context, Field, FilterIntent, Operator } from "./types.js";
 
 export function validate(intent: FilterIntent, context: Context): Map<string, Field> {

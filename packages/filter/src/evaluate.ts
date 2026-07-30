@@ -1,4 +1,5 @@
-import { compare, scalar } from "./catalog.js";
+import { compareScalars as compare } from "../../shared/values.js";
+import { scalar } from "./catalog.js";
 import type { Context, FilterIntent, Truth } from "./types.js";
 import { validate } from "./validate.js";
 

@@ -1,5 +1,6 @@
 /** Resolve only explicit caller aliases and exact literals; operators belong to the model. */
-import { catalog, InputError } from "./catalog.js";
+import { catalog } from "./catalog.js";
+import { InputError } from "./types.js";
 import type { Context, Field, Scalar } from "./types.js";
 
 export interface Lexeme {
@@ -19,10 +20,10 @@ export function prepare(text: string, context: Context): Prepared {
   const fields = catalog(context);
 
   if (typeof text !== "string" || !text.trim() || text.length > 4096) {
-    throw new InputError("invalid-intent", "provide one to 4096 characters");
+    throw new InputError("invalid-input", "provide one to 4096 characters");
   }
 
-  // Match validation's neutral sentence endings; preserve questions and quoted literals.
+  // Drop neutral sentence endings; questions and quoted literals stay intact.
   text = text
     .trim()
     .replace(/[.!]+$/u, "")
@@ -32,11 +33,11 @@ export function prepare(text: string, context: Context): Prepared {
 
   for (const field of fields.values()) {
     for (const alias of new Set([field.id, ...(field.aliases ?? [])])) {
-      phrases.push({ text: alias, field });
+      phrases.push({ text: alias.trim(), field });
     }
 
     for (const term of field.terms ?? []) {
-      phrases.push({ text: term.text, field, value: term.value });
+      phrases.push({ text: term.text.trim(), field, value: term.value });
     }
   }
 
@@ -62,16 +63,16 @@ export function prepare(text: string, context: Context): Prepared {
     if (text[offset] === '"') {
       const literal = text.slice(offset).match(/^"(?:[^"\\]|\\.)*"/u)?.[0];
 
-      if (!literal) throw new InputError("invalid-intent", "unterminated string literal");
+      if (!literal) throw new InputError("invalid-input", "unterminated string literal");
       let value: unknown;
 
       try {
         value = JSON.parse(literal);
       } catch {
-        throw new InputError("invalid-intent", "use JSON string escaping");
+        throw new InputError("invalid-input", "use JSON string escaping");
       }
 
-      if (typeof value !== "string") throw new InputError("invalid-intent", "invalid quoted value");
+      if (typeof value !== "string") throw new InputError("invalid-input", "invalid quoted value");
       emit("textvalue", { value });
       offset += literal.length;
       continue;
