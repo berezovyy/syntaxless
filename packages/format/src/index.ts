@@ -6,6 +6,7 @@ export type {
   Context,
   Currency,
   DateTimeIntent,
+  FailureCode,
   FormatIntent,
   Formatter,
   NumericIntent,

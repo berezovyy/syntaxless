@@ -66,7 +66,9 @@ writeFileSync(resolve(directory, "storage.json"), JSON.stringify(history, null, 
 execFileSync(
   python,
   [
-    "training/format/train.py",
+    "training/shared/train.py",
+    "--package",
+    "format",
     "--data-prefix",
     prefix,
     "--corpus",
@@ -82,7 +84,9 @@ execFileSync(
 execFileSync(
   python,
   [
-    "training/format/export.py",
+    "training/shared/export.py",
+    "--package",
+    "format",
     "--checkpoint",
     resolve(directory, "best.pt"),
     "--out",

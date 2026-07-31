@@ -104,7 +104,7 @@ const hours: Record<string, "h12" | "h23"> = {
 
 const boundary = (c: string | undefined) => !c || !/[\p{L}\p{N}_]/u.test(c);
 
-export function prepare(input: string, _context: unknown = {}): Prepared {
+export function prepare(input: string): Prepared {
   if (
     typeof input !== "string" ||
     !input.trim() ||

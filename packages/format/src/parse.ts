@@ -8,13 +8,7 @@ export type ParseResult =
   | { ok: true; intent: FormatIntent; confidence: number; source: "model" }
   | {
       ok: false;
-      code:
-        | FailureCode
-        | "invalid-input"
-        | "ambiguous"
-        | "low-confidence"
-        | "incompatible-model"
-        | "model-error";
+      code: FailureCode | "invalid-input" | "low-confidence" | "incompatible-model" | "model-error";
       reason: string;
       source: "model";
     };
@@ -25,7 +19,7 @@ export interface ParseOptions {
 
 export async function parse(text: string, options: ParseOptions = {}): Promise<ParseResult> {
   try {
-    const prepared = prepare(text, options);
+    const prepared = prepare(text);
     const { getEngine } = await import("./model/engine.js");
     const { tokenize } = await import("./model/tokenizer.js");
     let engine;
@@ -59,7 +53,7 @@ export async function parse(text: string, options: ParseOptions = {}): Promise<P
       return { role, score: predictions.scores[index]! };
     });
 
-    const decoded = resolveRoles(prepared, labeled, options);
+    const decoded = resolveRoles(prepared, labeled);
 
     if (decoded.confidence < engine.confidenceFloor) {
       return {

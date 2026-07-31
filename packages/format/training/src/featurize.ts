@@ -15,7 +15,7 @@ function* sequences(records: readonly Row[]): Generator<Sequence> {
   for (const record of records) {
     if (record.trainingEligible === false) throw Error("evaluation-only rows cannot be featurized");
 
-    const prepared = prepare(record.text, record.context);
+    const prepared = prepare(record.text);
     const tokens = tokenize(prepared.text);
 
     if (tokens.length > 128) throw Error("training sequence exceeds 128 tokens");

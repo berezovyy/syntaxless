@@ -24,7 +24,6 @@ const markerRoles: Record<NonNullable<Lexeme["marker"]>, readonly Role[]> = {
 export function resolveRoles(
   prepared: Prepared,
   labeled: readonly Labeled[],
-  _context: unknown = {},
 ): { intent: FormatIntent; confidence: number } {
   if (labeled.length !== prepared.lexemes.length) {
     throw new InputError("invalid-input", "unaligned format predictions");
