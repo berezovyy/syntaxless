@@ -1,63 +1,98 @@
 # Format training
 
-Run `bun run train:format` from the repository root. The coordinator creates a
-new timestamped corpus and run, so another run cannot overwrite the active
-corpus. It samples 8000 English instructions across ten numeric and date/time
-families, with about one third negative examples. Hidden width is 32, with
-25 role labels and 24 training epochs in the existing cron Python environment.
+Private workspace that generates the format training corpus, featurizes it, trains
+and exports a candidate model, and runs the release gate. Nothing here is
+published.
 
-The model identifies instruction roles rather than calculating output strings.
-The resolver checks preserved numeric, currency, style, locale and timezone
-facts. Gold intents are authored by the renderer and checked against the
-resolver. Literal substitutions share a construction fingerprint, and negative
-variants inherit their base construction's split. Hash buckets assign roughly
-80 percent to training and 10 percent each to validation and synthetic heldout.
+## Requirements
 
-Corpus generation writes buffered JSONL without retaining the serialized corpus.
-The coordinator retains bounded row records for split preparation. Feature
-buffers hold at most 8192 tokens and flush before another sequence would exceed
-the limit. A sequence has at most 128 tokens.
-Offsets, frame metadata and deduplication indexes use memory proportional to row
-count. A byte comparison against the preceding full-array writer verified all
-21 binary shards without changing model inputs. Preparation peak RSS was
-185748 KiB at 8000 rows, and training peak RSS was 824688 KiB.
+- Bun 1.4 or newer.
+- The cron Python environment (`uv sync --project training/cron --locked`). The
+  coordinator runs `training/cron/.venv/bin/python` with the shared harness in
+  [`training/shared`](../../../training/shared/README.md).
 
-Checkpoint selection uses decoded intent accuracy and penalizes wrong accepts.
-Validation alone selects calibration, and six-bit export has frozen numerical
-and padding parity checks. Training creates an inactive candidate. The complete
-gate is required for promotion.
+## Run
+
+From the repository root:
+
+```sh
+bun run train:format
+```
+
+The coordinator (`src/train.ts`) takes no flags. It:
+
+1. Generates a new timestamped corpus of 8000 rows under
+   `packages/format/training/data/synth/`, excluding all reserved and consumed
+   evaluation wording.
+2. Featurizes the train, validation and heldout splits into binary shards.
+3. Trains with `training/shared/train.py --package format` and exports the
+   selected checkpoint with `training/shared/export.py --package format` into a
+   new directory under
+   `training/format/runs/`.
+4. Calibrates the confidence floor on the validation split (`src/freeze.ts`) and
+   writes the frozen candidate.
+5. Verifies export parity (`src/parity.ts`) and evaluates the validation and
+   heldout splits with the production runtime (`src/evaluate.ts`).
+
+Generated data and runs are ignored by Git. The coordinator stops if
+`packages/format` and the runs folder together exceed 512 MiB.
+
+## Outputs
+
+Each run directory contains `report.json` (training history and source hashes),
+`best.pt`, `candidate/` (unpromoted export and parity references), `frozen/`
+(calibrated `weights.json`, `weights.gen.ts` and `freeze.json`),
+`validation-runtime.json`, `heldout-runtime.json` and `storage.json`. Training
+never changes the bundled model.
+
+## Recipe
+
+| Setting     | Value                                                                |
+| ----------- | -------------------------------------------------------------------- |
+| Corpus      | 8000 rows, ten families, about one third negatives                   |
+| Split       | Hash buckets 80/10/10 by construction fingerprint                    |
+| Model       | Shared role tagger, hidden width 32, 25 role labels                  |
+| Training    | 24 epochs, batch 64, AdamW lr 0.003, quantization-aware from epoch 2 |
+| Selection   | Validation `positiveExact − 5·wrongAll − 5·negativeFalseAcceptance`  |
+| Export      | Six-bit weights with frozen numerical and padding parity             |
+| Calibration | Confidence floor chosen on validation only                           |
+
+The model labels instruction roles. It does not produce output strings.
+`src/resolve.ts` turns labeled lexemes into an intent and checks preserved
+numeric, currency, style, locale and timezone literals. Gold intents come from
+the corpus renderer and must round-trip through the resolver. Literal
+substitutions share a construction fingerprint, and negative variants inherit
+their base construction's split, so no construction crosses splits.
+
+## Promotion
+
+Training creates an inactive candidate. Promotion requires the full gate
+described in [evaluation](../evaluation/README.md):
 
 ```sh
 bun run packages/format/training/src/gate.ts prepare <run-directory>
-bun run packages/format/evaluation/author.ts <run-directory>/scope-freeze.json <new-reserved.jsonl> <revision>
-bun run packages/format/training/src/gate.ts promote <run-directory> <new-reserved.jsonl>
+bun run packages/format/evaluation/author.ts <run-directory>/scope-freeze.json \
+  packages/format/evaluation/reserved/ai-v<N>.jsonl <revision>
+bun run packages/format/training/src/gate.ts promote <run-directory> \
+  packages/format/evaluation/reserved/ai-v<N>.jsonl
 ```
 
-First, freeze source, scope, corpus and candidate identity. Second, author new
-reserved acceptance with independent Intl targets after the freeze. Third,
-run the gate, including prior critical regressions, focused source checks,
-synthetic thresholds, export parity, actual packed consumers, offline Chromium
-and aggregate size. A passing gate atomically promotes weights and calibration,
-retains the previous module, and rechecks the published API.
+A passing gate replaces `src/model/weights.gen.ts` atomically and keeps the
+previous module as `previous-weights.gen.ts` in the run directory.
 
-Both pending and consumed reserved wording are excluded from training. Consumed
-hashes cannot be used again as fresh acceptance. Compact archives preserve every
-critical row and every normalized wording hash. Archive and original-file hashes
-are checked before reuse. A missing unconsumed dataset is an error.
+## Reproducibility
 
-The active run is `groups32-2026-10-11T23-25-13-726Z`, with a timestamped
-`compact-v6-8k` corpus, selected epoch 4 and confidence floor 0.5. Its previous
-module retains the passing v5 artifact for rollback. The earlier artifact used
-weaker value-specific split fingerprints, so its synthetic result does not
-prove the corrected structural split contract.
+The corpus seed and recipe are fixed in source. Corpus manifests record the
+generator digest, and run reports record the digests of the Python sources,
+corpus and binary shards. The freeze records the digests of every source file
+that can affect the result. The JSONL, binary shard and reserved-wording helpers
+are shared with the other packages through `packages/shared/training`.
 
-Keep active corpus, selected checkpoint, rollback artifact and compact evidence.
-Remove only verified exact inactive paths or byte-identical copies. Historical
-corpora remain locally available for the named split-comparison audit because
-older generator versions are not reconstructible from the current source alone.
-Generated work is bounded to 512 MiB, and no separate Python environment is used.
+## Tests
 
-Private JSONL, binary writing and reserved-wording checks now share source with
-validation and filter. The completed extraction preserved all active corpus
-bytes, binary inputs and manifests, without retraining or modifying the model.
-Each domain still defines its own role alignment and boundary semantics.
+```sh
+bun run --cwd packages/format/training test
+```
+
+The tests cover split stability across literal substitutions and paired
+negatives, and the buffered binary shard writer.
