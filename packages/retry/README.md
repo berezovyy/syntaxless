@@ -1,17 +1,19 @@
 # @syntaxless/retry
 
-Convert English retry requests to typed policies and deterministic delay schedules.
-The local model identifies policy roles. Exact values, units, arithmetic and
-schedule generation run in TypeScript. The package never executes requests,
-classifies errors, sleeps or handles cancellation.
+Natural-language retry policies to typed intents and deterministic, bounded delay
+schedules. Parsing runs locally with a small bundled model. Nothing leaves the
+device. The package never executes requests, classifies errors, sleeps or handles
+cancellation.
 
-Retries mean attempts after the initial attempt. A request for three retries
-produces three delays and permits four total attempts. The initial delay and
-strategy must be stated or provided by caller defaults. An explicit multiplier,
-"double" or "triple" supplies exponential strategy; no initial delay is invented.
-Explanations label caller defaults. All edited policies use the same validator.
+## Install
 
-## Usage
+```sh
+npm install @syntaxless/retry
+```
+
+The package is ESM-only and runs in Node.js 18+, Bun and modern browsers.
+
+## Quick start
 
 ```ts
 import { compile, explain, parse } from "@syntaxless/retry";
@@ -21,66 +23,131 @@ const result = await parse("retry three times, double the delay, cap at one minu
 });
 if (result.ok) {
   console.log(explain(result.intent));
-  const schedule = compile(result.intent);
-  // schedule.delaysMs is [250, 500, 1000] when supported.
+  // "3 retries after the initial attempt. Exponential delays, starting at 250 ms (caller default). ..."
+  console.log(compile(result.intent));
+  // { supported: true, delaysMs: [250, 500, 1000] }
 }
 ```
 
-Without the caller's initial delay, the reference returns `missing-initial-delay`.
-The parser returns a valid intent independently of compilation; an uncapped
-schedule may later return `overflow`. There is no rules fallback.
+Without the caller default, `parse` returns `{ ok: false, code: "missing-initial-delay" }`.
+The package never invents an initial delay or a strategy.
 
-## Arithmetic contract
+## API
 
-Counts range from zero to 1000 retries. Delays are nonnegative safe whole
-milliseconds. Ordinary decimal durations resolve exactly through milliseconds,
-seconds, minutes, hours and days, including common abbreviations. Word numbers
-from zero to one hundred, "once" and "twice" are supported. A duration has one
-amount and one unit; compound durations, calendar periods and fractional
-milliseconds are unsupported. Multipliers are finite numbers from one to one
-million; literal values must survive the public number representation exactly.
+### `parse(text, options?): Promise<ParseResult>`
 
-Constant strategy repeats the initial delay. Exponential delay at index `i`,
-starting at zero, is the initial delay multiplied by the factor to power `i`.
-The compiler uses exact decimal fractions, rounds each result up to whole
-milliseconds, and applies the maximum delay. Intermediate delays are not rounded.
-A cap below the initial delay is allowed and applies from the first retry.
-Uncapped values above the safe integer range refuse; no partial schedule escapes.
+- `options.defaults?: Partial<RetryPolicy>` supplies caller defaults for fields the
+  text omits. The intent lists defaulted fields in `defaults`.
+- `options.weights?: Uint8Array` takes custom UTF-8 JSON model bytes. The bytes are
+  copied, and each buffer gets its own engine.
+- Returns `{ ok: true, intent, confidence, source: "model" }` or
+  `{ ok: false, code, reason, source: "model" }`. Refusal codes are the
+  `FailureCode` values plus `ambiguous`, `low-confidence`, `incompatible-model` and
+  `model-error`. `parse` never throws.
 
-## Jitter contract
+### `compile(intent, options?): Result<{ delaysMs: readonly number[] }>`
 
-Jitter is optional. Explicit "no jitter" or "without jitter" produces
-`{ kind: "none" }` and overrides caller jitter defaults without requiring a seed.
-Full jitter samples between zero and the capped base delay.
-Equal jitter samples between half the base rounded up and the base. Proportional
-jitter with fraction `f` samples between `ceil(base * (1-f))` and
-`floor(base * (1+f))`. The final upper bound is capped again, so jitter never
-exceeds a stated maximum. Fractions range from zero to one; unknown jitter kinds
-and unspecified jitter refuse. Proportional bounds above the safe range refuse.
+- `options.seed?: number` is an unsigned 32-bit seed. It is required when jitter is
+  enabled.
+- Returns `{ supported: true, delaysMs }` or `{ supported: false, code, reason }`,
+  for example `missing-seed` or `overflow`. No partial schedule is returned.
 
-`compile(intent, { seed })` requires an unsigned 32-bit caller seed when jitter
-is enabled. Explicit `none` does not require a seed. Seeded pseudorandom integer samples reproduce the same schedule;
-the generator is not for security. It uses the LCG recurrence
-`state = (1664525 * state + 1013904223) mod 2^32` and combines consecutive outputs
-as `(first << 21) + (second >> 11)` to sample integer bounds through exact arithmetic.
+### `validate(intent): void`
 
-`preload` initializes the same model as parsing. Custom UTF-8 JSON `weights` bytes
-own isolated engines and calibration; initialization copies caller bytes.
-`dispose` clears caches. No user text or intent leaves the device.
+Throws an error with a `code` (`invalid-intent`, `missing-multiplier`, `conflict`)
+for an invalid or edited intent. `compile` and `explain` validate too.
 
-## Verification
+### `explain(intent): string`
 
-The promoted default model uses 8,000 training examples and hidden width 32.
-It passed synthetic heldout checks with 488/488 positive matches and no false
-accepts among 266 negatives. Fresh reserved acceptance matched 680/680 positive
-intents across nine families, with no false accepts among 637 negatives.
-All prior and fresh critical controls passed. The independently calculated
-schedule targets, 32-sequence exported-wire parity, actual packed consumer and
-real Chromium lazy/concurrent/offline checks passed.
+Returns a plain-English description that labels caller defaults.
 
-The aggregate runtime is 9,063 Brotli bytes and the model is 23,318 Brotli bytes.
-The complete report is
-`training/retry/runs/descriptions32-2026-10-11T21-31-19-147Z/gate-report.json`.
-Reserved examples were AI-authored by the same implementation assistant through
-a separate evaluation writer. Bounded constructions and numeric variations are
-not independent human evidence or a population accuracy estimate.
+### `preload(config?): Promise<void>` and `dispose(): void`
+
+`preload` initializes the same engine `parse` uses. It is optional, and it accepts
+`{ weights }`. `dispose` clears the cached engines.
+
+### Types
+
+`RetryIntent`, `RetryPolicy`, `Jitter`, `PolicyField`, `Context`, `FailureCode`,
+`Result`, `ParseOptions`, `ParseResult` and `CompileOptions`.
+
+```ts
+interface RetryPolicy {
+  retries: number; // retries after the initial attempt, 0..1000
+  strategy: "constant" | "exponential";
+  initialDelayMs: number;
+  multiplier?: number; // required for exponential, 1..1e6
+  maxDelayMs?: number;
+  jitter?:
+    | { kind: "none" }
+    | { kind: "full" }
+    | { kind: "equal" }
+    | { kind: "proportional"; fraction: number };
+}
+```
+
+## How it works
+
+1. A tokenizer and a 17-role sequence model label the request: counts, delays,
+   caps, factors, units, strategy and jitter markers.
+2. TypeScript resolves exact values. It handles word numbers up to one hundred,
+   "once" and "twice", decimal durations in milliseconds through days, and
+   "double" and "triple". Then it validates the intent.
+3. Requests below the model's calibrated confidence floor refuse
+   (`low-confidence`). There is no rules fallback.
+4. `compile` computes the schedule with exact decimal fractions:
+   - **Retry count.** Retries count attempts after the first, so three retries
+     give three delays and four attempts in total.
+   - **Exponential delays.** The delay at index `i` is `initialDelayMs × multiplier^i`,
+     rounded up to whole milliseconds.
+   - **Cap.** The cap applies from the first retry, even when it is below the
+     initial delay. Uncapped values above the safe integer range refuse.
+   - **Jitter.**
+     - Full jitter samples `[0, base]`.
+     - Equal jitter samples `[ceil(base/2), base]`.
+     - Proportional jitter samples `[ceil(base·(1−f)), floor(base·(1+f))]`. Its
+       upper bound is capped again.
+     - "No jitter" produces `{ kind: "none" }`. It overrides a jitter default and
+       needs no seed.
+   - **Sampling.** Samples use the LCG `state = (1664525·state + 1013904223) mod 2^32`.
+     Two outputs are combined as `(first << 21) + (second >> 11)`. The generator is
+     reproducible, not secure.
+
+The bundled model has hidden width 32 and was trained on 8,000 synthetic examples.
+It compresses to 23,309 Brotli bytes. The runtime chunks add 9,101 Brotli bytes
+(`bun run size:gate`). The model loads lazily on first use.
+
+## Limitations
+
+- English only. Compound durations ("1 minute 30 seconds"), calendar periods,
+  fractional milliseconds and total-attempt wording ("three attempts including
+  the first") refuse.
+- Exponential backoff requires an explicit multiplier, "double" or "triple", or a
+  caller default.
+- Descriptions of past configurations are not always recognized. For example,
+  "we previously retried three times with constant delay of one second" is
+  accepted as a request. Review parsed intents before you act on them.
+- Accuracy figures come from AI-authored evaluation sets. They are not independent
+  human evidence. See [evaluation](evaluation/README.md).
+
+## Development
+
+```sh
+bun run typecheck       # TypeScript
+bun run test            # unit and bundled-model tests
+bun run build           # dist/ with declarations
+bun run size:gate       # Brotli budgets for runtime and model
+bun run check:package   # packed tarball consumers in Bun and Node
+bun run test:browser    # Chromium lazy, concurrent and offline checks
+```
+
+## Training and evaluation
+
+- [Training](training/README.md) covers how the bundled model is produced.
+- [Evaluation](evaluation/README.md) covers the reserved acceptance protocol and its
+  datasets. The bundled model matches every positive and refuses every negative in
+  all seven consumed acceptance sets: 4541 positives and 4457 negatives.
+
+## License
+
+MIT

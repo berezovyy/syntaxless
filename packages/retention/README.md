@@ -1,11 +1,19 @@
 # @syntaxless/retention
 
-Convert English backup retention requests to typed policies and deterministic
-keep/remove previews. The local model identifies policy roles, and TypeScript
-preserves exact counts, durations and calendar units. The package never deletes
-files or cloud objects, and no backup metadata leaves the device.
+Natural-language backup retention policies to typed intents and deterministic
+keep/remove previews. Parsing runs locally with a small bundled model. No backup
+metadata leaves the device. The package only recommends; it never deletes files
+or cloud objects.
 
-## Usage
+## Install
+
+```sh
+npm install @syntaxless/retention
+```
+
+The package is ESM-only and runs in Node.js 18+, Bun and modern browsers.
+
+## Quick start
 
 ```ts
 import { compile, explain, parse } from "@syntaxless/retention";
@@ -21,74 +29,125 @@ if (parsed.ok) {
       { id: "old", timestamp: Date.parse("2022-01-01T00:00:00Z") },
     ],
   });
-  // When supported, keep is [{ id: "current", tierIndexes: [0, 1] }].
-  // remove is ["old"]. Neither list executes a removal.
+  // { supported: true, keep: [{ id: "current", tierIndexes: [0, 1] }], remove: ["old"] }
 }
 ```
 
-Parsing doesn't require backup metadata or calendar context. Every compilation
-requires an explicit supported timezone and reference instant, so missing context
-doesn't invalidate a parsed policy. `compile` returns `supported: false` with a
-specific code and reason for invalid context, policy or metadata. `validate` and
-`explain` throw for invalid edited policies. There is no rules fallback.
+## API
 
-## Calendar and elapsed windows
+### `parse(text, options?): Promise<ParseResult>`
 
-A policy has one to four tiers, with at most one tier per day, week, month or year
-bucket. Each tier selects the newest eligible backup in each bucket. Calendar
-windows include the period containing the reference instant. Daily retention
-for a week counts seven local dates, and monthly retention for a year counts
-twelve local months. Weekly buckets begin on Monday, and years begin on January 1.
+- `options.weights?: Uint8Array` takes custom UTF-8 JSON model bytes. The bytes are
+  copied, and each buffer gets its own engine.
+- Parsing needs no calendar context or backup metadata.
+- Returns `{ ok: true, intent, confidence, source: "model" }` or
+  `{ ok: false, code, reason, source: "model" }`. Refusal codes are the
+  `FailureCode` values plus `ambiguous`, `low-confidence`, `incompatible-model` and
+  `model-error`. `parse` never throws.
 
-Calendar windows retain their named unit. A weekly window in a weekly tier counts
-Monday weeks, and a yearly window in a yearly tier counts calendar years. Other
-weekly windows count seven daily periods per week, and other yearly windows
-count twelve monthly periods per year. Daily or weekly retention for a calendar
-month uses the caller's Gregorian calendar, without a fixed day approximation.
-A window boundary can clip the earliest selected bucket.
+### `compile(intent, options): Result<Preview>`
 
-Elapsed windows compare exact timestamps and include the lower cutoff.
-Milliseconds, seconds, minutes and hours mean fixed elapsed durations without
-a rolling marker. Days and weeks mean calendar periods unless "last", "past",
-"rolling" or "elapsed" requests elapsed time. Elapsed months/years and explicit
-calendar clock durations refuse. Decimal durations must resolve to positive
-safe whole milliseconds, and calendar counts range from one to 10000.
+- `options.timeZone` is an IANA time zone.
+- `options.referenceInstant` is in epoch milliseconds.
+- `options.backups` is a list of `{ id, timestamp }`.
+- Returns `{ supported: true, keep, remove }`. Each `keep` entry lists the
+  zero-based `tierIndexes` that selected it. Otherwise it returns
+  `{ supported: false, code, reason }` with code `missing-context`,
+  `invalid-context`, `invalid-backups`, `invalid-intent`, `conflict` or `unsupported`.
+- Invalid metadata refuses the whole preview.
 
-## Preview and metadata
+### `validate(intent): void` and `explain(intent): string`
 
-Overlapping selections preserve every zero-based `tierIndexes` value.
-An empty bucket contributes no backup. Timestamp ties use ascending Unicode
-scalar identifier order, and both output lists preserve input order.
-The caller reviews and executes any removal recommendations separately.
+`validate` throws an error with a `code` for an invalid or edited intent. `explain`
+validates the intent and returns a plain-English description.
 
-A preview accepts at most 100000 backups. Each backup has only `id` and
-`timestamp`, and identifiers must be unique nonempty Unicode strings of at most
-256 UTF-16 code units. NUL and lone surrogates refuse. Timestamps are whole
-milliseconds from the Unix epoch through Gregorian year 9999, and future
-timestamps refuse. The caller's local calendar must also remain within years
-one to 9999. Invalid metadata refuses the complete preview.
+### `preload(config?): Promise<void>` and `dispose(): void`
 
-The parser accepts text up to 4096 UTF-16 code units and 64 lexemes. Numeric
-literals and word numbers through one hundred are supported. Explicit requests
-for multiple representatives per bucket, duplicate bucket tiers, questions,
-uncertain requests and descriptions of past policies refuse.
+`preload` initializes the same engine `parse` uses. It is optional, and it accepts
+`{ weights }`. `dispose` clears the cached engines.
 
-`preload` initializes the same model as parsing. Supplied UTF-8 JSON `weights`
-bytes own isolated engines and calibration, and initialization copies caller
-bytes. `dispose` clears caches. Timezone behavior uses the runtime's calendar data.
+### Types
 
-## Verification
+`RetentionIntent`, `Tier`, `Bucket`, `Window`, `Backup`, `Context`,
+`CompileOptions`, `Preview`, `FailureCode`, `Result`, `ParseOptions` and
+`ParseResult`.
 
-The promoted model uses 8000 rows and hidden width 32. Synthetic heldout matched
-600/600 positive intents and refused all 302 negatives. Fresh acceptance matched
-761/761 positive intents across ten families and refused all 637 negatives.
-All prior and fresh critical controls passed. Independent UTC previews,
-hand-checked DST witnesses, 32-sequence exported-wire parity, actual packed
-consumers and real Chromium lazy/concurrent/offline checks passed.
+```ts
+interface RetentionIntent {
+  tiers: readonly {
+    bucket: "day" | "week" | "month" | "year";
+    window:
+      | { kind: "calendar"; unit: "day" | "week" | "month" | "year"; count: number }
+      | { kind: "elapsed"; milliseconds: number };
+  }[];
+}
+```
 
-The aggregate runtime is 8995 Brotli bytes, and the model is 23303 Brotli bytes.
-The complete report is
-`training/retention/runs/history32-2026-10-11T22-16-03-348Z/gate-report.json`.
-Reserved constructions were AI-authored by the same implementation assistant.
-The separate evaluation writer and independent calculations don't establish
-independent human evidence or population accuracy.
+## How it works
+
+1. A tokenizer and a role sequence model label bucket words, counts, units and
+   calendar/elapsed markers.
+2. TypeScript resolves exact counts and units, then validates the policy. A
+   policy has one to four tiers, with at most one tier per bucket.
+3. Requests below the model's calibrated confidence floor refuse
+   (`low-confidence`). There is no rules fallback.
+4. `compile` keeps the newest eligible backup in each local bucket for each tier.
+   - **Calendar windows** include the current period. "Daily for a week" counts
+     seven local dates, and "monthly for a year" counts twelve local months. Weeks
+     start on Monday, and years on January 1.
+   - **Mixed units.** A weekly or yearly window in a weekly or yearly tier counts
+     Monday weeks or calendar years. In other tiers, a week counts seven days and a
+     year counts twelve months. Calendar months follow the Gregorian calendar.
+   - **Elapsed windows** compare exact instants and include the cutoff.
+     Milliseconds through hours are always elapsed. Days and weeks become elapsed
+     with "last", "past", "rolling" or "elapsed". Elapsed months and years refuse.
+   - **Ties** use ascending Unicode scalar `id` order, and both lists keep input
+     order.
+
+The bundled model has hidden width 32 and was trained on 8,000 synthetic examples.
+It compresses to 23,301 Brotli bytes. The runtime chunks add 8,993 Brotli bytes
+(`bun run size:gate`). The model loads lazily on first use. Time zone handling
+uses the runtime's `Intl` data.
+
+## Limitations
+
+- English only. Text is limited to 4096 UTF-16 code units and 64 lexemes.
+- Numbers are limited to numeric literals and word numbers up to one hundred.
+  Calendar counts range from 1 to 10000.
+- These requests refuse:
+  - multiple representatives per bucket;
+  - duplicate bucket tiers;
+  - questions;
+  - uncertain requests.
+- Previews accept at most 100000 backups. These refuse:
+  - identifiers longer than 256 UTF-16 code units;
+  - NUL characters or lone surrogates in identifiers;
+  - future timestamps;
+  - dates outside years 1 to 9999.
+- Descriptions of past policies are not always recognized. For example, "we
+  previously kept daily backups for a week" is accepted as a request. Review parsed
+  intents before you act on them.
+- Accuracy figures come from AI-authored evaluation sets. They are not independent
+  human evidence. See [evaluation](evaluation/README.md).
+
+## Development
+
+```sh
+bun run typecheck       # TypeScript
+bun run test            # unit and bundled-model tests
+bun run build           # dist/ with declarations
+bun run size:gate       # Brotli budgets for runtime and model
+bun run check:package   # packed tarball consumers in Bun and Node
+bun run test:browser    # Chromium lazy, concurrent and offline checks
+```
+
+## Training and evaluation
+
+- [Training](training/README.md) covers how the bundled model is produced.
+- [Evaluation](evaluation/README.md) covers the reserved acceptance protocol and its
+  datasets. The bundled model matches every positive and refuses every negative in
+  all six consumed acceptance sets: 4338 positives and 3819 negatives.
+
+## License
+
+MIT
