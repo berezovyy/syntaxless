@@ -3,7 +3,7 @@
 Padding neutrality is the property that makes length bucketing safe: appending
 unused rows must not change a single logged probability for the real tokens.
 Finite gradients under QAT prove the straight-through estimator keeps training.
-Run with `training/cron/.venv/bin/python training/validation/test_model.py`.
+Run with `python training/shared/test_model.py` in the training environment.
 """
 from __future__ import annotations
 
@@ -46,7 +46,6 @@ def build_model() -> Tagger:
         feature_rows=FEATURE_ROWS,
         rows_per_token=ROWS_PER_TOKEN,
         role_classes=ROLE_CLASSES,
-        schedule_kind_classes=0,
         hidden=HIDDEN,
     )
 
@@ -61,8 +60,8 @@ def test_padding_neutrality() -> None:
     for qat in (False, True):
         model.qat = qat
         with torch.no_grad():
-            base_roles, base_boundary, base_kind = model(*base)
-            padded_roles, padded_boundary, padded_kind = model(*padded)
+            base_roles, base_boundary = model(*base)
+            padded_roles, padded_boundary = model(*padded)
         assert torch.allclose(
             base_roles[0, :content],
             padded_roles[0, :content],
@@ -75,10 +74,6 @@ def test_padding_neutrality() -> None:
             atol=1e-5,
             rtol=1e-4,
         ), f"boundary logits changed under padding (qat={qat})"
-        if base_kind.shape[-1] > 0:
-            assert torch.allclose(base_kind, padded_kind, atol=1e-5, rtol=1e-4), (
-                f"schedule-kind logits changed under padding (qat={qat})"
-            )
     print(f"padding neutrality: ok (content={content}, padded width {padded[0].shape[1]})")
 
 
@@ -86,7 +81,7 @@ def test_finite_gradients() -> None:
     model = build_model().train()
     model.qat = True
     batch = make_batch(8, 5, seed=11)
-    roles, boundary, schedule_kind = model(*batch)
+    roles, boundary = model(*batch)
 
     target = torch.randint(0, ROLE_CLASSES, roles.shape[:-1])
     role_loss = torch.nn.functional.cross_entropy(
@@ -96,9 +91,6 @@ def test_finite_gradients() -> None:
         boundary, torch.zeros_like(boundary)
     )
     loss = role_loss + boundary_loss
-    if schedule_kind.shape[-1] > 0:
-        kind_target = torch.randint(0, schedule_kind.shape[-1], schedule_kind.shape[:-1])
-        loss = loss + torch.nn.functional.cross_entropy(schedule_kind, kind_target)
     loss.backward()
 
     checked = 0

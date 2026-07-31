@@ -1,15 +1,13 @@
 """Boundary-threshold calibration on development data only.
 
-The boundary head emits a raw logit. The runtime applies
-`boundaryLogit >= boundaryThreshold` (Phase 16), so the threshold lives in
-logit space, where `0.0` is the uncalibrated `sigmoid(0.5)` boundary.
+The boundary head emits a raw logit, and the runtime applies
+`boundaryLogit >= boundaryThreshold`, so the threshold lives in logit space,
+where `0.0` corresponds to a boundary probability of 0.5.
 
-A single threshold has to serve two development distributions: the same-frame
-validation split and the reordered-frame held-out split. We sweep a fixed grid
-and pick the threshold that maximizes the *worst* boundary F1 across both, so a
-threshold that looks good on one frame ordering cannot win by starving the
-other. The held-out split is development data here; the reserved-carrier test
-set gates promotion only in Phase 19.
+A single threshold may have to serve several development splits. The sweep uses
+a fixed grid and picks the threshold that maximizes the *worst* boundary F1
+across them, so a threshold that suits one split cannot win by starving
+another. Reserved evaluation data is never used here.
 """
 from __future__ import annotations
 
@@ -80,9 +78,7 @@ def collect_logits(
     with torch.no_grad():
         for indices in dataset.batches(batch_size):
             batch = dataset.batch(indices, device)
-            _, boundary, _ = model(
-                batch["rows"], batch["valid"], batch["neighbors"]
-            )
+            _, boundary = model(batch["rows"], batch["valid"], batch["neighbors"])
             logits.append(boundary.detach().cpu().numpy().reshape(-1))
             targets.append(batch["boundaries"].detach().cpu().numpy().reshape(-1))
             masks.append((batch["labels"] != -100).detach().cpu().numpy().reshape(-1))
@@ -102,8 +98,7 @@ def calibrate(
 ) -> Calibration:
     """Choose the threshold maximizing the worst boundary F1 across `datasets`.
 
-    `datasets` are development splits in a fixed order (validation first, then
-    reordered held-out). A threshold is scored on every split; the split with
+    `datasets` are development splits in a fixed order. A threshold is scored on every split; the split with
     the lowest F1 bounds the worst case. Ties break toward the threshold with
     the smallest magnitude, then the earliest in the grid, so the result is
     deterministic.

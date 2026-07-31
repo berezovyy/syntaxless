@@ -1,9 +1,9 @@
-"""Shard loader, length-bucketed batching, and split regeneration.
+"""Shard loader and length-bucketed batching for the role tagger.
 
-The shard contract is owned by `packages/validation/training/src/featurize.ts`:
-a `<prefix>.json` manifest plus six `<prefix>.<field>.bin` files. Nothing here
-parses cron text: the loader reads labels and boundaries that Phase 13 recorded
-from the generator, and the regenerator drives the committed TypeScript tools.
+The shard contract is written by `packages/shared/training/binary.ts`: a
+`<prefix>.json` manifest plus one `<prefix>.<field>.bin` file per field. The
+loader reads labels and boundaries exactly as each package's `featurize.ts`
+recorded them; it never parses source text.
 """
 from __future__ import annotations
 
@@ -23,21 +23,13 @@ NUMPY_DTYPES: dict[str, type[np.generic]] = {
     "float32": np.float32,
 }
 
-SCHEDULE_KIND_NAMES = ("none",)
-SCHEDULE_KIND_INDEX = {name: index for index, name in enumerate(SCHEDULE_KIND_NAMES)}
-
-
-def schedule_kind_for_frame(frame_name: str) -> int:
-    """Validation does not ship a kind head; every frame maps to `none`."""
-    return 0
-
 #: Length buckets. A batch pads to the smallest bucket covering its longest
 #: member, so short sequences never pay for a long neighbour.
 BUCKETS: tuple[int, ...] = (8, 16, 24, 32, 48, 64, 96, 128)
 
 
 def repo_root() -> Path:
-    """The workspace root: `training/cron/` is two levels below it."""
+    """The repository root: this file lives in `training/shared/`."""
     return Path(__file__).resolve().parents[2]
 
 
@@ -46,26 +38,6 @@ def length_bucket(length: int) -> int:
         if length <= bucket:
             return bucket
     return length
-
-
-def group_frame_members(frames: np.ndarray, frame_count: int) -> list[np.ndarray]:
-    """Group sequence indices by frame with one vectorized ordering pass.
-
-    Scanning the complete frame shard once per frame is quadratic in practice:
-    the schedule lattice has millions of rows and tens of thousands of wording
-    frames. A stable argsort touches the shard once and keeps member indices in
-    their original sequence order.
-    """
-    frame_ids = np.asarray(frames)
-    if frame_ids.ndim != 1:
-        raise ValueError("frames must be a one-dimensional array")
-    if frame_count < 1 or int(frame_ids.max(initial=0)) >= frame_count:
-        raise ValueError("invalid frame ids or names")
-    counts = np.bincount(frame_ids, minlength=frame_count)
-    order = np.argsort(frame_ids, kind="stable")
-    stops = np.cumsum(counts, dtype=np.int64)
-    starts = np.concatenate((np.zeros(1, dtype=np.int64), stops[:-1]))
-    return [order[start:stop] for start, stop in zip(starts, stops, strict=True)]
 
 
 def _sha256(path: Path) -> str:
@@ -78,7 +50,7 @@ def _sha256(path: Path) -> str:
 
 @dataclass(slots=True)
 class ShardManifest:
-    """The six-field manifest written by Phase 13."""
+    """The manifest written next to the binary shards."""
 
     fingerprints: list[str]
     role_classes: int
@@ -134,11 +106,6 @@ class Dataset:
         self.rows = self.rows.reshape(self.token_count, self.rows_per_token)
         self.neighbors = self.neighbors.reshape(self.token_count, 2)
         self.lengths = (self.offsets[1:] - self.offsets[:-1]).astype(np.int64)
-        self.frame_members: list[np.ndarray] = []
-        self.frame_schedule_kinds = np.asarray(
-            [schedule_kind_for_frame(name) for name in self.manifest.frame_names],
-            dtype=np.int64,
-        )
         if self.frames is not None:
             if self.frames.size != self.sequences:
                 raise ValueError(
@@ -146,11 +113,9 @@ class Dataset:
                     f"expected {self.sequences}"
                 )
             frame_count = len(self.manifest.frame_names)
-            try:
-                self.frame_members = group_frame_members(self.frames, frame_count)
-            except ValueError as error:
-                raise ValueError(f"{self.prefix}: {error}") from error
-            actual_counts = [int(members.size) for members in self.frame_members]
+            if self.sequences and int(self.frames.max()) >= frame_count:
+                raise ValueError(f"{self.prefix}: invalid frame ids or names")
+            actual_counts = np.bincount(self.frames, minlength=frame_count).tolist()
             if self.manifest.frame_counts and actual_counts != self.manifest.frame_counts:
                 raise ValueError(f"{self.prefix}: frame counts do not match frames shard")
 
@@ -169,62 +134,14 @@ class Dataset:
             result[key] = _sha256(Path(f"{self.prefix}{spec['suffix']}"))
         return result
 
-    def batches(
-        self,
-        batch_size: int,
-        shuffle_seed: int | None = None,
-        balance_frames: bool = False,
-        balance_kinds: bool = False,
-        balance_schedule_kinds: bool = False,
-        frame_balance_power: float = 0.5,
-    ):
+    def batches(self, batch_size: int, shuffle_seed: int | None = None):
         """Yield batches of sequence indices, grouped by similar length.
 
         Sorting by length before chunking means only the last batch of each
-        length class carries meaningful padding.
+        length class carries meaningful padding. A seed shuffles ties.
         """
         rng = np.random.default_rng(shuffle_seed)
         selected = np.arange(self.sequences)
-        if balance_frames or balance_kinds or balance_schedule_kinds:
-            if not self.frame_members:
-                raise ValueError(
-                    f"{self.prefix}: balanced batching requires a frames shard"
-                )
-            counts = np.asarray(
-                [members.size for members in self.frame_members], dtype=np.float64
-            )
-            masses = (
-                np.power(counts, 1.0 - frame_balance_power)
-                if balance_frames
-                else counts.copy()
-            )
-            if balance_kinds:
-                kind_frames: dict[str, list[int]] = {}
-                for frame_id, frame_name in enumerate(self.manifest.frame_names):
-                    kind_frames.setdefault(frame_name.split("/", 1)[0], []).append(
-                        frame_id
-                    )
-                # Normalize within each kind. Every kind then contributes one
-                # unit of total mass, while --balance-frames controls how that
-                # unit is distributed among the kind's wording frames.
-                for frame_ids in kind_frames.values():
-                    kind_mass = float(masses[frame_ids].sum())
-                    masses[frame_ids] /= kind_mass
-            if balance_schedule_kinds:
-                schedule_frames: dict[int, list[int]] = {}
-                for frame_id, schedule_kind in enumerate(self.frame_schedule_kinds):
-                    schedule_frames.setdefault(int(schedule_kind), []).append(frame_id)
-                for frame_ids in schedule_frames.values():
-                    class_mass = float(masses[frame_ids].sum())
-                    masses[frame_ids] /= class_mass
-            draw_counts = rng.multinomial(self.sequences, masses / masses.sum())
-            draws: list[np.ndarray] = []
-            for count, members in zip(draw_counts, self.frame_members, strict=True):
-                if count:
-                    draws.append(rng.choice(members, size=count, replace=True))
-            selected = np.concatenate(draws)
-            rng.shuffle(selected)
-
         tie_break = np.arange(selected.size)
         if shuffle_seed is not None:
             permutation = rng.permutation(selected.size)
@@ -238,7 +155,7 @@ class Dataset:
         """Pad `indices` to the next length bucket and return model tensors.
 
         Unused rows hold the manifest's `featureRows` sentinel. Whitespace and
-        any label at or above `roleClasses` (the Phase 13 padding sentinel) are
+        any label at or above `roleClasses` (the padding sentinel) are
         set to `-100`, the cross-entropy ignore index, so they contribute no
         role or boundary loss.
         """
@@ -277,11 +194,6 @@ class Dataset:
             "labels": torch.as_tensor(labels),
             "boundaries": torch.as_tensor(boundaries),
             "kinds": torch.as_tensor(kinds),
-            "schedule_kinds": torch.as_tensor(
-                self.frame_schedule_kinds[np.asarray(self.frames[indices])]
-                if self.frames is not None
-                else np.zeros(count, dtype=np.int64)
-            ),
         }
         if device is not None:
             tensors = {key: value.to(device) for key, value in tensors.items()}

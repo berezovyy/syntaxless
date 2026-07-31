@@ -1,8 +1,14 @@
-"""Bounded QAT training with selection through the production TypeScript decoder."""
+"""Bounded QAT training for a package role tagger.
+
+Checkpoints are selected by decoding validation predictions through the
+package's own TypeScript evaluator (`packages/<package>/training/src/evaluate.ts`),
+so selection tracks intent accuracy rather than token accuracy.
+
+    python training/shared/train.py --package <name> --data-prefix ... --corpus ... --run ...
+"""
 from __future__ import annotations
 
 import argparse
-import sys
 import hashlib
 import json
 import math
@@ -16,7 +22,6 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "validation"))
 from dataset import Dataset, repo_root
 from model import Tagger
 
@@ -30,7 +35,7 @@ def intent_metrics(model: Tagger, dataset: Dataset, corpus: Path, run: Path, dom
     with predictions.open("w") as output:
         for indices in dataset.batches(64):
             batch = dataset.batch(indices, "cpu")
-            logits, _, _ = model(batch["rows"], batch["valid"], batch["neighbors"])
+            logits, _ = model(batch["rows"], batch["valid"], batch["neighbors"])
             probabilities = torch.softmax(logits, dim=-1)
             top = probabilities.topk(2, dim=-1)
             roles = top.indices[..., 0].numpy()
@@ -50,8 +55,13 @@ def intent_metrics(model: Tagger, dataset: Dataset, corpus: Path, run: Path, dom
         predictions.unlink(missing_ok=True)
 
 
-def main(domain: str) -> None:
+PACKAGES = ("validation", "filter", "sort", "retry", "retention", "format")
+SOURCES = ("train.py", "model.py", "dataset.py")
+
+
+def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--package", required=True, choices=PACKAGES)
     parser.add_argument("--data-prefix", required=True)
     parser.add_argument("--corpus", required=True)
     parser.add_argument("--run", required=True)
@@ -59,6 +69,7 @@ def main(domain: str) -> None:
     parser.add_argument("--hidden", type=int, default=32)
     parser.add_argument("--seed", type=int, default=20261011)
     args = parser.parse_args()
+    domain = args.package
     if args.epochs < 1 or args.hidden not in (32, 64):
         raise ValueError("positive epoch count and hidden 32 or 64 required")
     torch.set_num_threads(2)
@@ -79,7 +90,7 @@ def main(domain: str) -> None:
         if set(left.fingerprints) & set(right.fingerprints):
             raise ValueError("structural split leak")
     model = Tagger(train.feature_rows, train.rows_per_token, train.role_classes,
-                   schedule_kind_classes=0, hidden=args.hidden)
+                   hidden=args.hidden)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.003, weight_decay=0.01)
     steps = args.epochs * math.ceil(len(train) / 64)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
@@ -87,8 +98,8 @@ def main(domain: str) -> None:
     history = []
     best = float("-inf")
     started = time.monotonic()
-    source_hashes = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
-                     for p in [Path(__file__), * (root / f"training/{domain}").glob("*.py"), root/"training/validation/model.py", root/"training/validation/dataset.py"]}
+    source_hashes = {f"training/shared/{name}": hashlib.sha256((root / "training/shared" / name).read_bytes()).hexdigest()
+                     for name in SOURCES}
     for epoch in range(args.epochs):
         model.train()
         model.qat = epoch >= 2
@@ -96,7 +107,7 @@ def main(domain: str) -> None:
         token_total = 0
         for indices in train.batches(64, shuffle_seed=args.seed + epoch):
             batch = train.batch(indices, "cpu")
-            roles, boundary, _ = model(batch["rows"], batch["valid"], batch["neighbors"])
+            roles, boundary = model(batch["rows"], batch["valid"], batch["neighbors"])
             mask = batch["labels"] != -100
             loss = F.cross_entropy(roles.flatten(0, 1), batch["labels"].flatten(), ignore_index=-100)
             boundary_loss = F.binary_cross_entropy_with_logits(boundary, batch["boundaries"], reduction="none")
@@ -129,3 +140,5 @@ def main(domain: str) -> None:
         print(json.dumps(history[-1]), flush=True)
 
 
+if __name__ == "__main__":
+    main()

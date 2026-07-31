@@ -1,19 +1,15 @@
-# Validation model harness
+# Validation exporter
 
-The public training entry point is `bun run train:validation` from the repository
-root. See [the corpus and coordinator documentation](../../packages/validation/training/README.md).
-
-`train.py` loads shared shards, performs seeded six-bit QAT, and selects a
-checkpoint through the production TypeScript intent decoder. `export.py` writes
-only run-local candidates and parity fixtures. Neither phase promotes a model.
-The runtime owns exact numeric comparisons and schema generation.
-
-Reuse the existing cron Python environment. The domain dependency lock remains
-available for reproducibility; do not duplicate its environment automatically.
-The shared runner discovers all validation numerical and batching tests:
+`export.py` exports a validation checkpoint as an int6 candidate. Unlike the
+other packages, validation calibrates the clause-boundary threshold at export
+time (worst-case boundary F1 on the validation split). Everything else comes
+from the [shared harness](../shared/README.md): training runs through
+`training/shared/train.py --package validation`.
 
 ```sh
-training/cron/.venv/bin/python -B training/cron/run_tests.py training/validation
+python training/validation/export.py --checkpoint <run>/best.pt --out <run>/candidate
 ```
 
-Run `bun run test:python` from the root to verify both domains in separate processes.
+The candidate must be inside `training/validation/runs/`. The script never
+promotes; see [validation training](../../packages/validation/training/README.md)
+for the full pipeline and gate.

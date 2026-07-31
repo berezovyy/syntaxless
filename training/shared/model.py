@@ -1,10 +1,11 @@
-"""Tiny tagger with one trunk and two heads, plus quantization-aware training.
+"""Tiny role tagger with one trunk and two heads, plus quantization-aware training.
 
 The trunk is sparse embedding row-sum, a depthwise temporal convolution with
 neighbour injection, a bidirectional gated linear recurrence (a sequential
 scan), masked global context pooling, and a gated head. It predicts one role per
-token and one clause-boundary logit. Feature dimensions come from the Phase 13
-manifest, never from a hardcoded label order.
+token and one clause-boundary logit. Feature dimensions come from the shard
+manifest written by each package's `featurize.ts`, never from a hardcoded label
+order.
 
 QAT is symmetric per-tensor integer quantization with a straight-through
 estimator over 2-D parameters. The forward graph is identical apart from the
@@ -18,8 +19,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-
-SCHEDULE_KIND_NAMES = ("none",)
 
 
 def fake_quantize(weight: torch.Tensor, bits: int) -> torch.Tensor:
@@ -91,7 +90,6 @@ class Tagger(nn.Module):
         feature_rows: int,
         rows_per_token: int,
         role_classes: int,
-        schedule_kind_classes: int = 0,
         hidden: int = 32,
         kernel_size: int = 3,
         quantization_bits: int = 6,
@@ -100,7 +98,6 @@ class Tagger(nn.Module):
         self.feature_rows = feature_rows
         self.rows_per_token = rows_per_token
         self.role_classes = role_classes
-        self.schedule_kind_classes = schedule_kind_classes
         self.hidden = hidden
         self.kernel_size = kernel_size
         self.quantization_bits = quantization_bits
@@ -117,11 +114,6 @@ class Tagger(nn.Module):
         self.head_gate = QLinear(2 * hidden, hidden, quantization_bits)
         self.role_head = QLinear(hidden, role_classes, quantization_bits)
         self.boundary_head = QLinear(hidden, 1, quantization_bits)
-        self.schedule_kind_head = (
-            QLinear(hidden, schedule_kind_classes, quantization_bits)
-            if schedule_kind_classes > 0
-            else None
-        )
         self._qat = False
 
     @property
@@ -151,8 +143,9 @@ class Tagger(nn.Module):
 
     def forward(
         self, rows: torch.Tensor, valid: torch.Tensor, neighbors: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        batch, width, _ = rows.shape
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return role logits `[batch, width, roles]` and boundary logits `[batch, width]`."""
+        _, width, _ = rows.shape
         embedding_weight = self.embedding.weight
         if self.qat:
             embedding_weight = fake_quantize(embedding_weight, self.quantization_bits)
@@ -183,17 +176,5 @@ class Tagger(nn.Module):
 
         roles = self.role_head(gated)
         boundary = self.boundary_head(gated).squeeze(-1)
-        schedule_kind = (
-            self.schedule_kind_head(pooled[:, 0, :])
-            if self.schedule_kind_head is not None
-            else pooled.new_empty((batch, 0))
-        )
-        return roles, boundary, schedule_kind
+        return roles, boundary
 
-
-def parameter_counts(model: nn.Module) -> dict[str, int]:
-    total = sum(parameter.numel() for parameter in model.parameters())
-    trainable = sum(
-        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
-    )
-    return {"total": total, "trainable": trainable}
