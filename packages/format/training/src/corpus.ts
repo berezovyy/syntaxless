@@ -36,6 +36,9 @@ export interface Row {
   trainingEligible?: boolean;
 }
 
+/** Fixed sampling seed; changing it changes every generated corpus. */
+const SEED = 20261012;
+
 export const hash = (bytes: string | Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
 
@@ -120,7 +123,7 @@ const currencyNames = {
 
 function* sample(
   count = 8000,
-  seed = 20261012,
+  seed = SEED,
   excluded: ReadonlySet<string> = new Set(),
 ): Generator<Row> {
   if (!Number.isSafeInteger(count) || count < 1 || count > 100000) {
@@ -618,7 +621,7 @@ function* sample(
 
 export function generate(
   count = 8000,
-  seed = 20261012,
+  seed = SEED,
   excluded: ReadonlySet<string> = new Set(),
 ): Row[] {
   return [...sample(count, seed, excluded)];
@@ -626,14 +629,14 @@ export function generate(
 
 export function writeCorpus(path: string, count = 8000): Row[] {
   const excluded = reservedHashes(
-    resolve(import.meta.dir, "../../evaluation"),
+    resolve(import.meta.dir, "../../evaluation/reserved"),
     resolve(import.meta.dir, "../../evaluation/consumed"),
   );
 
   const rows: Row[] = [];
 
   function* records(): Generator<Row> {
-    for (const row of sample(count, 20261012, excluded)) {
+    for (const row of sample(count, SEED, excluded)) {
       rows.push(row);
       yield row;
     }
@@ -648,7 +651,7 @@ export function writeCorpus(path: string, count = 8000): Row[] {
         rows: rows.length,
         sha256: written.sha256,
         generatorSha256: hash(readFileSync(import.meta.filename)),
-        seed: 20261012,
+        seed: SEED,
         trainingEligible: true,
         splitPolicy:
           "Literal substitutions and base/negative pairs share a construction fingerprint; " +

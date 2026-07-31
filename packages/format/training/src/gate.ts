@@ -16,6 +16,7 @@ import {
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
+import { fromRepository, toRepository } from "../../../shared/training/paths.js";
 import type { Acceptance } from "../../evaluation/author.js";
 import { WITNESSES } from "../../evaluation/fixtures.js";
 import type { CompileTarget, ProbeValue } from "../../evaluation/fixtures.js";
@@ -77,12 +78,10 @@ function identity(run: string) {
 
   for (const path of [
     "training/shared/train.py",
-    "training/format/train.py",
-    "training/format/export.py",
-    "training/validation/model.py",
-    "training/validation/dataset.py",
-    "training/validation/export.py",
-    "training/validation/calibrate.py",
+    "training/shared/export.py",
+    "training/shared/artifact.py",
+    "training/shared/model.py",
+    "training/shared/dataset.py",
   ]) {
     sources[path] = hash(readFileSync(join(root, path)));
   }
@@ -296,19 +295,20 @@ export async function gate(run: string, acceptance: string) {
       };
 
       if (summary.sha256 !== entry.sha256) throw new Error("acceptance archive provenance changed");
+      const full = fromRepository(entry.acceptance);
 
-      if (existsSync(entry.acceptance) && hash(readFileSync(entry.acceptance)) !== entry.sha256) {
+      if (existsSync(full) && hash(readFileSync(full)) !== entry.sha256) {
         throw new Error("previous acceptance changed");
       }
 
       return summary;
     }
 
-    const priorBytes = readFileSync(entry.acceptance);
+    const full = fromRepository(entry.acceptance);
 
-    if (hash(priorBytes) !== entry.sha256) throw new Error("previous acceptance changed");
+    if (hash(readFileSync(full)) !== entry.sha256) throw new Error("previous acceptance changed");
 
-    return summarize(readRows(entry.acceptance) as Acceptance[], entry.sha256);
+    return summarize(readRows(full) as Acceptance[], entry.sha256);
   });
 
   const oldTexts = new Set(previous.flatMap((summary) => summary.textHashes));
@@ -340,7 +340,7 @@ export async function gate(run: string, acceptance: string) {
 
   const synthetic = await evaluate(
     training.filter((r) => r.split === "heldout"),
-    async (r) => parse(r.text, { ...r.context, weights }),
+    async (r) => parse(r.text, { weights }),
   );
 
   if (!synthetic.syntheticGatePassed) {
@@ -348,7 +348,7 @@ export async function gate(run: string, acceptance: string) {
   }
 
   for (const row of previous.flatMap((summary) => summary.critical)) {
-    const result = await parse(row.text, { ...row.context, weights });
+    const result = await parse(row.text, { weights });
 
     if (row.intent ? !result.ok || !isDeepStrictEqual(result.intent, row.intent) : result.ok) {
       throw new Error("prior critical regression failed; reserved remains unconsumed");
@@ -386,7 +386,7 @@ export async function gate(run: string, acceptance: string) {
       JSON.stringify(
         {
           sha256: digest,
-          acceptance,
+          acceptance: toRepository(acceptance),
           candidateSha256: scope.artifactFileSha256,
           consumedAt: new Date().toISOString(),
           archiveSha256: hash(archive),
@@ -401,7 +401,7 @@ export async function gate(run: string, acceptance: string) {
 
     const predictions: ParseResult[] = [];
 
-    for (const row of rows) predictions.push(await parse(row.text, { ...row.context, weights }));
+    for (const row of rows) predictions.push(await parse(row.text, { weights }));
     const metrics = await evaluate(rows, async (_, i) => predictions[i]!);
 
     const criticalFailures = rows.flatMap((row, i) =>

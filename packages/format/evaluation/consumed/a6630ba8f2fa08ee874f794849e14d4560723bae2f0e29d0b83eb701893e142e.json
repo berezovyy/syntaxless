@@ -1,6 +1,6 @@
 {
   "sha256": "a6630ba8f2fa08ee874f794849e14d4560723bae2f0e29d0b83eb701893e142e",
-  "acceptance": "/home/berezovyy/Projects/syntaxless/packages/format/evaluation/ai-v2-bound-v4.jsonl",
+  "acceptance": "packages/format/evaluation/reserved/ai-v2-bound-v4.jsonl",
   "candidateSha256": "283bcf5d757409c9484f30cba26a04658227d52fea5191a332e4be4e3f98d46b",
   "consumedAt": "2026-10-11T23:13:00.430Z",
   "archiveSha256": "520e579836d6a6a97b450b09d1eefe4ec6396b13c8b8ff6f687370cb48ca8d2d",

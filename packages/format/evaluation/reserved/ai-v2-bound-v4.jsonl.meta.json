@@ -1,8 +1,8 @@
 {
   "sha256": "a6630ba8f2fa08ee874f794849e14d4560723bae2f0e29d0b83eb701893e142e",
-  "candidateSha256": "c376dce35428d6d489c8f3cbcde6be4dff48d98ac212287275d2c2bef898d1ed",
-  "scopeFreezeSha256": "d1542ec965fc57b4db630067278079a8534c3ed1f4143388c85458e1e44d7db3",
-  "createdAt": "2026-10-11T23:04:52.567Z",
+  "candidateSha256": "283bcf5d757409c9484f30cba26a04658227d52fea5191a332e4be4e3f98d46b",
+  "scopeFreezeSha256": "3a8de59bc5046cdcfc6ccfae78858baf05df0d683d86e299d28ff86538de3a64",
+  "createdAt": "2026-10-11T23:12:05.414Z",
   "trainingEligible": false,
   "rows": 1409,
   "authorship": "AI-authored by the same implementation assistant through an evaluation-only writer",
@@ -34,5 +34,7 @@
     "unicode": "17.0",
     "sqlite": "3.53.2",
     "modules": "147"
-  }
+  },
+  "reboundFrom": "ai-v2",
+  "reason": "The original v2 was authored but never inferred or consumed. Its unchanged wording is bound to the next frozen candidate."
 }
