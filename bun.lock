@@ -5,8 +5,8 @@
     "": {
       "name": "syntaxless",
       "devDependencies": {
-        "@types/bun": "latest",
-        "@types/node": "latest",
+        "@types/bun": "1.4.2",
+        "@types/node": "26.5.1",
         "prettier": "3.9.6",
         "typescript": "5.9.3",
       },
@@ -16,7 +16,7 @@
       "version": "0.1.0",
       "devDependencies": {
         "@js-temporal/polyfill": "0.5.1",
-        "@types/bun": "latest",
+        "@types/bun": "1.4.2",
         "esbuild": "^0.28.2",
         "playwright": "1.62.0",
         "typescript": "5.9.3",
@@ -33,7 +33,7 @@
       "name": "@syntaxless/filter",
       "version": "0.1.0",
       "devDependencies": {
-        "@types/bun": "latest",
+        "@types/bun": "1.4.2",
         "esbuild": "^0.28.2",
         "playwright": "1.62.0",
         "typescript": "5.9.3",
@@ -42,22 +42,63 @@
     "packages/filter/training": {
       "name": "@syntaxless/filter-training",
     },
-    "packages/format": {"name":"@syntaxless/format","version":"0.1.0","devDependencies":{"@types/bun":"latest","esbuild":"^0.28.2","playwright":"1.62.0","typescript":"5.9.3"}},
-    "packages/format/training": {"name":"@syntaxless/format-training"},
-    "packages/retention": {"name":"@syntaxless/retention","version":"0.1.0","devDependencies":{"@types/bun":"latest","esbuild":"^0.28.2","playwright":"1.62.0","typescript":"5.9.3"}},
-    "packages/retention/training": {"name":"@syntaxless/retention-training"},
-    "packages/retry": {"name":"@syntaxless/retry","version":"0.1.0","devDependencies":{"@types/bun":"latest","esbuild":"^0.28.2","playwright":"1.62.0","typescript":"5.9.3"}},
-    "packages/retry/training": {"name":"@syntaxless/retry-training"},
-    "packages/sort": {
-      "name": "@syntaxless/sort", "version": "0.1.0",
-      "devDependencies": {"@types/bun": "latest", "esbuild": "^0.28.2", "playwright": "1.62.0", "typescript": "5.9.3"},
+    "packages/format": {
+      "name": "@syntaxless/format",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "1.4.2",
+        "esbuild": "^0.28.2",
+        "playwright": "1.62.0",
+        "typescript": "5.9.3",
+      },
     },
-    "packages/sort/training": {"name": "@syntaxless/sort-training"},
+    "packages/format/training": {
+      "name": "@syntaxless/format-training",
+    },
+    "packages/retention": {
+      "name": "@syntaxless/retention",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "1.4.2",
+        "esbuild": "^0.28.2",
+        "playwright": "1.62.0",
+        "typescript": "5.9.3",
+      },
+    },
+    "packages/retention/training": {
+      "name": "@syntaxless/retention-training",
+    },
+    "packages/retry": {
+      "name": "@syntaxless/retry",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "1.4.2",
+        "esbuild": "^0.28.2",
+        "playwright": "1.62.0",
+        "typescript": "5.9.3",
+      },
+    },
+    "packages/retry/training": {
+      "name": "@syntaxless/retry-training",
+    },
+    "packages/sort": {
+      "name": "@syntaxless/sort",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "1.4.2",
+        "esbuild": "^0.28.2",
+        "playwright": "1.62.0",
+        "typescript": "5.9.3",
+      },
+    },
+    "packages/sort/training": {
+      "name": "@syntaxless/sort-training",
+    },
     "packages/validation": {
       "name": "@syntaxless/validation",
       "version": "0.1.0",
       "devDependencies": {
-        "@types/bun": "latest",
+        "@types/bun": "1.4.2",
         "esbuild": "^0.28.2",
         "playwright": "1.62.0",
         "typescript": "5.9.3",
@@ -68,14 +109,6 @@
     },
   },
   "packages": {
-    "jsbi": ["jsbi@4.3.2", "", {}, "sha512-9fqMSQbhJykSeii05nxKl4m6Eqn2P6rOlYiS+C5Dr/HPIU/7yZxu5qzbs40tgaFORiw2Amd0mirjxatXYMkIew=="],
-    "@js-temporal/polyfill": ["@js-temporal/polyfill@0.5.1", "", { "dependencies": { "jsbi": "^4.3.0" } }, "sha512-hloP58zRVCRSpgDxmqCWJNlizAlUgJFqG2ypq79DCvyv9tHjRYMDOcPFjzfl/A1/YxDvRCZz8wvZvmapQnKwFQ=="],
-    "@syntaxless/format-training": ["@syntaxless/format-training@workspace:packages/format/training"],
-    "@syntaxless/format": ["@syntaxless/format@workspace:packages/format"],
-    "@syntaxless/filter-training": ["@syntaxless/filter-training@workspace:packages/filter/training"],
-
-    "@syntaxless/filter": ["@syntaxless/filter@workspace:packages/filter"],
-
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.28.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ=="],
 
     "@esbuild/android-arm": ["@esbuild/android-arm@0.28.2", "", { "os": "android", "cpu": "arm" }, "sha512-kXXoiPVVGQcnIYGOeaovwOURpniDBpSq4A03qkQ+BMQqtGG6HYap3xne9C1O1yo4TR3qxlCX5IqqmX6fFo2Lqg=="],
@@ -127,6 +160,8 @@
     "@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.28.2", "", { "os": "win32", "cpu": "ia32" }, "sha512-YmJbfTlvU7Sdn9BB+4PRES4oB6pxgS37MAONj+hBr/cpXS1aBPKXxNnDbu+QCWPj0o9dgyxeq79g6c5P8KeuYA=="],
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.28.2", "", { "os": "win32", "cpu": "x64" }, "sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g=="],
+
+    "@js-temporal/polyfill": ["@js-temporal/polyfill@0.5.1", "", { "dependencies": { "jsbi": "^4.3.0" } }, "sha512-hloP58zRVCRSpgDxmqCWJNlizAlUgJFqG2ypq79DCvyv9tHjRYMDOcPFjzfl/A1/YxDvRCZz8wvZvmapQnKwFQ=="],
 
     "@napi-rs/lzma-linux-x64-gnu": ["@napi-rs/lzma-linux-x64-gnu@1.5.1", "", { "os": "linux", "cpu": "x64" }, "sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ=="],
 
@@ -184,12 +219,26 @@
 
     "@syntaxless/cron-training": ["@syntaxless/cron-training@workspace:packages/cron/training"],
 
+    "@syntaxless/filter": ["@syntaxless/filter@workspace:packages/filter"],
+
+    "@syntaxless/filter-training": ["@syntaxless/filter-training@workspace:packages/filter/training"],
+
+    "@syntaxless/format": ["@syntaxless/format@workspace:packages/format"],
+
+    "@syntaxless/format-training": ["@syntaxless/format-training@workspace:packages/format/training"],
+
     "@syntaxless/retention": ["@syntaxless/retention@workspace:packages/retention"],
+
     "@syntaxless/retention-training": ["@syntaxless/retention-training@workspace:packages/retention/training"],
+
     "@syntaxless/retry": ["@syntaxless/retry@workspace:packages/retry"],
+
     "@syntaxless/retry-training": ["@syntaxless/retry-training@workspace:packages/retry/training"],
+
     "@syntaxless/sort": ["@syntaxless/sort@workspace:packages/sort"],
+
     "@syntaxless/sort-training": ["@syntaxless/sort-training@workspace:packages/sort/training"],
+
     "@syntaxless/validation": ["@syntaxless/validation@workspace:packages/validation"],
 
     "@syntaxless/validation-training": ["@syntaxless/validation-training@workspace:packages/validation/training"],
@@ -207,6 +256,8 @@
     "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
 
     "fsevents": ["fsevents@2.3.2", "", { "os": "darwin" }, "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA=="],
+
+    "jsbi": ["jsbi@4.3.2", "", {}, "sha512-9fqMSQbhJykSeii05nxKl4m6Eqn2P6rOlYiS+C5Dr/HPIU/7yZxu5qzbs40tgaFORiw2Amd0mirjxatXYMkIew=="],
 
     "nanoid": ["nanoid@3.3.19", "", { "bin": { "nanoid": "bin/nanoid.cjs" } }, "sha512-Y2tUNy4ouw6tq5oDSKeQYGOyhkUBhNOcGV/02KC+6kd9eDGqdZd++mjMiIDilrBYvjEnCYvVtsuHCuP+okSfug=="],
 
