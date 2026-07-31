@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: TypeScript checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: oven-sh/setup-bun@v2.0.2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+
+  python:
+    name: Python tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: oven-sh/setup-bun@v2.0.2
+        with:
+          bun-version: 1.4.0
+      - uses: astral-sh/setup-uv@v6.3.1
+        with:
+          python-version: "3.13"
+      - run: uv sync --project training/cron --locked
+      - run: bun run test:python
