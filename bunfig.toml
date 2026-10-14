@@ -1,0 +1,21 @@
+[fmt]
+printWidth = 100
+tabWidth = 2
+useTabs = false
+semi = true
+singleQuote = false
+trailingComma = "all"
+endOfLine = "lf"
+sortImports = true
+sortPackageJson = true
+
+# .gitignore entries, node_modules, minified files and lock files are skipped already.
+ignorePatterns = [
+  "**/data/synth/**",
+  # Generated model artifacts keep the exporter's byte-for-byte representation.
+  "packages/*/src/model/weights.gen.ts",
+  # Consumption archives are generated and their exact bytes are hashed.
+  "**/evaluation/consumed/*.archive.json",
+  # README film compositions and their vendored libraries keep their hand-tuned layout.
+  "docs/media/**",
+]

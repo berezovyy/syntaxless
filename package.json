@@ -12,8 +12,8 @@
     "build": "bun run --filter '@syntaxless/*' --if-present build",
     "demo": "bun run demo/build.ts",
     "check": "bun run format:check && bun run typecheck && bun run test && bun run build",
-    "format": "prettier --write . --ignore-path .gitignore --ignore-path .prettierignore",
-    "format:check": "prettier --check . --ignore-path .gitignore --ignore-path .prettierignore",
+    "format": "bunx bun@1.4.3-canary.20261013.1 fmt",
+    "format:check": "bunx bun@1.4.3-canary.20261013.1 fmt --check",
     "test:python": "uv run --project training/cron --locked python -B training/cron/run_tests.py && uv run --project training/cron --locked python -B training/cron/run_tests.py training/shared",
     "train:cron": "bun run packages/cron/training/src/train.ts",
     "train:validation": "bun run packages/validation/training/src/train.ts",
@@ -26,11 +26,10 @@
   "devDependencies": {
     "@types/bun": "1.4.2",
     "@types/node": "26.5.1",
-    "prettier": "3.9.6",
     "typescript": "5.9.3"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.3"
   },
-  "packageManager": "bun@1.4.0"
+  "packageManager": "bun@1.4.3"
 }

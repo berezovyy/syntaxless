@@ -5,8 +5,13 @@ change must pass, commit conventions and the rules for evaluation data.
 
 ## Setup
 
-Requirements: Bun 1.4 or newer. Training and Python tests also need Python 3.13
+Requirements: Bun 1.4.3 or newer. Training and Python tests also need Python 3.13
 and [uv](https://docs.astral.sh/uv/).
+
+Formatting needs `bun fmt`, which so far ships only in canary builds
+(`1.4.4-canary.1` or newer). `bun run format` and `bun run check` fetch that
+pinned canary with `bunx`, so they work on stable Bun. To run `bun fmt`
+directly, install a canary with `bun upgrade --canary`.
 
 ```sh
 bun install --frozen-lockfile

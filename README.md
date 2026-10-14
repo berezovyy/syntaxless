@@ -177,8 +177,13 @@ whole built package, model included, at `gzip -9`.
 
 ## Development
 
-Requirements: Bun 1.4 or newer. Python training also needs Python 3.13 and
+Requirements: Bun 1.4.3 or newer. Python training also needs Python 3.13 and
 [uv](https://docs.astral.sh/uv/).
+
+Formatting needs `bun fmt`, which so far ships only in canary builds
+(`1.4.4-canary.1` or newer). `bun run format` and `bun run check` fetch that
+pinned canary with `bunx`, so they work on stable Bun. To run `bun fmt`
+directly, install a canary with `bun upgrade --canary`.
 
 ```sh
 bun install --frozen-lockfile
