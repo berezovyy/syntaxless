@@ -7,10 +7,11 @@ box-drawing shadow as double strokes), so it renders the same without any font i
 """
 from pathlib import Path
 
-# ink is a (start, end) pair for a left-to-right gradient
+# ink is a left-to-right gradient, stops spread evenly, in Ayu's constant → entity → tag colours:
+# Ayu Light on light backgrounds (the deepest pair, about 3:1 on white), Ayu Mirage on dark ones
 THEMES = {
-    "light": dict(ink=("#f29718", "#e8566b")),
-    "dark":  dict(ink=("#ffb454", "#f28779")),
+    "light": dict(ink=("#a37acc", "#399ee6")),
+    "dark":  dict(ink=("#dfbfff", "#73d0ff", "#5ccfe6")),
 }
 
 f = lambda v: f"{v:.2f}".rstrip("0").rstrip(".")
@@ -64,15 +65,18 @@ def banner_svg(t):
     cx, ch = (cols + 1) * CW, (len(BANNER) - 1) * CH
     cw = ch // 2
     W, H = cx + cw, len(BANNER) * CH
-    a, z = t["ink"]
+    ink = t["ink"]
+    stops = "".join(
+        f'<stop offset="{f(i / (len(ink) - 1))}" stop-color="{c}"/>' for i, c in enumerate(ink)
+    )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}">
   <title>Syntaxless</title>
   <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="{W}" y2="0">
-    <stop offset="0" stop-color="{a}"/><stop offset="1" stop-color="{z}"/>
+    {stops}
   </linearGradient>
   <path fill="url(#ink)" d="{''.join(blocks)}"/>
   <path fill="none" stroke="url(#ink)" stroke-opacity=".55" stroke-width="1.2" d="{''.join(lines)}"/>
-  <rect x="{cx}" y="0" width="{cw}" height="{ch}" fill="{z}">
+  <rect x="{cx}" y="0" width="{cw}" height="{ch}" fill="{ink[-1]}">
     <animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="1.1s" calcMode="discrete" repeatCount="indefinite"/>
   </rect>
 </svg>
