@@ -1,7 +1,7 @@
 {
   "name": "@syntaxless/retention",
   "version": "0.1.0",
-  "description": "Natural-language backup retention policies to typed intents and deterministic keep/remove previews",
+  "description": "Convert plain English backup retention policies to keep/remove previews. On-device natural-language parser for TypeScript and JavaScript, offline, zero dependencies.",
   "keywords": [
     "backup",
     "backup-retention",

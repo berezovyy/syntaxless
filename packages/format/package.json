@@ -1,7 +1,7 @@
 {
   "name": "@syntaxless/format",
   "version": "0.1.0",
-  "description": "Local natural-language formatting instructions compiled to validated Intl number, currency, percentage and date/time formatters",
+  "description": "Convert plain English formatting instructions to Intl number, currency, percentage and date formatters. On-device natural-language parser for TypeScript and JavaScript, offline, zero dependencies.",
   "keywords": [
     "currency",
     "date-format",

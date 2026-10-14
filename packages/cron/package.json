@@ -1,7 +1,7 @@
 {
   "name": "@syntaxless/cron",
   "version": "0.1.0",
-  "description": "Natural-language schedules to a typed intent AST and cron expressions",
+  "description": "Convert plain English schedules to cron expressions and next run dates. On-device natural-language parser for TypeScript and JavaScript, offline, zero dependencies.",
   "keywords": [
     "cron",
     "cron-expression",

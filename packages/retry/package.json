@@ -1,7 +1,7 @@
 {
   "name": "@syntaxless/retry",
   "version": "0.1.0",
-  "description": "Natural-language retry policies to typed intents and deterministic, bounded delay schedules",
+  "description": "Convert plain English retry policies to bounded exponential backoff delay schedules. On-device natural-language parser for TypeScript and JavaScript, offline, zero dependencies.",
   "keywords": [
     "backoff",
     "exponential-backoff",

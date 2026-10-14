@@ -1,7 +1,7 @@
 {
   "name": "@syntaxless/validation",
   "version": "0.1.0",
-  "description": "Natural-language field constraints to a typed intent AST and JSON Schema",
+  "description": "Convert plain English field rules to JSON Schema. On-device natural-language parser for TypeScript and JavaScript, offline, zero dependencies.",
   "keywords": [
     "constraints",
     "form-builder",

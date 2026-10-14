@@ -1,7 +1,7 @@
 {
   "name": "@syntaxless/sort",
   "version": "0.1.0",
-  "description": "Natural-language ordering to typed sort keys, a JavaScript comparator and SQLite ORDER BY fragments",
+  "description": "Convert plain English sort orders to SQLite ORDER BY clauses and JavaScript comparators. On-device natural-language parser for TypeScript and JavaScript, offline, zero dependencies.",
   "keywords": [
     "comparator",
     "natural-language",

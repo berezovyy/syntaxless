@@ -1,7 +1,7 @@
 {
   "name": "@syntaxless/filter",
   "version": "0.1.0",
-  "description": "Natural-language filters to typed predicate intents, JavaScript evaluation and parameterized SQLite WHERE fragments",
+  "description": "Convert plain English filters to parameterized SQLite WHERE clauses and JavaScript predicates. On-device natural-language parser for TypeScript and JavaScript, offline, zero dependencies.",
   "keywords": [
     "filter",
     "natural-language",
