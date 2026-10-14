@@ -1,6 +1,6 @@
 # Testing
 
-`bun run check` runs formatting, type checking, every TypeScript test suite and
+`bun run check` runs formatting, linting, type checking, every TypeScript test suite and
 every build (including the size gates). `bun run test:python` runs the Python
 suites for `training/cron` and `training/shared` in separate processes using the
 cron uv environment.

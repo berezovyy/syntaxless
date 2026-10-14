@@ -27,7 +27,7 @@ uv sync --project training/cron --locked   # only for Python tests or training
 Before opening a pull request, run:
 
 ```sh
-bun run check         # formatting, types, TypeScript tests, builds and size gates
+bun run check         # formatting, lint, types, TypeScript tests, builds and size gates
 bun run test:python   # when you touch training/ or a package's training workspace
 ```
 
@@ -39,7 +39,9 @@ bun run --cwd packages/<package> check:package
 bun run --cwd packages/<package> test:browser
 ```
 
-Format code and docs with `bun run format`. Test expectations follow
+Format code and docs with `bun run format`, and fix layout lint (blank lines between
+steps, braces on multi-line `if` bodies) with `bun run lint:fix`; lines over 100
+columns have to be rewritten by hand. Test expectations follow
 [TESTING.md](TESTING.md): independent expected values, a positive control for
 every refusal, and no tests that accept any outcome.
 

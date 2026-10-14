@@ -11,9 +11,11 @@
     "test": "bun run --filter '@syntaxless/*' --if-present test",
     "build": "bun run --filter '@syntaxless/*' --if-present build",
     "demo": "bun run demo/build.ts",
-    "check": "bun run format:check && bun run typecheck && bun run test && bun run build",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build",
     "format": "bunx bun@1.4.3-canary.20261013.1 fmt",
     "format:check": "bunx bun@1.4.3-canary.20261013.1 fmt --check",
+    "lint": "eslint .",
+    "lint:fix": "eslint --fix . && bun run format",
     "test:python": "uv run --project training/cron --locked python -B training/cron/run_tests.py && uv run --project training/cron --locked python -B training/cron/run_tests.py training/shared",
     "train:cron": "bun run packages/cron/training/src/train.ts",
     "train:validation": "bun run packages/validation/training/src/train.ts",
@@ -24,9 +26,13 @@
     "train:format": "bun run packages/format/training/src/train.ts"
   },
   "devDependencies": {
+    "@eslint/compat": "2.1.1",
+    "@stylistic/eslint-plugin": "5.10.0",
     "@types/bun": "1.4.2",
     "@types/node": "26.5.1",
-    "typescript": "5.9.3"
+    "eslint": "10.11.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.1"
   },
   "engines": {
     "bun": ">=1.4.3"

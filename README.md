@@ -191,11 +191,11 @@ Linux and Apple Silicon macOS are supported.
 
 ```sh
 bun install --frozen-lockfile
-bun run check          # formatting, type checking, TypeScript tests and builds with size gates
+bun run check          # formatting, lint, type checking, TypeScript tests and builds with size gates
 bun run format         # format sources and docs
 ```
 
-The checks also run individually: `bun run format:check`, `bun run typecheck`,
+The checks also run individually: `bun run format:check`, `bun run lint`, `bun run typecheck`,
 `bun run test` and `bun run build`. Package-level checks run from each package
 directory, for example:
 
