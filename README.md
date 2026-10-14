@@ -1,15 +1,20 @@
-<h1 align="center">Syntaxless</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo/logo-dark.svg" />
+    <img src="docs/media/logo/logo-light.svg" height="96" alt="Syntaxless" />
+  </picture>
+</h1>
 
 <p align="center">
-  Plain English in. Typed, deterministic output out.<br />
+  <strong>Plain English in. Typed, deterministic output out.</strong><br />
   Small natural-language parsers for TypeScript and JavaScript that run on the device and refuse instead of guessing.
 </p>
 
 <p align="center">
-  <a href="https://github.com/berezovyy/syntaxless/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/berezovyy/syntaxless/actions/workflows/ci.yml/badge.svg" /></a>
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-informational" /></a>
-  <img alt="Zero runtime dependencies" src="https://img.shields.io/badge/runtime%20deps-0-informational" />
-  <img alt="Under 100 kB gzip per package, model included" src="https://img.shields.io/badge/size-%3C100%20kB%20gzip-informational" />
+  <a href="https://github.com/berezovyy/syntaxless/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/berezovyy/syntaxless/ci.yml?branch=master&style=flat-square&label=CI" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-8250df?style=flat-square" alt="MIT license" /></a>
+  <img src="https://img.shields.io/badge/runtime%20deps-0-238636?style=flat-square" alt="Zero runtime dependencies" />
+  <img src="https://img.shields.io/badge/size-%3C100%20kB%20gzip-58a6ff?style=flat-square" alt="Under 100 kB gzip per package, model included" />
 </p>
 
 <p align="center">
@@ -201,7 +206,7 @@ training/cron/                 Python training and export harness for cron, and 
 training/shared/               Python training and export harness for the other six packages
 training/validation/           validation's boundary-calibrating exporter
 scripts/                       build helpers shared by every package (declarations, tarball check)
-docs/media/                    README videos; docs/media/v3/ holds their HyperFrames sources
+docs/media/                    README media: logo/ holds the logo and its generator, v3/ the films and their HyperFrames sources
 ```
 
 </details>
