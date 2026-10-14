@@ -20,6 +20,7 @@ one paused GSAP timeline, rendered frame by frame, so every render is identical.
 ## Render
 
 Requires Node.js 22+, Python 3 with Pillow, and FFmpeg with `libwebp` and `libx264`.
+With Nix, `nix develop .#media` from the repository root provides all of them.
 
 ```sh
 ./render.sh            # all films

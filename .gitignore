@@ -35,3 +35,8 @@ packages/retention/evaluation/reserved/ai-v4.jsonl
 packages/format/evaluation/reserved/ai-v1.jsonl
 packages/format/evaluation/reserved/ai-v2-bound-v4.jsonl
 packages/format/evaluation/reserved/ai-v3.jsonl
+
+# Nix build links and direnv's cache
+result
+result-*
+.direnv/

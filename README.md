@@ -185,6 +185,10 @@ Formatting needs `bun fmt`, which so far ships only in canary builds
 pinned canary with `bunx`, so they work on stable Bun. To run `bun fmt`
 directly, install a canary with `bun upgrade --canary`.
 
+With [Nix](https://nixos.org/), `nix develop` (or `direnv allow`) gives you all of
+this, pinned in `flake.nix`: the same Bun canary, Node.js 22, Python 3.13 and uv.
+Linux and Apple Silicon macOS are supported.
+
 ```sh
 bun install --frozen-lockfile
 bun run check          # formatting, type checking, TypeScript tests and builds with size gates
