@@ -10,6 +10,7 @@
     "typecheck": "bun run --filter '@syntaxless/*' --if-present typecheck",
     "test": "bun run --filter '@syntaxless/*' --if-present test",
     "build": "bun run --filter '@syntaxless/*' --if-present build",
+    "demo": "bun run demo/build.ts",
     "check": "bun run format:check && bun run typecheck && bun run test && bun run build",
     "format": "prettier --write . --ignore-path .gitignore --ignore-path .prettierignore",
     "format:check": "prettier --check . --ignore-path .gitignore --ignore-path .prettierignore",
