@@ -4,10 +4,20 @@
   "description": "Natural-language schedules to a typed intent AST and cron expressions",
   "keywords": [
     "cron",
+    "cron-expression",
+    "crontab",
     "natural-language",
+    "nlp",
+    "offline",
+    "on-device",
+    "parser",
+    "plain-english",
     "recurrence",
     "schedule",
-    "typescript"
+    "scheduler",
+    "syntaxless",
+    "typescript",
+    "zero-dependency"
   ],
   "homepage": "https://github.com/berezovyy/syntaxless/tree/master/packages/cron#readme",
   "bugs": {

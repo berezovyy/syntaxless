@@ -11,7 +11,13 @@
     "nlp",
     "number-format",
     "offline",
-    "typescript"
+    "on-device",
+    "parser",
+    "percentage",
+    "plain-english",
+    "syntaxless",
+    "typescript",
+    "zero-dependency"
   ],
   "homepage": "https://github.com/berezovyy/syntaxless/tree/master/packages/format#readme",
   "bugs": {

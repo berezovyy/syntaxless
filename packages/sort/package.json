@@ -5,11 +5,19 @@
   "keywords": [
     "comparator",
     "natural-language",
+    "nlp",
+    "offline",
+    "on-device",
     "order-by",
     "ordering",
+    "parser",
+    "plain-english",
     "sort",
+    "sorting",
     "sqlite",
-    "typescript"
+    "syntaxless",
+    "typescript",
+    "zero-dependency"
   ],
   "homepage": "https://github.com/berezovyy/syntaxless/tree/master/packages/sort#readme",
   "bugs": {

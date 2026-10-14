@@ -7,9 +7,16 @@
     "exponential-backoff",
     "jitter",
     "natural-language",
+    "nlp",
+    "offline",
+    "on-device",
+    "parser",
+    "plain-english",
     "retry",
     "schedule",
-    "typescript"
+    "syntaxless",
+    "typescript",
+    "zero-dependency"
   ],
   "homepage": "https://github.com/berezovyy/syntaxless/tree/master/packages/retry#readme",
   "bugs": {

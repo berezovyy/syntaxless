@@ -4,12 +4,20 @@
   "description": "Natural-language backup retention policies to typed intents and deterministic keep/remove previews",
   "keywords": [
     "backup",
+    "backup-retention",
     "calendar",
     "grandfather-father-son",
     "natural-language",
+    "nlp",
+    "offline",
+    "on-device",
+    "parser",
+    "plain-english",
     "retention",
     "snapshots",
-    "typescript"
+    "syntaxless",
+    "typescript",
+    "zero-dependency"
   ],
   "homepage": "https://github.com/berezovyy/syntaxless/tree/master/packages/retention#readme",
   "bugs": {

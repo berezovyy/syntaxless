@@ -5,11 +5,20 @@
   "keywords": [
     "filter",
     "natural-language",
+    "nlp",
+    "offline",
+    "on-device",
+    "parser",
+    "plain-english",
     "predicate",
     "query",
+    "search",
     "sqlite",
+    "syntaxless",
+    "text-to-sql",
     "typescript",
-    "where"
+    "where",
+    "zero-dependency"
   ],
   "homepage": "https://github.com/berezovyy/syntaxless/tree/master/packages/filter#readme",
   "bugs": {
