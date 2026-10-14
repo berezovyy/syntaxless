@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Syntaxless: sort</title>
+    <script src="shared/vendor/gsap.min.js"></script>
+    <script src="shared/vendor/CustomEase.min.js"></script>
+    <link rel="stylesheet" href="shared/sx.css" />
+    <style>
+      /* Five lines of code, so the editor is short and the preview below gets the room for
+         its six rows. */
+      #editor {
+        left: 72px;
+        top: 128px;
+        width: 1776px;
+        height: 340px;
+      }
+      #preview {
+        left: 72px;
+        top: 488px;
+        width: 1316px;
+        height: 520px;
+      }
+      #pkg {
+        left: 1408px;
+        top: 488px;
+        width: 440px;
+        height: 520px;
+      }
+      /* Unsaved changes: a dot after the file name, gone once the file is saved. */
+      .dirty {
+        margin-left: -12px;
+        font-size: 16px;
+        color: var(--ink-2);
+      }
+      .pv {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 56px;
+        bottom: 0;
+        padding: 20px 28px 0;
+      }
+      .tr {
+        display: grid;
+        grid-template-columns: 100px 1fr 280px 200px;
+        align-items: center;
+        height: 56px;
+        padding: 0 4px;
+        font-size: 25px;
+      }
+      .tr.th {
+        height: 44px;
+        border-bottom: 1px solid var(--line-2);
+        font-size: 16px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+      }
+      .num {
+        text-align: right;
+        padding-right: 28px;
+      }
+      .dir {
+        margin-left: 10px;
+        letter-spacing: 0;
+        color: var(--ink);
+      }
+      .dir sup {
+        font-size: 11px;
+        margin-left: 2px;
+      }
+      .rows {
+        position: relative;
+        height: 336px;
+      }
+      .rows .tr {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+      }
+      .rows .id,
+      .rows .null {
+        color: var(--ink-3);
+      }
+      .rows .date {
+        color: var(--ink-2);
+      }
+      .ids {
+        margin-top: 14px;
+        padding-right: 32px;
+        text-align: right;
+        font-size: 20px;
+        color: var(--ink-3);
+      }
+      .ids b {
+        font-weight: 400;
+        color: var(--ink);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="sort"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="8.5"
+    >
+      <div class="backdrop"></div>
+      <div id="scene" class="clip" data-start="0" data-duration="8.5">
+        <div class="shell">
+          <div class="shell-bar">
+            <span class="lights-slot"></span>catalog.tsx — shop<span class="tag">@syntaxless/sort</span>
+          </div>
+        </div>
+        <div class="panel" id="editor">
+          <div class="panel-head">catalog.tsx<span class="dirty" id="dirty">●</span><span class="tag">TypeScript</span></div>
+          <div class="code" id="code"></div>
+          <div class="focus"></div>
+        </div>
+        <div class="panel" id="preview">
+          <div class="panel-head">Preview · localhost:5173<span class="tag">products</span></div>
+          <div class="pv" id="pv">
+            <div class="tr th">
+              <div>id</div>
+              <div>product</div>
+              <div>created<span class="dir" id="dirC">↓<sup>1</sup></span></div>
+              <div class="num">price<span class="dir" id="dirP">↑<sup>2</sup></span></div>
+            </div>
+            <div class="rows" id="rows"></div>
+            <div class="ids" id="ids">ids <b>[3, 2, 6, 5, 1, 4]</b></div>
+          </div>
+          <div class="focus"></div>
+        </div>
+        <div class="panel" id="pkg"></div>
+      </div>
+    </div>
+
+    <script src="shared/sx.js"></script>
+    <script>
+      (function () {
+        const D = 8.5;
+        const $ = (id) => document.getElementById(id);
+        for (const slot of document.querySelectorAll(".lights-slot")) slot.outerHTML = SX.LIGHTS;
+
+        const lines = SX.code($("code"), [
+          'import { parse, sortRecords } from "@syntaxless/sort";',
+          'import { context, products, render } from "./catalog";',
+          "",
+          'const order = await parse("{{q}}", context);',
+          "if (order.ok) render(sortRecords(products, order.intent, context));",
+        ]);
+        const bar = SX.packageCard($("pkg"), "sort", 35.0);
+        const field = new SX.Field($("q"), { seed: 71, bar: true });
+        const pointer = SX.pointer($("scene"));
+
+        // sortRecords(products, intent, context) returns ids [3, 2, 6, 5, 1, 4].
+        const PRODUCTS = [
+          { id: 1, name: "Linen shirt", created: "2026-10-03", price: 48 },
+          { id: 2, name: "Wool scarf", created: "2026-10-11", price: 35 },
+          { id: 3, name: "Canvas tote", created: "2026-10-11", price: 22 },
+          { id: 4, name: "Leather belt", created: "2026-09-21", price: null },
+          { id: 5, name: "Field jacket", created: "2026-10-07", price: 189 },
+          { id: 6, name: "Rain hat", created: "2026-10-11", price: null },
+        ];
+        const SORTED = [3, 2, 6, 5, 1, 4];
+        const H = 56;
+        $("rows").innerHTML = PRODUCTS.map(
+          (p) =>
+            '<div class="tr"><div class="id">' + p.id + "</div><div>" + p.name + "</div>" +
+            '<div class="date">' + p.created + "</div>" +
+            '<div class="num' + (p.price === null ? " null" : "") + '">' + (p.price === null ? "null" : p.price) + "</div></div>",
+        ).join("");
+        const rowEls = Array.from($("rows").children);
+
+        const tl = gsap.timeline({ paused: true });
+        const init = (target, vars) => {
+          gsap.set(target, vars);
+          tl.set(target, vars, 0);
+        };
+        init(".focus, .ln .hl", { opacity: 0 });
+        init(".lights .live", { opacity: 0 });
+        init("#code, #pv, #pkg .pkg-body", { opacity: 1 });
+        init(bar, { scaleX: 0 });
+        init("#pkg .pkg-value, #dirty, #dirC, #dirP, #ids", { opacity: 0 });
+        rowEls.forEach((el, i) => init(el, { top: i * H, y: 0, opacity: 1 }));
+
+        const hand = SX.hand(tl, pointer);
+        const REST = [1600, 270];
+        hand.place(0, REST[0], REST[1]);
+        const LINE = (i) => 202 + 42 * i + 21;
+        const STR_X = 148 + 27 * 14.4;
+
+        // Click into the string, then say the order in English.
+        const tA = hand.move(0.3, STR_X + 12, LINE(3) + 6);
+        hand.click(tA);
+        tl.to(".lights .live", { opacity: 1, duration: 0.2, ease: "sx.swap" }, tA + 0.1);
+        tl.to("#editor > .focus", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tA + 0.1);
+        tl.to(lines[3].querySelector(".hl"), { opacity: 1, duration: 0.25, ease: "sx.swap" }, tA + 0.1);
+        field.focus(tA + 0.1);
+        hand.move(tA + 0.45, REST[0], REST[1], 0.85);
+        const t0 = tA + 0.35;
+        const typed = field.type(t0, "newest first, then cheapest, missing prices last", 1.25);
+        tl.set("#dirty", { opacity: 1 }, t0 + 0.04);
+
+        // Save: the dot goes, and the preview hot-reloads in the new order. Rows leave in place,
+        // then open in their new order, top to bottom, with a short rise.
+        const tSave = typed + 0.45;
+        tl.set("#dirty", { opacity: 0 }, tSave);
+        const tSort = tSave + 0.15;
+        tl.to("#editor > .focus", { opacity: 0, duration: 0.3, ease: "sx.swap" }, tSort);
+        tl.to("#preview > .focus", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tSort);
+        tl.to(rowEls, { opacity: 0, duration: 0.22, ease: "sx.in" }, tSort);
+        SORTED.forEach((id, slot) => {
+          const el = rowEls[id - 1];
+          tl.set(el, { top: slot * H, y: 14 }, tSort + 0.24);
+          tl.to(el, { opacity: 1, y: 0, duration: 0.42, ease: "sx.out" }, tSort + 0.3 + slot * 0.07);
+        });
+        tl.to("#dirC", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tSort + 0.3);
+        tl.to("#dirP", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tSort + 0.4);
+        const tIds = tSort + 0.3 + 5 * 0.07 + 0.3;
+        tl.to("#ids", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tIds);
+        // The first parse loads the package and its model, once.
+        tl.to("#pkg .pkg-value", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tSort);
+        tl.to(bar, { scaleX: 1, duration: 0.7, ease: "sx.out" }, tSort);
+        const tDone = tIds + 0.3;
+
+        // Loop: only the sub-cards' contents dip, then return to the opening frame.
+        const tReset = D - 0.75;
+        const tR = tReset + 0.33;
+        const DIP = "#code, #pv, #pkg .pkg-body";
+        tl.to(DIP, { opacity: 0, duration: 0.32, ease: "sx.in" }, tReset);
+        field.blur(tR);
+        field.set(tR, "");
+        tl.set(".focus, .ln .hl", { opacity: 0 }, tR);
+        tl.set(".lights .live", { opacity: 0 }, tR);
+        tl.set(bar, { scaleX: 0 }, tR);
+        tl.set("#pkg .pkg-value, #dirC, #dirP, #ids", { opacity: 0 }, tR);
+        rowEls.forEach((el, i) => tl.set(el, { top: i * H, y: 0, opacity: 1 }, tR));
+        tl.to(DIP, { opacity: 1, duration: 0.34, ease: "sx.out" }, tR + 0.01);
+        tl.set({}, {}, D);
+
+        SX.drive(tl, D, (t) => field.render(t));
+        window.__marks = { typed, tSave, tSort, tDone, tReset };
+        console.log("marks " + JSON.stringify(window.__marks));
+        window.__timelines["sort"] = tl;
+      })();
+    </script>
+  </body>
+</html>

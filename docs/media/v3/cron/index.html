@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Syntaxless: cron</title>
+    <script src="shared/vendor/gsap.min.js"></script>
+    <script src="shared/vendor/CustomEase.min.js"></script>
+    <link rel="stylesheet" href="shared/sx.css" />
+    <style>
+      #editor {
+        left: 72px;
+        top: 128px;
+        width: 1776px;
+        height: 470px;
+      }
+      #term {
+        left: 72px;
+        top: 618px;
+        width: 1316px;
+        height: 390px;
+      }
+      #pkg {
+        left: 1408px;
+        top: 618px;
+        width: 440px;
+        height: 390px;
+      }
+      .term-screen {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 56px;
+        bottom: 0;
+        overflow: hidden;
+      }
+      .s {
+        color: var(--ink);
+      }
+      /* The type the editor infers, drawn as an inlay hint. */
+      .inlay {
+        margin: 0 2px;
+        padding: 2px 6px;
+        border-radius: 5px;
+        font-size: 20px;
+        color: var(--ink-3);
+        background: var(--surface-2);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="cron"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="14"
+    >
+      <div class="backdrop"></div>
+      <div id="scene" class="clip" data-start="0" data-duration="14">
+        <div class="shell">
+          <div class="shell-bar">
+            <span class="lights-slot"></span>jobs.ts — scheduler<span class="tag">@syntaxless/cron</span>
+          </div>
+        </div>
+        <div class="panel" id="editor">
+          <div class="panel-head">jobs.ts<span class="tag">TypeScript</span></div>
+          <div class="code" id="code"></div>
+          <div class="focus"></div>
+        </div>
+        <div class="panel" id="term">
+          <div class="panel-head">Terminal<span class="tag">~/scheduler</span></div>
+          <div class="term-screen"><div class="term-body" id="termBody"></div></div>
+          <div class="focus"></div>
+        </div>
+        <div class="panel" id="pkg"></div>
+      </div>
+    </div>
+
+    <script src="shared/sx.js"></script>
+    <script>
+      (function () {
+        const D = 14;
+        const $ = (id) => document.getElementById(id);
+        for (const slot of document.querySelectorAll(".lights-slot")) slot.outerHTML = SX.LIGHTS;
+
+        const lines = SX.code($("code"), [
+          'import { cron, recurrences } from "@syntaxless/cron";',
+          "",
+          'const now = "2026-10-12T00:00:00Z";',
+          'const job{{hint}} = await cron("{{q}}");',
+          "console.log(job.supported ? job.expression : job.reason);",
+          "",
+          'const next = recurrences(job.intent!, { timezone: "UTC", reference: now, count: 4 });',
+          "if (next.ok) console.log(next.occurrences.map((o) => o.instant));",
+        ]);
+        $("hint").innerHTML = '<span class="inlay">: CronResult</span>';
+        const bar = SX.packageCard($("pkg"), "cron", 92.6);
+        const field = new SX.Field($("q"), { seed: 43, bar: true });
+        const pointer = SX.pointer($("scene"));
+
+        // Output of running this file with Bun, for each phrase.
+        const s = (v) => '<span class="s">"' + v + '"</span>';
+        const p = (v) => '<span class="prompt">' + v + "</span>";
+        const dates = (ds) => [
+          p("[") + " " + ds.slice(0, 3).map(s).join(p(", ")) + p(","),
+          "  " + s(ds[3]),
+          p("]"),
+        ];
+        const term = new SX.Terminal($("termBody"), { rows: 7, seed: 9 });
+
+        const tl = gsap.timeline({ paused: true });
+        const init = (target, vars) => {
+          gsap.set(target, vars);
+          tl.set(target, vars, 0);
+        };
+        init(".focus, .ln .hl", { opacity: 0 });
+        init(".lights .live", { opacity: 0 });
+        init("#code, .term-screen, #pkg .pkg-body", { opacity: 1 });
+        init(bar, { scaleX: 0 });
+        init("#pkg .pkg-value", { opacity: 0 });
+
+        const hand = SX.hand(tl, pointer);
+        const REST = [1250, 960];
+        hand.place(0, REST[0], REST[1]);
+        const LINE = (i) => 202 + 42 * i + 21;
+        // `const job`, the inlay hint (160px), then ` = await cron("`.
+        const STR_X = 148 + 9 * 14.4 + 160 + 15 * 14.4;
+        const TERM = [620, 930];
+
+        // Click into the string, then write the schedule in English.
+        const tA = hand.move(0.3, STR_X + 12, LINE(3) + 6);
+        hand.click(tA);
+        tl.to(".lights .live", { opacity: 1, duration: 0.2, ease: "sx.swap" }, tA + 0.1);
+        tl.to("#editor > .focus", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tA + 0.1);
+        tl.to(lines[3].querySelector(".hl"), { opacity: 1, duration: 0.25, ease: "sx.swap" }, tA + 0.1);
+        field.focus(tA + 0.1);
+        hand.move(tA + 0.45, REST[0], REST[1], 0.85);
+        const typed1 = field.type(tA + 0.35, "weekdays at 9:30am", 1.0);
+
+        // Click the terminal and run it.
+        const tT = hand.move(typed1 + 0.3, TERM[0], TERM[1]);
+        hand.click(tT);
+        field.blur(tT + 0.1);
+        tl.to("#editor > .focus", { opacity: 0, duration: 0.3, ease: "sx.swap" }, tT + 0.1);
+        tl.to("#term > .focus", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tT + 0.1);
+        hand.move(tT + 0.35, REST[0], REST[1], 0.7);
+        const run1 = term
+          .at(tT + 0.25)
+          .type("bun jobs.ts", 1.2)
+          .enter(
+            ["30 9 * * 1-5"].concat(
+              dates(["2026-10-12T09:30:00.000Z", "2026-10-13T09:30:00.000Z", "2026-10-14T09:30:00.000Z", "2026-10-15T09:30:00.000Z"]),
+            ),
+            0.35,
+          );
+        const tOut1 = run1.end;
+        // The first call loads the package and its model, once.
+        tl.to("#pkg .pkg-value", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tOut1 - 0.3);
+        tl.to(bar, { scaleX: 1, duration: 0.7, ease: "sx.out" }, tOut1 - 0.3);
+
+        // Back to the string: select it, ask for something cron cannot say.
+        const tB = hand.move(tOut1 + 1.5, STR_X + 130, LINE(3) + 6);
+        hand.click(tB);
+        hand.click(tB + 0.18);
+        tl.to("#term > .focus", { opacity: 0, duration: 0.3, ease: "sx.swap" }, tB + 0.1);
+        tl.to("#editor > .focus", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tB + 0.1);
+        field.focus(tB + 0.1);
+        const tSel = field.replace(tB + 0.3, 0.3);
+        hand.move(tB + 0.5, REST[0], REST[1], 0.85);
+        const typed2 = field.type(tSel + 0.12, "first friday of every month at noon", 1.25);
+
+        // Run it again: up arrow recalls the command. No cron line exists for it, yet the
+        // occurrences still come out.
+        const tT2 = hand.move(typed2 + 0.25, TERM[0], TERM[1]);
+        hand.click(tT2);
+        field.blur(tT2 + 0.1);
+        tl.to("#editor > .focus", { opacity: 0, duration: 0.3, ease: "sx.swap" }, tT2 + 0.1);
+        tl.to("#term > .focus", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tT2 + 0.1);
+        hand.move(tT2 + 0.35, REST[0], REST[1], 0.7);
+        const run2 = term
+          .at(tT2 + 0.3)
+          .recall("bun jobs.ts", 0.2)
+          .enter(
+            ['<span class="del">cron cannot represent an ordinal weekday</span>'].concat(
+              dates(["2026-11-06T12:00:00.000Z", "2026-12-04T12:00:00.000Z", "2027-01-01T12:00:00.000Z", "2027-02-05T12:00:00.000Z"]),
+            ),
+            0.3,
+          );
+
+        // Loop: only the sub-cards' contents dip, then return to the opening frame.
+        const tReset = D - 0.75;
+        const tR = tReset + 0.33;
+        const DIP = "#code, .term-screen, #pkg .pkg-body";
+        tl.to(DIP, { opacity: 0, duration: 0.32, ease: "sx.in" }, tReset);
+        term.clear(tR);
+        field.set(tR, "");
+        tl.set(".focus, .ln .hl", { opacity: 0 }, tR);
+        tl.set(".lights .live", { opacity: 0 }, tR);
+        tl.set(bar, { scaleX: 0 }, tR);
+        tl.set("#pkg .pkg-value", { opacity: 0 }, tR);
+        tl.to(DIP, { opacity: 1, duration: 0.34, ease: "sx.out" }, tR + 0.01);
+        tl.set({}, {}, D);
+
+        SX.drive(tl, D, (t) => {
+          field.render(t);
+          term.render(t);
+        });
+        window.__marks = { typed1, tOut1, typed2, run2: run2.end, tReset };
+        console.log("marks " + JSON.stringify(window.__marks));
+        window.__timelines["cron"] = tl;
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,3 @@
+# GitHub Linguist: keep language stats and code search focused on the source
+packages/*/src/model/weights.gen.ts linguist-generated
+docs/media/v3/** linguist-documentation

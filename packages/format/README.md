@@ -5,6 +5,10 @@ date/time intents, and compile them into validated `Intl` formatters. Parsing
 runs locally on a small bundled model, so no text or intents are sent to a
 server.
 
+<p align="center">
+  <img alt="An editor and terminal. 'euros, two decimals, negatives in parentheses' formats a ledger as (€1,234.50), €98,000.00 and so on; changing only the locale to de-DE prints (1.234,50 €), 98.000,00 € and so on." src="https://raw.githubusercontent.com/berezovyy/syntaxless/master/docs/media/v3/films/format.webp" width="100%" />
+</p>
+
 ## Install
 
 ```sh

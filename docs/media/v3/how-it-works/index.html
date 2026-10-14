@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Syntaxless: how it works</title>
+    <script src="shared/vendor/gsap.min.js"></script>
+    <script src="shared/vendor/CustomEase.min.js"></script>
+    <link rel="stylesheet" href="shared/sx.css" />
+    <style>
+      /* Grid: card content spans 72..1848 x 128..1008, 24px padding, 20px gutters. */
+      .step {
+        top: 128px;
+        width: 429px;
+        height: 150px;
+      }
+      #s1 {
+        left: 72px;
+      }
+      #s2 {
+        left: 521px;
+      }
+      #s3 {
+        left: 970px;
+      }
+      #s4 {
+        left: 1419px;
+      }
+      #inp {
+        left: 72px;
+        top: 298px;
+        width: 1776px;
+        height: 350px;
+      }
+      #int {
+        left: 72px;
+        top: 668px;
+        width: 1040px;
+        height: 340px;
+      }
+      #out {
+        left: 1132px;
+        top: 668px;
+        width: 716px;
+        height: 340px;
+      }
+      .body {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 56px;
+        bottom: 0;
+      }
+
+      /* ---------- Steps ---------- */
+      .sc {
+        position: absolute;
+        inset: 0;
+      }
+      .step .panel-head .no {
+        color: var(--ink-3);
+      }
+      .mark {
+        position: relative;
+        margin-left: auto;
+        width: 24px;
+        height: 28px;
+        font-size: 22px;
+        line-height: 28px;
+      }
+      .mark span {
+        position: absolute;
+        right: 0;
+        top: 0;
+      }
+      .desc {
+        padding: 16px 24px 0;
+        font-size: 18px;
+        line-height: 28px;
+        color: var(--ink-2);
+      }
+
+      /* ---------- Input ---------- */
+      #q {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        top: 24px;
+        height: 72px;
+        font-size: 30px;
+      }
+      #q .text {
+        color: var(--ink);
+      }
+      .lex {
+        position: absolute;
+        left: 24px;
+        top: 124px;
+        display: flex;
+        gap: 22px;
+        align-items: flex-start;
+      }
+      .col {
+        position: relative;
+        min-width: 130px;
+      }
+      .chip {
+        display: inline-block;
+        height: 54px;
+        box-sizing: border-box;
+        padding: 0 16px;
+        border-radius: 8px;
+        border: 1px solid var(--line-2);
+        background: var(--bg);
+        font-size: 32px;
+        line-height: 52px;
+        white-space: pre;
+        color: var(--ink);
+      }
+      .glue .chip {
+        color: var(--ink-2);
+      }
+      .role {
+        margin-top: 16px;
+        height: 24px;
+        font-size: 18px;
+        line-height: 24px;
+        white-space: nowrap;
+        color: var(--ink);
+      }
+      .glue .role {
+        color: var(--ink-3);
+      }
+      .meter {
+        position: relative;
+        margin-top: 10px;
+        width: 100px;
+        height: 6px;
+        border-radius: 3px;
+        background: var(--line);
+      }
+      .meter i {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        border-radius: 3px;
+        background: var(--ink-2);
+        transform-origin: left center;
+      }
+      .glue .meter i {
+        background: var(--ink-3);
+      }
+      .low .meter i {
+        background: var(--del);
+      }
+      .score {
+        margin-top: 8px;
+        height: 22px;
+        font-size: 17px;
+        line-height: 22px;
+        color: var(--ink-2);
+      }
+      .glue .score {
+        color: var(--ink-3);
+      }
+      .low .score {
+        color: var(--del);
+      }
+
+      /* ---------- Intent ---------- */
+      .ilines {
+        position: absolute;
+        left: 24px;
+        top: 22px;
+        font-size: 22px;
+        line-height: 40px;
+        white-space: pre;
+        color: var(--ink-2);
+      }
+      .il {
+        position: relative;
+        height: 40px;
+      }
+      .none {
+        position: absolute;
+        left: 24px;
+        top: 22px;
+        font-size: 22px;
+        line-height: 40px;
+        color: var(--ink-3);
+      }
+
+      /* ---------- Output ---------- */
+      .cron {
+        position: absolute;
+        left: 24px;
+        top: 34px;
+        display: flex;
+        gap: 40px;
+      }
+      .cf {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .cf b {
+        position: relative;
+        display: block;
+        height: 84px;
+        font-size: 76px;
+        line-height: 84px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+      .cf small {
+        width: 100%;
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line-2);
+        font-size: 17px;
+        color: var(--ink-3);
+      }
+      .str {
+        position: absolute;
+        left: 24px;
+        top: 214px;
+        font-size: 22px;
+        line-height: 32px;
+        color: var(--ink-3);
+      }
+      .str span {
+        position: relative;
+        color: var(--ink);
+      }
+      .refuse {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        top: 34px;
+      }
+      .refuse > div {
+        position: relative;
+      }
+      .refuse .head {
+        font-size: 28px;
+        line-height: 40px;
+        color: var(--del);
+      }
+      .refuse .why {
+        margin-top: 12px;
+        font-size: 21px;
+        line-height: 32px;
+        color: var(--ink);
+      }
+      .refuse .note {
+        margin-top: 48px;
+        font-size: 18px;
+        line-height: 28px;
+        color: var(--ink-3);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="how-it-works"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="19.6"
+    >
+      <div class="backdrop"></div>
+      <div id="scene" class="clip" data-start="0" data-duration="19.6">
+        <div class="shell">
+          <div class="shell-bar">
+            <span class="lights-slot"></span>how it works — @syntaxless/cron<span class="tag">real model output</span>
+          </div>
+        </div>
+
+        <div class="panel step" id="s1">
+          <div class="sc">
+            <div class="panel-head"><span class="no">01</span>tokenize<span class="mark"><span class="ok add">✓</span><span class="x del">✕</span></span></div>
+            <div class="desc">the text is split into lexemes: "9:30am" becomes four.</div>
+          </div>
+          <div class="focus"></div>
+        </div>
+        <div class="panel step" id="s2">
+          <div class="sc">
+            <div class="panel-head"><span class="no">02</span>tag<span class="mark"><span class="ok add">✓</span><span class="x del">✕</span></span></div>
+            <div class="desc">a small int6 tagger, bundled as TypeScript, labels each one.</div>
+          </div>
+          <div class="focus"></div>
+        </div>
+        <div class="panel step" id="s3">
+          <div class="sc">
+            <div class="panel-head"><span class="no">03</span>resolve<span class="mark"><span class="ok add">✓</span><span class="x del">✕</span></span></div>
+            <div class="desc">a deterministic resolver builds a typed intent from the roles.</div>
+          </div>
+          <div class="focus"></div>
+        </div>
+        <div class="panel step" id="s4">
+          <div class="sc">
+            <div class="panel-head"><span class="no">04</span>compile<span class="mark"><span class="ok add">✓</span><span class="x del">✕</span></span></div>
+            <div class="desc">a compiler emits the target. same intent, same output.</div>
+          </div>
+          <div class="focus"></div>
+        </div>
+
+        <div class="panel" id="inp">
+          <div class="panel-head">input<span class="tag">plain text in · nothing leaves the device</span></div>
+          <div class="body">
+            <div class="field" id="q">
+              <span class="ph">Describe a schedule in plain English…</span><span class="text"></span>
+              <span class="ring"></span>
+            </div>
+            <div class="lex" id="lexA"></div>
+            <div class="lex" id="lexB"></div>
+          </div>
+          <div class="focus"></div>
+        </div>
+
+        <div class="panel" id="int">
+          <div class="panel-head">intent<span class="tag">ScheduleIntent</span></div>
+          <div class="body">
+            <div class="ilines" id="ilines"></div>
+            <div class="none" id="none">no intent</div>
+          </div>
+          <div class="focus"></div>
+        </div>
+
+        <div class="panel" id="out">
+          <div class="panel-head">output<span class="tag">cron expression</span></div>
+          <div class="body">
+            <div id="cronV">
+              <div class="cron" id="cron"></div>
+              <div class="str" id="str">expression <span>"30 9 * * 1-5"</span></div>
+            </div>
+            <div class="refuse" id="refuse">
+              <div class="head">✕ refused · unsafe-context</div>
+              <div class="why">the text does not request a recurring schedule</div>
+              <div class="note">unsure or unsafe? it refuses, with a code your UI can handle.</div>
+            </div>
+          </div>
+          <div class="focus"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="shared/sx.js"></script>
+    <script>
+      (function () {
+        const D = 19.6;
+        const $ = (id) => document.getElementById(id);
+        for (const slot of document.querySelectorAll(".lights-slot")) slot.outerHTML = SX.LIGHTS;
+
+        // Output of the bundled cron model (tokenize → inferTokens) and cron().
+        const A = {
+          text: "weekdays at 9:30am",
+          tokens: [
+            { t: "weekdays", role: "DAYGROUP_WEEKDAY", score: 0.987 },
+            { t: "at", role: "GLUE", score: 1.0, glue: true },
+            { t: "9", role: "HOUR_9", score: 0.881 },
+            { t: ":", role: "GLUE", score: 1.0, glue: true },
+            { t: "30", role: "MINUTE_30", score: 0.998 },
+            { t: "am", role: "MERIDIEM_AM", score: 0.999 },
+          ],
+        };
+        const B = {
+          text: "remind me tomorrow at 3",
+          tokens: [
+            { t: "remind", role: "O", score: 1.0, glue: true },
+            { t: "me", role: "O", score: 1.0, glue: true },
+            { t: "tomorrow", role: "HOUR_2", score: 0.235, low: true },
+            { t: "at", role: "O", score: 0.945, glue: true },
+            { t: "3", role: "O", score: 0.657, glue: true },
+          ],
+        };
+        // The typed intent, and which lexemes each line comes from.
+        const LINES = [
+          { src: "const intent: ScheduleIntent = {", from: [] },
+          { src: '  frequency: { unit: "week", interval: 1 },', from: [0] },
+          { src: '  weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday"],', from: [0] },
+          { src: "  time: { hour: 9, minute: 30 },", from: [2, 4, 5] },
+          { src: "};", from: [] },
+        ];
+        const FIELDS = [
+          ["30", "minute"],
+          ["9", "hour"],
+          ["*", "day"],
+          ["*", "month"],
+          ["1-5", "weekday"],
+        ];
+
+        const lex = (el, data) => {
+          el.innerHTML = data.tokens
+            .map(
+              (k) =>
+                '<div class="col' + (k.glue ? " glue" : "") + (k.low ? " low" : "") + '">' +
+                '<div class="chip">' + SX.esc(k.t) + "</div>" +
+                '<div class="role">' + k.role + "</div>" +
+                '<div class="meter"><i style="width:' + k.score * 100 + '%"></i></div>' +
+                '<div class="score">' + k.score.toFixed(3) + "</div></div>",
+            )
+            .join("");
+          return Array.from(el.children);
+        };
+        const colsA = lex($("lexA"), A);
+        const colsB = lex($("lexB"), B);
+        $("ilines").innerHTML = LINES.map((l) => '<div class="il">' + SX.hl(l.src) + "</div>").join("");
+        const lineEls = Array.from($("ilines").children);
+        $("cron").innerHTML = FIELDS.map(([v, k]) => '<div class="cf"><b>' + v + "</b><small>" + k + "</small></div>").join("");
+        const vals = Array.from($("cron").children);
+        const refuseEls = Array.from($("refuse").children);
+        const tags = (cols) => cols.map((c) => c.querySelectorAll(".role, .meter, .score"));
+        const fills = (cols) => cols.map((c) => c.querySelector(".meter i"));
+        const chips = colsA.map((c) => c.querySelector(".chip"));
+        const LINE_2 = getComputedStyle(document.documentElement).getPropertyValue("--line-2").trim();
+        const INK_2 = getComputedStyle(document.documentElement).getPropertyValue("--ink-2").trim();
+
+        const field = new SX.Field($("q"), { seed: 17 });
+        const pointer = SX.pointer($("scene"));
+
+        const tl = gsap.timeline({ paused: true });
+        const init = (target, vars) => {
+          gsap.set(target, vars);
+          tl.set(target, vars, 0);
+        };
+        const RESET = () => [
+          [".focus, .ring, .mark span", { opacity: 0 }],
+          [".lights .live", { opacity: 0 }],
+          [".sc", { opacity: 1 }],
+          [[...colsA, ...colsB], { opacity: 0, y: 14 }],
+          [[...tags(colsA), ...tags(colsB)], { opacity: 0 }],
+          [[...fills(colsA), ...fills(colsB)], { scaleX: 0 }],
+          [chips, { borderColor: LINE_2 }],
+          [[...lineEls, $("none"), ...vals, $("str"), ...refuseEls], { opacity: 0, y: 14 }],
+        ];
+        for (const [target, vars] of RESET()) init(target, vars);
+        init("#inp .body, #int .body, #out .body", { opacity: 1 });
+
+        // Open in place: a fade and a 14px rise. Nothing that opens is on screen at the loop seam.
+        const open = (els, at, stagger) =>
+          tl.to(els, { opacity: 1, y: 0, duration: 0.42, ease: "sx.out", stagger: stagger || 0 }, at);
+        const fade = (els, to, at, d) => tl.to(els, { opacity: to, duration: d || 0.3, ease: "sx.swap" }, at);
+
+        // Focus by contrast: outlines on the cards in play; the other steps dim.
+        let lit = new Set();
+        const focus = (ids, at) => {
+          for (const id of lit) if (!ids.includes(id)) fade("#" + id + " > .focus", 0, at);
+          for (const id of ids) if (!lit.has(id)) fade("#" + id + " > .focus", 1, at);
+          lit = new Set(ids);
+        };
+        const stepOp = [1, 1, 1, 1];
+        const steps = (active, at) => {
+          for (let i = 0; i < 4; i++) {
+            const v = active === null || active === i ? 1 : 0.4;
+            if (v !== stepOp[i]) tl.to("#s" + (i + 1) + " .sc", { opacity: v, duration: 0.4, ease: "sx.swap" }, at);
+            stepOp[i] = v;
+          }
+        };
+        const mark = (i, kind, at) => fade("#s" + (i + 1) + " .mark ." + kind, 1, at, 0.25);
+
+        // Roles land left to right; each meter grows to its confidence.
+        const tagRow = (cols, at) => {
+          cols.forEach((c, i) => {
+            const t = at + i * 0.14;
+            fade(c.querySelectorAll(".role, .meter"), 1, t, 0.3);
+            tl.to(c.querySelector(".meter i"), { scaleX: 1, duration: 0.6, ease: "sx.out" }, t + 0.05);
+            fade(c.querySelector(".score"), 1, t + 0.2, 0.3);
+          });
+          return at + (cols.length - 1) * 0.14 + 0.65;
+        };
+
+        const hand = SX.hand(tl, pointer);
+        const REST = [1560, 566];
+        hand.place(0, REST[0], REST[1]);
+        const FY = 298 + 56 + 24 + 36;
+
+        // ---------- "weekdays at 9:30am" ----------
+        const tA = hand.move(0.35, 640, FY + 4);
+        hand.click(tA);
+        const tIn = tA + 0.1;
+        fade(".lights .live", 1, tIn, 0.2);
+        fade("#q .ring", 1, tIn, 0.2);
+        focus(["inp"], tIn);
+        field.focus(tIn);
+        hand.move(tIn + 0.45, REST[0], REST[1], 0.85);
+        const typedA = field.type(tIn + 0.3, A.text, 1.05);
+
+        // 01 tokenize: the lexemes open beneath the field.
+        const tTok = typedA + 0.55;
+        field.blur(tTok - 0.15);
+        fade("#q .ring", 0, tTok - 0.15, 0.25);
+        focus(["s1", "inp"], tTok);
+        steps(0, tTok);
+        open(colsA, tTok + 0.1, 0.08);
+        mark(0, "ok", tTok + 0.95);
+
+        // 02 tag: a role and a confidence for each.
+        const tTag = tTok + 1.3;
+        focus(["s2", "inp"], tTag);
+        steps(1, tTag);
+        const taggedA = tagRow(colsA, tTag + 0.15);
+        mark(1, "ok", taggedA + 0.05);
+
+        // 03 resolve: glue recedes, the typed intent is built line by line from the roles.
+        const tRes = taggedA + 0.45;
+        focus(["s3", "int"], tRes);
+        steps(2, tRes);
+        A.tokens.forEach((k, i) => k.glue && fade(colsA[i], 0.4, tRes + 0.1, 0.4));
+        LINES.forEach((l, i) => {
+          const t = tRes + 0.3 + i * 0.24;
+          open(lineEls[i], t);
+          for (const ti of l.from) {
+            tl.to(chips[ti], { borderColor: INK_2, duration: 0.2, ease: "sx.swap" }, t);
+            tl.to(chips[ti], { borderColor: LINE_2, duration: 0.4, ease: "sx.swap" }, t + 0.5);
+          }
+        });
+        const resolved = tRes + 0.3 + 4 * 0.24 + 0.45;
+        mark(2, "ok", resolved);
+
+        // 04 compile: the five cron fields.
+        const tComp = resolved + 0.45;
+        focus(["s4", "out"], tComp);
+        steps(3, tComp);
+        open(vals, tComp + 0.15, 0.08);
+        open($("str"), tComp + 0.75);
+        const compiled = tComp + 1.17;
+        mark(3, "ok", compiled - 0.2);
+
+        // ---------- "remind me tomorrow at 3" ----------
+        const tB = compiled + 1.3;
+        const tBA = hand.move(tB, 900, FY + 4);
+        hand.click(tBA);
+        const tIn2 = tBA + 0.1;
+        fade("#q .ring", 1, tIn2, 0.2);
+        focus(["inp"], tIn2);
+        steps(null, tIn2);
+        field.focus(tIn2);
+        tl.to(".mark .ok", { opacity: 0, duration: 0.3, ease: "sx.in" }, tIn2);
+        tl.to([...colsA, ...lineEls, ...vals, $("str")], { opacity: 0, duration: 0.3, ease: "sx.in" }, tIn2);
+        const tSel = field.replace(tIn2 + 0.25, 0.3);
+        hand.move(tIn2 + 0.45, REST[0], REST[1], 0.85);
+        const typedB = field.type(tSel + 0.12, B.text, 1.15);
+
+        const tTokB = typedB + 0.5;
+        field.blur(tTokB - 0.15);
+        fade("#q .ring", 0, tTokB - 0.15, 0.25);
+        focus(["s1", "inp"], tTokB);
+        steps(0, tTokB);
+        open(colsB, tTokB + 0.1, 0.08);
+        mark(0, "ok", tTokB + 0.9);
+
+        const tTagB = tTokB + 1.15;
+        focus(["s2", "inp"], tTagB);
+        steps(1, tTagB);
+        const taggedB = tagRow(colsB, tTagB + 0.15);
+        mark(1, "ok", taggedB + 0.05);
+
+        // 03 resolve refuses: the low-confidence tag stays in focus, nothing compiles.
+        const tRef = taggedB + 0.45;
+        focus(["s3", "out"], tRef);
+        steps(2, tRef);
+        mark(2, "x", tRef + 0.1);
+        B.tokens.forEach((k, i) => !k.low && fade(colsB[i], 0.4, tRef + 0.1, 0.4));
+        open($("none"), tRef + 0.2);
+        open(refuseEls, tRef + 0.35, 0.12);
+        const refused = tRef + 0.35 + 2 * 0.12 + 0.42;
+
+        // ---------- Loop: only the sub-cards' contents dip ----------
+        const tReset = D - 0.75;
+        const tR = tReset + 0.33;
+        const DIP = ".sc, #inp .body, #int .body, #out .body";
+        tl.to(DIP, { opacity: 0, duration: 0.32, ease: "sx.in" }, tReset);
+        focus([], tReset);
+        fade(".lights .live", 0, tReset, 0.3);
+        field.set(tR, "");
+        for (const [target, vars] of RESET()) if (![".lights .live", ".sc"].includes(target) && !String(target).includes(".focus")) tl.set(target, vars, tR);
+        tl.set(".mark span, .ring", { opacity: 0 }, tR);
+        tl.to(DIP, { opacity: 1, duration: 0.34, ease: "sx.out" }, tR + 0.01);
+        tl.set({}, {}, D);
+
+        SX.drive(tl, D, (t) => field.render(t));
+        window.__marks = { tA, typedA, tTok, tTag, tRes, tComp, compiled, tB, typedB, tTokB, tTagB, tRef, refused, tReset, slack: tReset - refused };
+        console.log("marks " + JSON.stringify(window.__marks));
+        window.__timelines["how-it-works"] = tl;
+      })();
+    </script>
+  </body>
+</html>

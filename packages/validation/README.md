@@ -10,6 +10,10 @@ Natural-language field constraints to a typed intent and JSON Schema, on device.
 
 The package has no runtime dependencies and never sends text off the device.
 
+<p align="center">
+  <img alt="An editor and terminal. schema() turns 'required email with max 100 characters' and 'optional integer between 1 and 10' into JSON Schema objects, and refuses 'every weekday at 9' with unrecognized." src="https://raw.githubusercontent.com/berezovyy/syntaxless/master/docs/media/v3/films/validation.webp" width="100%" />
+</p>
+
 ## Install
 
 ```sh

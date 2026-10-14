@@ -5,6 +5,10 @@ JavaScript, and compile them to parameterized SQLite `WHERE` fragments. Parsing
 runs a small bundled model locally. No user text leaves the device, and there
 are no runtime dependencies.
 
+<p align="center">
+  <img alt="An editor and terminal. parse('active customers spending over 100, excluding trials') compiles to SQLite parameters ["active", 100, 1] and matches three customers; changed to 'spending between 50 and 200', it prints [50, 200] and four customers." src="https://raw.githubusercontent.com/berezovyy/syntaxless/master/docs/media/v3/films/filter.webp" width="100%" />
+</p>
+
 ## Install
 
 ```sh

@@ -4,6 +4,10 @@ Turn natural-language ordering requests into typed sort keys, a JavaScript
 comparator and SQLite `ORDER BY` fragments. Parsing runs a small bundled model
 locally. No user text leaves the device, and there are no runtime dependencies.
 
+<p align="center">
+  <img alt="An editor with a live preview. parse('newest first, then cheapest, missing prices last') reorders a product table to ids 3, 2, 6, 5, 1, 4." src="https://raw.githubusercontent.com/berezovyy/syntaxless/master/docs/media/v3/films/sort.webp" width="100%" />
+</p>
+
 ## Install
 
 ```sh

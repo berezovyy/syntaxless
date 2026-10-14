@@ -8,3 +8,6 @@ packages/*/src/model/weights.gen.ts
 
 # Consumption archives are generated and their exact bytes are hashed.
 **/evaluation/consumed/*.archive.json
+
+# README film compositions and their vendored libraries keep their hand-tuned layout.
+docs/media/

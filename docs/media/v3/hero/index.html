@@ -1,0 +1,1185 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Syntaxless: hero</title>
+    <script src="shared/vendor/gsap.min.js"></script>
+    <script src="shared/vendor/CustomEase.min.js"></script>
+    <link rel="stylesheet" href="shared/sx.css" />
+    <style>
+      .url {
+        display: flex;
+        align-items: center;
+        height: 36px;
+        padding: 0 18px;
+        border-radius: 18px;
+        background: var(--surface);
+        color: var(--ink-2);
+      }
+      .url .path {
+        color: var(--ink);
+      }
+      /* Variants that replace each other in place share one grid cell. */
+      .stack {
+        display: inline-grid;
+      }
+      .stack > * {
+        grid-area: 1 / 1;
+        white-space: nowrap;
+      }
+
+      /* ---------- The app ---------- */
+      #app {
+        left: 72px;
+        top: 128px;
+        width: 1180px;
+        height: 880px;
+      }
+      .tabs {
+        position: relative;
+        height: 56px;
+        border-bottom: 1px solid var(--card-line);
+        font-size: 21px;
+      }
+      .tabs .tab {
+        position: absolute;
+        top: 0;
+        height: 56px;
+        line-height: 56px;
+        color: var(--ink-3);
+      }
+      .tabs .tab .on {
+        position: absolute;
+        left: 0;
+        top: 0;
+        color: var(--ink);
+      }
+      #tabline {
+        position: absolute;
+        bottom: -1px;
+        left: 0;
+        height: 2px;
+        background: var(--ink);
+      }
+      .tabs .tag {
+        position: absolute;
+        right: 24px;
+        top: 0;
+        line-height: 56px;
+        font-size: 19px;
+        color: var(--ink-3);
+      }
+      .views {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 56px;
+        bottom: 60px;
+      }
+      .view {
+        position: absolute;
+        inset: 0;
+        padding: 28px 32px 0;
+      }
+      .view .content {
+        position: relative;
+      }
+      .appfoot {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 60px;
+        display: flex;
+        align-items: center;
+        padding: 0 32px;
+        border-top: 1px solid var(--card-line);
+        font-size: 20px;
+        color: var(--ink-3);
+      }
+      .appfoot .imp .s {
+        color: var(--ink);
+      }
+      .appfoot .right {
+        margin-left: auto;
+      }
+
+      .big {
+        height: 76px;
+        font-size: 26px;
+      }
+      .minis {
+        display: flex;
+        gap: 16px;
+        margin-top: 16px;
+      }
+      .minis .field {
+        flex: 1;
+        height: 60px;
+        font-size: 21px;
+      }
+
+      .table {
+        position: relative;
+        margin-top: 20px;
+      }
+      .tr {
+        display: grid;
+        grid-template-columns: 1fr 200px 200px 110px;
+        align-items: center;
+        height: 56px;
+        padding: 0 4px;
+        font-size: 25px;
+      }
+      .tr.th {
+        height: 44px;
+        border-bottom: 1px solid var(--line-2);
+        font-size: 16px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+      }
+      .num {
+        text-align: right;
+        padding-right: 28px;
+      }
+      .rows {
+        position: relative;
+        height: 392px;
+      }
+      .rows .tr {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+      }
+      .rows .tr .c {
+        color: var(--ink);
+      }
+      .rows .tr .c.dim {
+        color: var(--ink-2);
+      }
+      .rows .sp {
+        position: relative;
+      }
+      .rows .sp .fm {
+        position: absolute;
+        right: 28px;
+        top: 0;
+      }
+      .rows .strike {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 50%;
+        height: 2px;
+        background: var(--ink-3);
+        transform-origin: left center;
+      }
+      .count {
+        margin-top: 18px;
+        font-size: 20px;
+        color: var(--ink-3);
+      }
+      .count b {
+        font-weight: 400;
+        color: var(--ink);
+      }
+
+      /* The other pages: a label, one English field, then what the package returned. */
+      .flab {
+        font-size: 20px;
+        color: var(--ink-2);
+        margin-bottom: 12px;
+      }
+      .olab {
+        margin-top: 40px;
+        font-size: 16px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+      }
+      .expr {
+        margin-top: 16px;
+        display: flex;
+        gap: 56px;
+      }
+      .expr .fld {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+      }
+      .expr b {
+        font-size: 92px;
+        line-height: 1;
+        font-weight: 700;
+        color: var(--ink);
+      }
+      .expr small {
+        font-size: 17px;
+        color: var(--ink-3);
+      }
+      .runs {
+        margin-top: 12px;
+        font-size: 25px;
+        line-height: 44px;
+        color: var(--ink);
+      }
+      .runs .t {
+        color: var(--ink-3);
+      }
+      .json {
+        margin-top: 14px;
+        padding: 20px 26px;
+        border-radius: 8px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        font-size: 26px;
+        line-height: 44px;
+        white-space: pre;
+        color: var(--ink);
+      }
+      .json .k {
+        color: var(--ink-2);
+      }
+      .json .p {
+        color: var(--ink-3);
+      }
+      .bars {
+        margin-top: 20px;
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        row-gap: 24px;
+        align-items: center;
+        font-size: 24px;
+      }
+      .bars .rl {
+        color: var(--ink-2);
+      }
+      .bars .track {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+      .bars .bar {
+        height: 28px;
+        border-radius: 4px;
+        background: var(--ink-2);
+        transform-origin: left center;
+      }
+      .months {
+        position: relative;
+        margin-top: 22px;
+        height: 26px;
+        font-size: 16px;
+        color: var(--ink-3);
+      }
+      .months span {
+        position: absolute;
+        top: 0;
+      }
+      .grid {
+        position: relative;
+        height: 126px;
+      }
+      .cell {
+        position: absolute;
+        width: 14px;
+        height: 14px;
+        box-sizing: border-box;
+        border-radius: 3px;
+        border: 1px solid var(--line-2);
+        background: var(--line-2);
+      }
+      .rfoot {
+        margin-top: 26px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 20px;
+        color: var(--ink-2);
+      }
+      .legend {
+        display: flex;
+        gap: 30px;
+      }
+      .legend i {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        margin-right: 10px;
+        vertical-align: -1px;
+        box-sizing: border-box;
+      }
+      .legend .lk {
+        background: var(--add);
+      }
+      .legend .lr {
+        border: 1px solid var(--line-2);
+      }
+      .tally {
+        font-size: 25px;
+        color: var(--ink-2);
+      }
+      .tally b {
+        font-weight: 400;
+      }
+
+      /* ---------- DevTools: Network ---------- */
+      #net {
+        left: 1272px;
+        top: 128px;
+        width: 576px;
+        height: 560px;
+      }
+      .chip {
+        position: absolute;
+        right: 16px;
+        top: 11px;
+        width: 186px;
+        height: 34px;
+        box-sizing: border-box;
+        border-radius: 6px;
+        border: 1px solid var(--line-2);
+        font-size: 18px;
+      }
+      .chip span {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        padding-left: 14px;
+        color: var(--ink-2);
+      }
+      .chip span::after {
+        content: "▾";
+        position: absolute;
+        right: 12px;
+        color: var(--ink-3);
+      }
+      .chip .off {
+        color: var(--del);
+      }
+      .nrow {
+        display: grid;
+        grid-template-columns: 1fr 110px 100px;
+        align-items: center;
+        height: 38px;
+        padding: 0 24px;
+        font-size: 18px;
+        white-space: nowrap;
+        color: var(--ink-2);
+      }
+      .nrow .sz {
+        text-align: right;
+        color: var(--ink);
+      }
+      .nrow .ty {
+        color: var(--ink-3);
+      }
+      .nrow.nh {
+        height: 40px;
+        border-bottom: 1px solid var(--card-line);
+        font-size: 16px;
+        color: var(--ink-3);
+      }
+      .nrow.nh .sz {
+        color: var(--ink-3);
+      }
+      .lists {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 96px;
+        bottom: 52px;
+      }
+      .list {
+        position: absolute;
+        inset: 0;
+      }
+      .zero {
+        position: absolute;
+        left: 24px;
+        top: 352px;
+        font-size: 18px;
+        color: var(--add);
+      }
+      .nfoot {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 0 24px;
+        border-top: 1px solid var(--card-line);
+        font-size: 18px;
+        color: var(--ink-3);
+      }
+      .nfoot b {
+        font-weight: 400;
+        color: var(--ink);
+      }
+
+      /* ---------- Size ---------- */
+      #size {
+        left: 1272px;
+        top: 708px;
+        width: 576px;
+        height: 300px;
+      }
+      .srows {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        top: 70px;
+      }
+      .srow {
+        display: grid;
+        grid-template-columns: 124px 1fr 92px;
+        align-items: center;
+        height: 30px;
+        font-size: 17px;
+        color: var(--ink-2);
+      }
+      .srow .track {
+        position: relative;
+        height: 8px;
+        border-radius: 4px;
+        background: var(--line);
+      }
+      .srow .track i {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        border-radius: 4px;
+        background: var(--ink);
+        transform-origin: left center;
+      }
+      .srow .kb {
+        text-align: right;
+        color: var(--ink);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="hero"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="35"
+    >
+      <div class="backdrop"></div>
+      <div id="scene" class="clip" data-start="0" data-duration="35">
+        <div class="shell" id="shell">
+          <div class="shell-bar">
+            <span class="lights-slot"></span>
+            <span class="url">localhost:5173/<span class="stack path" id="path"></span></span>
+            <span class="tag">acme · syntaxless demo</span>
+          </div>
+        </div>
+
+        <div class="panel" id="app">
+          <div class="tabs" id="tabs">
+            <div id="tabline"></div>
+            <span class="tag">7 packages · 0 servers</span>
+          </div>
+          <div class="views">
+            <div class="view" id="v0">
+              <div class="content">
+                <div class="field big" id="fFilter">
+                  <span class="ph">Filter in plain English…</span><span class="text"></span>
+                  <span class="ring"></span>
+                </div>
+                <div class="minis">
+                  <div class="field" id="fSort">
+                    <span class="lab">sort</span><span class="ph">plain English…</span
+                    ><span class="text"></span><span class="ring"></span>
+                  </div>
+                  <div class="field" id="fFmt">
+                    <span class="lab">show</span><span class="ph">plain English…</span
+                    ><span class="text"></span><span class="ring"></span>
+                  </div>
+                </div>
+                <div class="table">
+                  <div class="tr th">
+                    <div>customer</div>
+                    <div>status</div>
+                    <div class="num">spending<span id="arrow"> ↓</span></div>
+                    <div>trial</div>
+                  </div>
+                  <div class="rows" id="rows"></div>
+                </div>
+                <div class="count"><b id="n">7</b> of 7 · evaluated on this device</div>
+              </div>
+            </div>
+
+            <div class="view" id="v1">
+              <div class="content">
+                <div class="flab">Email this report</div>
+                <div class="field big" id="fCron">
+                  <span class="ph">Schedule in plain English…</span><span class="text"></span>
+                  <span class="ring"></span>
+                </div>
+                <div class="olab">cron expression</div>
+                <div class="expr" id="expr"></div>
+                <div class="olab">next runs · UTC</div>
+                <div class="runs" id="runs"></div>
+              </div>
+            </div>
+
+            <div class="view" id="v2">
+              <div class="content">
+                <div class="flab">Email field rule</div>
+                <div class="field big" id="fVal">
+                  <span class="ph">Describe the field…</span><span class="text"></span>
+                  <span class="ring"></span>
+                </div>
+                <div class="olab">JSON Schema</div>
+                <div class="json" id="json"></div>
+              </div>
+            </div>
+
+            <div class="view" id="v3">
+              <div class="content">
+                <div class="flab">Retry failed deliveries</div>
+                <div class="field big" id="fRetry">
+                  <span class="ph">Retry policy in plain English…</span><span class="text"></span>
+                  <span class="ring"></span>
+                </div>
+                <div class="olab">delay before each retry</div>
+                <div class="bars" id="bars"></div>
+              </div>
+            </div>
+
+            <div class="view" id="v4">
+              <div class="content">
+                <div class="flab">Retention policy · 420 daily backups</div>
+                <div class="field big" id="fRet">
+                  <span class="ph">Retention in plain English…</span><span class="text"></span>
+                  <span class="ring"></span>
+                </div>
+                <div class="months" id="months"></div>
+                <div class="grid" id="grid"></div>
+                <div class="rfoot">
+                  <div class="legend">
+                    <span><i class="lk"></i>keep</span><span><i class="lr"></i>remove</span>
+                    <span class="faint">a preview: nothing is deleted</span>
+                  </div>
+                  <div class="tally">
+                    keep <b class="add" id="nKeep">420</b> · remove
+                    <b class="del" id="nRemove">0</b>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="appfoot">
+            <span class="stack imp" id="imp"></span>
+            <span class="right">parsed in the browser, no server</span>
+          </div>
+          <div class="focus"></div>
+        </div>
+
+        <div class="panel" id="net">
+          <div class="panel-head">
+            Network
+            <div class="chip" id="chip">
+              <span class="on" id="chipOn">No throttling</span
+              ><span class="off" id="chipOff">Offline</span>
+            </div>
+          </div>
+          <div class="nrow nh"><span>Name</span><span>Type</span><span class="sz">Size</span></div>
+          <div class="lists" id="lists">
+            <div class="list" id="files"></div>
+            <div class="list" id="pkgs"></div>
+            <div class="zero" id="zero">✓ second query offline · 0 requests</div>
+          </div>
+          <div class="nfoot" id="nfoot">
+            <span><b id="nReq">0</b> requests</span><span>·</span
+            ><span><b id="nKb">0.0</b> kB transferred</span>
+          </div>
+          <div class="focus"></div>
+        </div>
+
+        <div class="panel" id="size">
+          <div class="panel-head">Size, gzip<span class="tag">model included · of 100 kB</span></div>
+          <div class="srows" id="srows"></div>
+          <div class="focus"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="shared/sx.js"></script>
+    <script>
+      (function () {
+        const D = 35;
+        const root = document.getElementById("root");
+        const css = (name) => getComputedStyle(root).getPropertyValue(name).trim();
+        const INK = css("--ink");
+        const INK_2 = css("--ink-2");
+        const LINE_2 = css("--line-2");
+        const ADD = css("--add");
+        const DEL = css("--del");
+        const $ = (id) => document.getElementById(id);
+        const fill = (el, items) => {
+          el.insertAdjacentHTML("beforeend", items.join(""));
+          return Array.from(el.children).slice(-items.length);
+        };
+
+        // ---------- Real outputs (run with Bun) ----------
+
+        // evaluate() for each row; why1/why2 name the cell that fails each query.
+        const ROWS = [
+          { name: "Ada Lovelace", status: "active", spending: 240, trial: false, q1: true, q2: false, why2: "spending" },
+          { name: "Grace Hopper", status: "active", spending: 85, trial: false, q1: false, q2: true, why1: "spending" },
+          { name: "Alan Turing", status: "active", spending: 410, trial: true, q1: false, q2: false, why1: "trial" },
+          { name: "Edsger Dijkstra", status: "paused", spending: 1200, trial: false, q1: false, q2: false, why1: "status" },
+          { name: "Barbara Liskov", status: "active", spending: 132, trial: false, q1: true, q2: true },
+          { name: "Ken Thompson", status: "active", spending: 101, trial: false, q1: true, q2: true },
+          { name: "Margaret Hamilton", status: "churned", spending: 60, trial: false, q1: false, q2: true, why1: "status" },
+        ];
+        // sortRecords() for "biggest spenders first" over the four rows that match query 2.
+        const SORTED = [4, 5, 1, 6];
+        // compile(parse("euros, two decimals"), { locale: "en-US" }).formatter
+        const EUR = { 85: "€85.00", 132: "€132.00", 101: "€101.00", 60: "€60.00" };
+        // @syntaxless/filter's built chunks at gzip -9; the app imports it on the first search.
+        const FILES = [
+          ["index.js", "4.8 kB"],
+          ["model-GONOYFYQ.js", "2.9 kB"],
+          ["model-N2LOJTPM.js", "1.3 kB"],
+          ["model-EZ45UOX6.js", "437 B"],
+          ["model-AWGPSODH.js", "414 B"],
+          ["model-7O3GLBMY.js", "157 B"],
+          ["model-277SMFV6.js", "151 B"],
+          ["model-ZR5K6CUS.js", "101 B"],
+          ["weights.gen.js", "25.8 kB"],
+        ];
+        // Each whole built package, model included: name, gzip size, files, size in kB.
+        const PKGS = [
+          ["filter", "36.1 kB", 9, 36.1],
+          ["sort", "35.0 kB", 9, 35.0],
+          ["format", "37.5 kB", 9, 37.5],
+          ["cron", "92.6 kB", 9, 92.6],
+          ["validation", "75.5 kB", 7, 75.5],
+          ["retry", "35.9 kB", 9, 35.9],
+          ["retention", "35.7 kB", 9, 35.7],
+        ];
+        const PAGES = [
+          ["Customers", "customers"],
+          ["Reports", "reports"],
+          ["Sign-up", "signup"],
+          ["Webhooks", "webhooks"],
+          ["Backups", "backups"],
+        ];
+
+        // ---------- Build ----------
+
+        for (const slot of document.querySelectorAll(".lights-slot")) slot.outerHTML = SX.LIGHTS;
+
+        // Tabs sit at fixed positions (JetBrains Mono advances 0.6em), so the layout never
+        // depends on when the font finishes loading.
+        const CH = 21 * 0.6;
+        const tabX = [];
+        let x = 32;
+        for (const [label] of PAGES) {
+          tabX.push([x, label.length * CH]);
+          x += label.length * CH + 40;
+        }
+        const tabOn = PAGES.map(([label], i) => {
+          const el = document.createElement("span");
+          el.className = "tab";
+          el.style.left = tabX[i][0] + "px";
+          el.innerHTML = label + '<span class="on">' + label + "</span>";
+          $("tabs").appendChild(el);
+          return el.querySelector(".on");
+        });
+        const paths = fill($("path"), PAGES.map(([, p]) => "<span>" + p + "</span>"));
+        const imps = fill(
+          $("imp"),
+          PKGS.map(([p]) => '<span>await import(<span class="s">"@syntaxless/' + p + '"</span>)</span>'),
+        );
+
+        const H = 56;
+        const rowEls = fill(
+          $("rows"),
+          ROWS.map(
+            (r) =>
+              '<div class="tr">' +
+              '<div class="c">' + r.name + "</div>" +
+              '<div class="c dim" data-k="status">' + r.status + "</div>" +
+              '<div class="c num sp" data-k="spending"><span class="raw">' + r.spending +
+              '</span><span class="fm">' + (EUR[r.spending] || "") + "</span></div>" +
+              '<div class="c dim" data-k="trial">' + (r.trial ? "yes" : "—") + "</div>" +
+              '<div class="strike"></div></div>',
+          ),
+        );
+        const cellOf = (i, k) => rowEls[i].querySelector('[data-k="' + k + '"]');
+
+        const fileEls = fill(
+          $("files"),
+          FILES.map(([n, s]) => '<div class="nrow"><span>' + n + '</span><span class="ty">script</span><span class="sz">' + s + "</span></div>"),
+        );
+        const pkgEls = fill(
+          $("pkgs"),
+          PKGS.map(([p, kb, files]) => '<div class="nrow"><span>@syntaxless/' + p + '</span><span class="ty">' + files + ' files</span><span class="sz">' + kb + "</span></div>"),
+        );
+        const sizeEls = fill(
+          $("srows"),
+          PKGS.map(([p, kb, , v]) => '<div class="srow"><span>' + p + '</span><span class="track"><i style="width:' + v + '%"></i></span><span class="kb">' + kb + "</span></div>"),
+        );
+        const sizeBars = sizeEls.map((el) => el.querySelector("i"));
+
+        // cron("every monday at 9am"); recurrences(intent, { timezone: "UTC", count: 3 }) from Oct 13.
+        const exprEls = fill(
+          $("expr"),
+          [["0", "minute"], ["9", "hour"], ["*", "day"], ["*", "month"], ["1", "weekday"]].map(
+            ([v, k]) => '<div class="fld"><b>' + v + "</b><small>" + k + "</small></div>",
+          ),
+        );
+        const runEls = fill(
+          $("runs"),
+          ["Mon, Oct 19", "Mon, Oct 26", "Mon, Nov 2"].map((d) => "<div>" + d + ' <span class="t">· 09:00</span></div>'),
+        );
+        // schema("required email with max 100 characters").schema
+        const k = (s) => '<span class="k">"' + s + '"</span><span class="p">:</span> ';
+        const p = (s) => '<span class="p">' + s + "</span>";
+        const jsonEls = fill(
+          $("json"),
+          [
+            p("{"),
+            "  " + k("type") + '"string"' + p(","),
+            "  " + k("format") + '"email"' + p(","),
+            "  " + k("minLength") + "1" + p(","),
+            "  " + k("maxLength") + "100",
+            p("}"),
+          ].map((l) => "<div>" + l + "</div>"),
+        );
+        // compile(parse("retry three times, start at 250ms, double the delay")).delaysMs
+        const barEls = fill(
+          $("bars"),
+          [250, 500, 1000].flatMap((ms, i) => [
+            '<span class="rl">retry ' + (i + 1) + "</span>",
+            '<div class="track"><div class="bar" style="width:' + ms * 0.62 + 'px"></div><span>' + ms + " ms</span></div>",
+          ]),
+        );
+
+        // compile(intent, { timeZone: "UTC", referenceInstant: 2026-10-12T12:00Z, backups }) with
+        // one backup a day for 420 days keeps these 18 ids (7 daily, 12 monthly, one shared).
+        const KEEP = new Set([
+          "2026-10-12", "2026-10-11", "2026-10-10", "2026-10-09", "2026-10-08", "2026-10-07", "2026-10-06",
+          "2026-09-30", "2026-08-31", "2026-07-31", "2026-06-30", "2026-05-31", "2026-04-30", "2026-03-31",
+          "2026-02-28", "2026-01-31", "2025-12-31", "2025-11-30",
+        ]);
+        const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const DAY = 86400000;
+        const COUNT = 420;
+        const CELL = 18;
+        const oldest = Date.UTC(2026, 9, 12) - (COUNT - 1) * DAY;
+        const firstMonday = oldest - ((new Date(oldest).getUTCDay() + 6) % 7) * DAY;
+        const cells = [];
+        let lastMonth = -1;
+        for (let i = 0; i < COUNT; i++) {
+          const ts = oldest + i * DAY;
+          const d = new Date(ts);
+          const col = Math.floor((ts - firstMonday) / DAY / 7);
+          const el = document.createElement("div");
+          el.className = "cell";
+          el.style.left = col * CELL + "px";
+          el.style.top = ((d.getUTCDay() + 6) % 7) * CELL + "px";
+          $("grid").appendChild(el);
+          cells.push({ el, col, keep: KEEP.has(d.toISOString().slice(0, 10)) });
+          if (d.getUTCMonth() !== lastMonth && d.getUTCDate() <= 7) {
+            lastMonth = d.getUTCMonth();
+            const m = document.createElement("span");
+            m.textContent = MONTH[lastMonth];
+            m.style.left = col * CELL + "px";
+            $("months").appendChild(m);
+          }
+        }
+
+        const fields = {};
+        for (const [id, seed] of [["fFilter", 7], ["fSort", 23], ["fFmt", 29], ["fCron", 31], ["fVal", 37], ["fRetry", 41], ["fRet", 43]]) {
+          fields[id] = new SX.Field($(id), { seed });
+        }
+        const pointer = SX.pointer($("scene"));
+
+        // ---------- Timeline ----------
+
+        const tl = gsap.timeline({ paused: true });
+        // One init per element: overlapping init selectors broke the first frame before.
+        const init = (target, vars) => {
+          gsap.set(target, vars);
+          tl.set(target, vars, 0);
+        };
+        const views = [0, 1, 2, 3, 4].map((i) => $("v" + i));
+        const only = (els, i) => els.forEach((el, n) => init(el, { autoAlpha: n === i ? 1 : 0 }));
+        only(views, 0);
+        // Views carry the transform their open leaves behind from the first frame, so text is
+        // drawn the same way at both ends of the loop (the kit keeps transforms 2D).
+        init(views, { y: 0 });
+        only(paths, 0);
+        only(imps, 0);
+        only(tabOn, 0);
+        init("#tabline", { x: tabX[0][0], width: tabX[0][1] });
+        init(".focus, .ring", { opacity: 0 });
+        init("#shell .lights .live", { opacity: 0 });
+        init(".views, #lists, #srows, #nfoot", { opacity: 1 });
+        init(rowEls, { y: (i) => i * H, autoAlpha: 1 });
+        init(".rows .strike", { scaleX: 0 });
+        init(".rows .c", { opacity: 1 });
+        init(".rows .fm", { opacity: 0, y: 0 });
+        init(".rows .raw", { opacity: 1, y: 0 });
+        init("#arrow, #chipOff, #zero", { opacity: 0 });
+        init("#chipOn", { opacity: 1 });
+        init(fileEls, { opacity: 0, y: 0 });
+        init(pkgEls, { opacity: 0, y: 0 });
+        init("#files", { opacity: 1 });
+        init("#pkgs", { opacity: 0 });
+        init(sizeEls, { opacity: 0, y: 0 });
+        init(sizeBars, { scaleX: 0 });
+        init([...exprEls, ...runEls, ...jsonEls, ...barEls], { opacity: 0, y: 0 });
+        init(".bars .bar", { scaleX: 0 });
+        init(".legend, .tally", { opacity: 0.4 });
+
+        // Counters are pure functions of time, drawn by the driver with the fields.
+        const nSteps = [];
+        const reqSteps = [];
+        const kbSteps = [];
+        const keepSteps = [];
+        const removeSteps = [];
+
+        // Open in place: a fade and a 14px rise.
+        const open = (els, at, opts) =>
+          tl.fromTo(
+            els,
+            { autoAlpha: 0, y: 14 },
+            { autoAlpha: 1, y: 0, duration: 0.42, ease: "sx.out", immediateRender: false, ...opts },
+            at,
+          );
+
+        // Focus by contrast: an outline on the card in play; optionally the others' contents dim.
+        const CARDS = { app: ".views, #app .tabs", net: "#lists, #nfoot", size: "#srows" };
+        let focused = null;
+        const focus = (card, at, dim) => {
+          if (focused) tl.to("#" + focused + " > .focus", { opacity: 0, duration: 0.3, ease: "sx.swap" }, at);
+          if (card) tl.to("#" + card + " > .focus", { opacity: 1, duration: 0.3, ease: "sx.swap" }, at);
+          for (const [name, sel] of Object.entries(CARDS)) {
+            tl.to(sel, { opacity: dim && name !== card ? 0.4 : 1, duration: 0.4, ease: "sx.swap" }, at);
+          }
+          focused = card;
+        };
+
+        const hand = SX.hand(tl, pointer);
+        const REST = [1150, 905];
+        hand.place(0, REST[0], REST[1]);
+
+        // A click into a field: the ring shows, the caret appears, typing follows.
+        const ring = (id) => "#" + id + " .ring";
+        const typeInto = (id, x, y, at, text, speed) => {
+          const tArrive = hand.move(at, x, y);
+          hand.click(tArrive);
+          const tIn = tArrive + 0.1;
+          tl.to(ring(id), { opacity: 1, duration: 0.2, ease: "sx.swap" }, tIn);
+          fields[id].focus(tIn);
+          return { tIn, end: fields[id].type(tIn + 0.22, text, speed) };
+        };
+        // The pages focus their field when they open, as a search page would.
+        const typeAuto = (id, at, text, speed) => {
+          tl.to(ring(id), { opacity: 1, duration: 0.2, ease: "sx.swap" }, at);
+          fields[id].focus(at);
+          return { tIn: at, end: fields[id].type(at + 0.3, text, speed) };
+        };
+        const leave = (id, at) => {
+          fields[id].blur(at);
+          tl.to(ring(id), { opacity: 0, duration: 0.25, ease: "sx.swap" }, at);
+        };
+
+        // Scene coordinates of what the hand touches.
+        const VX = 104;
+        const VY = 212;
+        const FIELD_Y = VY + 38;
+                const tabCenter = (i) => [72 + tabX[i][0] + tabX[i][1] / 2, 156];
+        const CHIP = [1735, 156];
+
+        // ---------- Act 1: filter, then offline ----------
+
+        const t1 = typeInto("fFilter", 440, FIELD_Y + 4, 0.35, "active customers spending over 100, excluding trials", 1.35);
+        tl.to("#shell .lights .live", { opacity: 1, duration: 0.2, ease: "sx.swap" }, t1.tIn);
+        focus("app", t1.tIn);
+        // While typing the hand rests out of the way.
+        hand.move(t1.tIn + 0.5, REST[0], REST[1], 0.9);
+
+        // First parse: the app imports the package, and the model loads once.
+        const tLoad = t1.end + 0.15;
+        fileEls.forEach((el, i) => open(el, tLoad + i * 0.05 + (i === 8 ? 0.1 : 0), { duration: 0.3 }));
+        reqSteps.push([tLoad, 0, 9, 0.55]);
+        kbSteps.push([tLoad, 0, 36.1, 0.65]);
+        open(sizeEls[0], tLoad + 0.2);
+        tl.to(sizeBars[0], { scaleX: 1, duration: 0.6, ease: "sx.out" }, tLoad + 0.3);
+
+        // A row that stops matching: its failing cell turns red, it is struck and dims, then goes.
+        const fail = (i, why, at) => {
+          tl.to(cellOf(i, why), { color: DEL, duration: 0.3, ease: "sx.swap" }, at);
+          tl.to(rowEls[i].querySelector(".strike"), { scaleX: 1, duration: 0.45, ease: "sx.swap" }, at);
+          tl.to(rowEls[i].querySelectorAll(".c:not([data-k='" + why + "'])"), { opacity: 0.45, duration: 0.4, ease: "sx.swap" }, at + 0.1);
+          tl.to(rowEls[i], { autoAlpha: 0, duration: 0.3, ease: "sx.in" }, at + 0.95);
+        };
+        const restore = (i, why, at) => {
+          tl.set(cellOf(i, why), { color: getComputedStyle(cellOf(i, why)).color }, at);
+          tl.set(rowEls[i].querySelector(".strike"), { scaleX: 0 }, at);
+          tl.set(rowEls[i].querySelectorAll(".c"), { opacity: 1 }, at);
+        };
+
+        const tEval1 = tLoad + 0.5;
+        [1, 2, 3, 6].forEach((i, n) => fail(i, ROWS[i].why1, tEval1 + n * 0.08));
+        // Then the rows that still match close up, after the others have gone.
+        const tClose = tEval1 + 1.25;
+        [0, 4, 5].forEach((i, slot) => tl.to(rowEls[i], { y: slot * H, duration: 0.6, ease: "sx.move" }, tClose));
+        nSteps.push([tClose, 7, 3, 0.5]);
+        [1, 2, 3, 6].forEach((i) => restore(i, ROWS[i].why1, tClose));
+
+        // The hand switches the network to Offline; the list of what loaded steps back.
+        const tToChip = tClose + 0.15;
+        const tChip = hand.move(tToChip, CHIP[0] + 62, CHIP[1]);
+        hand.click(tChip);
+        focus("net", tChip + 0.05);
+        tl.to("#chipOn", { opacity: 0, duration: 0.2, ease: "sx.swap" }, tChip + 0.08);
+        tl.to("#chipOff", { opacity: 1, duration: 0.2, ease: "sx.swap" }, tChip + 0.2);
+        tl.to(fileEls, { opacity: 0.4, duration: 0.4, ease: "sx.swap" }, tChip + 0.2);
+        leave("fFilter", tChip);
+
+        // Back to the search: select all, type the second query, offline.
+        const tBack = tChip + 0.35;
+        const tArrive2 = hand.move(tBack, 560, FIELD_Y + 4);
+        hand.click(tArrive2);
+        tl.to(ring("fFilter"), { opacity: 1, duration: 0.2, ease: "sx.swap" }, tArrive2 + 0.1);
+        focus("app", tArrive2 + 0.1);
+        fields.fFilter.focus(tArrive2 + 0.1);
+        const tSel = fields.fFilter.replace(tArrive2 + 0.35, 0.3);
+        const typed2 = fields.fFilter.type(tSel + 0.12, "spending between 50 and 200", 1.25);
+        hand.move(tArrive2 + 0.6, REST[0], REST[1], 0.9);
+
+        // Ada stops matching; Grace and Margaret open in the free slots after Ada has gone.
+        const tEval2 = typed2 + 0.3;
+        fail(0, "spending", tEval2);
+        [[1, 0, 1.3], [6, 3, 1.38]].forEach(([i, slot, dt]) =>
+          tl.fromTo(
+            rowEls[i],
+            { autoAlpha: 0, y: slot * H + 14 },
+            { autoAlpha: 1, y: slot * H, duration: 0.42, ease: "sx.out", immediateRender: false },
+            tEval2 + dt,
+          ),
+        );
+        restore(0, "spending", tEval2 + 1.4);
+        nSteps.push([tEval2 + 1.3, 3, 4, 0.4]);
+        // Nothing went over the network for it.
+        const tZero = tEval2 + 0.35;
+        open("#zero", tZero);
+        const tPoint = hand.move(tZero + 0.1, 1712, 588);
+        focus("net", tZero + 0.2);
+
+        // ---------- Act 2: back online, one package per feature ----------
+
+        const T2 = tEval2 + 1.25;
+        const tChip2 = hand.move(T2, CHIP[0] + 62, CHIP[1]);
+        hand.click(tChip2);
+        leave("fFilter", tChip2);
+        tl.to("#chipOff", { opacity: 0, duration: 0.2, ease: "sx.swap" }, tChip2 + 0.08);
+        tl.to("#chipOn", { opacity: 1, duration: 0.2, ease: "sx.swap" }, tChip2 + 0.2);
+        // The log regroups by package: dip the list's contents, swap, come back.
+        tl.to("#files, #zero", { opacity: 0, duration: 0.25, ease: "sx.in" }, tChip2 + 0.15);
+        tl.set(pkgEls[0], { opacity: 1 }, tChip2 + 0.4);
+        tl.to("#pkgs", { opacity: 1, duration: 0.3, ease: "sx.out" }, tChip2 + 0.42);
+        focus(null, tChip2 + 0.4);
+
+        let pkg = 0;
+        let page = 0;
+        let req = 9;
+        let kb = 36.1;
+        const use = (i, at) => {
+          tl.to(imps[pkg], { autoAlpha: 0, duration: 0.2, ease: "sx.swap" }, at);
+          tl.to(imps[i], { autoAlpha: 1, duration: 0.25, ease: "sx.swap" }, at + 0.15);
+          pkg = i;
+        };
+        // The import resolves: one row in Network, its size bar, totals count up.
+        const load = (i, at) => {
+          use(i, at - 0.1);
+          open(pkgEls[i], at);
+          open(sizeEls[i], at + 0.1);
+          tl.to(sizeBars[i], { scaleX: 1, duration: 0.6, ease: "sx.out" }, at + 0.2);
+          reqSteps.push([at, req, req + PKGS[i][2], 0.45]);
+          kbSteps.push([at, kb, kb + PKGS[i][3], 0.55]);
+          req += PKGS[i][2];
+          kb += PKGS[i][3];
+        };
+        // A page change: the hand clicks a tab; the old view's contents leave, the new one opens.
+        const go = (n, at) => {
+          const [tx, ty] = tabCenter(n);
+          const tArrive = hand.move(at, tx, ty);
+          const tC = hand.click(tArrive);
+          tl.to(tabOn[page], { autoAlpha: 0, duration: 0.2, ease: "sx.swap" }, tArrive + 0.05);
+          tl.to(tabOn[n], { autoAlpha: 1, duration: 0.2, ease: "sx.swap" }, tArrive + 0.05);
+          tl.to("#tabline", { x: tabX[n][0], width: tabX[n][1], duration: 0.45, ease: "sx.move" }, tArrive + 0.05);
+          tl.to(paths[page], { autoAlpha: 0, duration: 0.15, ease: "sx.swap" }, tArrive + 0.05);
+          tl.to(paths[n], { autoAlpha: 1, duration: 0.2, ease: "sx.swap" }, tArrive + 0.15);
+          tl.to(views[page], { autoAlpha: 0, duration: 0.22, ease: "sx.in" }, tArrive + 0.05);
+          tl.fromTo(views[n], { autoAlpha: 0, y: 14 }, { autoAlpha: 1, y: 0, duration: 0.42, ease: "sx.out", immediateRender: false }, tArrive + 0.28);
+          page = n;
+          return tArrive + 0.5;
+        };
+
+        // Sort the four matching customers.
+        const sS = typeInto("fSort", 600, VY + 92 + 30, tChip2 + 0.3, "biggest spenders first", 2.0);
+        load(1, sS.end + 0.15);
+        const tSort = sS.end + 0.35;
+        tl.to("#arrow", { opacity: 1, duration: 0.3, ease: "sx.swap" }, tSort);
+        // Re-sorted rows leave in place, then open in their new order, top to bottom.
+        const shown = [1, 4, 5, 6];
+        tl.to(shown.map((i) => rowEls[i]), { opacity: 0, duration: 0.22, ease: "sx.in" }, tSort);
+        SORTED.forEach((i, slot) => {
+          tl.set(rowEls[i], { y: slot * H + 14 }, tSort + 0.24);
+          tl.to(rowEls[i], { opacity: 1, y: slot * H, duration: 0.42, ease: "sx.out" }, tSort + 0.3 + slot * 0.07);
+        });
+
+        // Format the spending column.
+        const sF = typeInto("fFmt", 1160, VY + 92 + 30, tSort + 0.6, "euros, two decimals", 2.0);
+        leave("fSort", sF.tIn);
+        hand.move(sF.tIn + 0.4, REST[0], REST[1], 0.8);
+        load(2, sF.end + 0.15);
+        const tFmt = sF.end + 0.45;
+        SORTED.forEach((i, n) => {
+          tl.to(rowEls[i].querySelector(".raw"), { opacity: 0, duration: 0.2, ease: "sx.in" }, tFmt + n * 0.06);
+          tl.fromTo(rowEls[i].querySelector(".fm"), { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.42, ease: "sx.out", immediateRender: false }, tFmt + 0.2 + n * 0.06);
+        });
+
+        // Reports: a schedule.
+        const tP1 = tFmt + 0.75;
+        leave("fFmt", tP1);
+        const tIn1 = go(1, tP1);
+        const sC = typeAuto("fCron", tIn1, "every monday at 9am", 1.9);
+        hand.move(sC.tIn - 0.2, tabCenter(page)[0] + 36, 204, 0.5);
+        load(3, sC.end + 0.15);
+        exprEls.forEach((el, n) => open(el, sC.end + 0.4 + n * 0.06));
+        runEls.forEach((el, n) => open(el, sC.end + 0.75 + n * 0.08));
+
+        // Sign-up: a field rule.
+        const tP2 = sC.end + 1.1;
+        leave("fCron", tP2);
+        const tIn2 = go(2, tP2);
+        const sV = typeAuto("fVal", tIn2, "required email with max 100 characters", 2.6);
+        hand.move(sV.tIn - 0.2, tabCenter(page)[0] + 36, 204, 0.5);
+        load(4, sV.end + 0.15);
+        jsonEls.forEach((el, n) => open(el, sV.end + 0.4 + n * 0.05));
+
+        // Webhooks: a retry policy.
+        const tP3 = sV.end + 1.05;
+        leave("fVal", tP3);
+        const tIn3 = go(3, tP3);
+        const sR = typeAuto("fRetry", tIn3, "retry three times, start at 250ms, double the delay", 3.0);
+        hand.move(sR.tIn - 0.2, tabCenter(page)[0] + 36, 204, 0.5);
+        load(5, sR.end + 0.15);
+        for (let n = 0; n < 3; n++) {
+          open(barEls.slice(n * 2, n * 2 + 2), sR.end + 0.4 + n * 0.12);
+          tl.to(barEls[n * 2 + 1].querySelector(".bar"), { scaleX: 1, duration: 0.6, ease: "sx.out" }, sR.end + 0.45 + n * 0.12);
+        }
+
+        // Backups: a retention preview, swept oldest to newest. Nothing is deleted.
+        const tP4 = sR.end + 1.1;
+        leave("fRetry", tP4);
+        const tIn4 = go(4, tP4);
+        const sB = typeAuto("fRet", tIn4, "keep daily backups for a week and monthly backups for a year", 3.3);
+        hand.move(sB.tIn - 0.2, tabCenter(page)[0] + 36, 204, 0.5);
+        load(6, sB.end + 0.15);
+        const tSweep = sB.end + 0.45;
+        const maxCol = cells[cells.length - 1].col;
+        cells.forEach((c) => {
+          const t = tSweep + (c.col / maxCol) * 1.15;
+          tl.to(c.el, c.keep ? { backgroundColor: ADD, borderColor: ADD, duration: 0.3, ease: "sx.swap" } : { backgroundColor: "rgba(0,0,0,0)", duration: 0.3, ease: "sx.swap" }, t);
+        });
+        tl.to(".legend, .tally", { opacity: 1, duration: 0.4, ease: "sx.swap" }, tSweep + 0.2);
+        keepSteps.push([tSweep, 420, 18, 1.4]);
+        removeSteps.push([tSweep, 0, 402, 1.4]);
+        // Point at the tally.
+        hand.move(tSweep + 0.9, 1130, 618);
+
+        // ---------- Loop: a clean Customers page, an empty log ----------
+
+        const tReset = D - 2.6;
+        leave("fRet", tReset);
+        const tHome = go(0, tReset);
+        const tAt = tHome - 0.5;
+        // Customers is hidden until the tab opens it, so its reset is invisible.
+        const tHid = tAt + 0.2;
+        for (const id of ["fFilter", "fSort", "fFmt"]) fields[id].set(tHid, "");
+        tl.set(rowEls, { y: (i) => i * H, autoAlpha: 1, opacity: 1 }, tHid);
+        tl.set(".rows .raw", { opacity: 1 }, tHid);
+        tl.set(".rows .fm", { opacity: 0 }, tHid);
+        tl.set("#arrow", { opacity: 0 }, tHid);
+        nSteps.push([tHid, 4, 7, 0]);
+        use(0, tAt + 0.2);
+        // Network and size: only their contents dip.
+        tl.to("#lists, #nfoot, #srows", { opacity: 0, duration: 0.3, ease: "sx.in" }, tAt + 0.1);
+        const tClr = tAt + 0.42;
+        tl.set(pkgEls, { opacity: 0 }, tClr);
+        tl.set("#pkgs", { opacity: 0 }, tClr);
+        tl.set(fileEls, { opacity: 0 }, tClr);
+        tl.set("#files", { opacity: 1 }, tClr);
+        tl.set(sizeEls, { opacity: 0 }, tClr);
+        tl.set(sizeBars, { scaleX: 0 }, tClr);
+        reqSteps.push([tClr, req, 0, 0]);
+        kbSteps.push([tClr, kb, 0, 0]);
+        tl.to("#lists, #nfoot, #srows", { opacity: 1, duration: 0.34, ease: "sx.out" }, tClr + 0.02);
+        tl.to("#shell .lights .live", { opacity: 0, duration: 0.3, ease: "sx.swap" }, tClr);
+        hand.move(tHome, REST[0], REST[1], 0.8);
+        // The other pages, now hidden.
+        const tGone = tAt + 0.45;
+        for (const id of ["fCron", "fVal", "fRetry", "fRet"]) fields[id].set(tGone, "");
+        tl.set([...exprEls, ...runEls, ...jsonEls, ...barEls], { opacity: 0 }, tGone);
+        tl.set(".bars .bar", { scaleX: 0 }, tGone);
+        tl.set(cells.map((c) => c.el), { backgroundColor: LINE_2, borderColor: LINE_2 }, tGone);
+        tl.set(".legend, .tally", { opacity: 0.4 }, tGone);
+        keepSteps.push([tGone, 18, 420, 0]);
+        removeSteps.push([tGone, 402, 0, 0]);
+        tl.set({}, {}, D);
+
+        // ---------- Driver ----------
+        const nVal = SX.counter(nSteps, 7);
+        const reqVal = SX.counter(reqSteps, 0);
+        const kbVal = SX.counter(kbSteps, 0);
+        const keepVal = SX.counter(keepSteps, 420);
+        const removeVal = SX.counter(removeSteps, 0);
+        const text = (id) => {
+          const el = $(id);
+          let last = null;
+          return (s) => {
+            if (s !== last) el.textContent = last = s;
+          };
+        };
+        const out = { n: text("n"), req: text("nReq"), kb: text("nKb"), keep: text("nKeep"), remove: text("nRemove") };
+        SX.drive(tl, D, (t) => {
+          for (const f of Object.values(fields)) f.render(t);
+          out.n(String(Math.round(nVal(t))));
+          out.req(String(Math.round(reqVal(t))));
+          out.kb(kbVal(t).toFixed(1));
+          out.keep(String(Math.round(keepVal(t))));
+          out.remove(String(Math.round(removeVal(t))));
+        });
+
+        window.__marks = { tSweepDone: tSweep + 1.4, t1: t1.end, tEval1, tChip, typed2, tEval2, T2, sS: sS.end, sF: sF.end, tP1, tP2, tP3, tP4, sweepEnd: tSweep + 1.7, tReset, tAt, tHome };
+        console.log("marks " + JSON.stringify(window.__marks));
+        window.__timelines["hero"] = tl;
+      })();
+    </script>
+  </body>
+</html>

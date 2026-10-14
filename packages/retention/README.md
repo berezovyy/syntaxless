@@ -5,6 +5,10 @@ keep/remove previews. Parsing runs locally with a small bundled model. No backup
 metadata leaves the device. The package only recommends; it never deletes files
 or cloud objects.
 
+<p align="center">
+  <img alt="An editor with a live preview of 420 daily backups. 'keep daily backups for a week and monthly backups for a year' keeps 18, the last seven days and the newest of each month, and recommends removing 402." src="https://raw.githubusercontent.com/berezovyy/syntaxless/master/docs/media/v3/films/retention.webp" width="100%" />
+</p>
+
 ## Install
 
 ```sh

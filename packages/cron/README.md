@@ -7,6 +7,10 @@ entirely on-device.
 expression, or an explicit unsupported result when cron can't represent the
 intent. The package has no runtime dependencies.
 
+<p align="center">
+  <img alt="An editor and terminal. cron('weekdays at 9:30am') prints 30 9 * * 1-5 and the next four runs. Changed to 'first friday of every month at noon', it prints 'cron cannot represent an ordinal weekday', while recurrences() still lists the dates." src="https://raw.githubusercontent.com/berezovyy/syntaxless/master/docs/media/v3/films/cron.webp" width="100%" />
+</p>
+
 ## Install
 
 ```sh

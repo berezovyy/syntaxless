@@ -1,0 +1,373 @@
+/* Shared look for the Syntaxless README films, v3: tokens, the stage, the card and its
+   sub-cards, fields, the pointer.
+
+   A frame within a frame: a rounded pixel-art stage (shared/stage.png, drawn by stage.py) holds
+   one card, a window with a soft shadow, and that card holds the film's sub-cards on a grid.
+   Outside the stage the frame is transparent, so its corners sit on any page colour.
+
+   Inside the card the palette is ayu Mirage, kept nearly monochrome. Colour appears only where
+   it carries meaning: green for what matches or is kept, red for what fails or is removed, the
+   amber accent for the text cursor, and coloured window controls once the card has focus. */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/jetbrainsmono.woff2") format("woff2");
+  font-weight: 100 800;
+}
+
+:root {
+  --bg: #1f2430;
+  --surface: #242936;
+  --surface-2: #2a3040;
+  --line: #2b3140;
+  --line-2: #3a4252;
+  --rim: #343b4a;
+  --card-line: #303747;
+  --ink: #cccac2;
+  --ink-2: #8a94a6;
+  --ink-3: #5c6577;
+  --accent: #ffcc66;
+  --add: #87d96c;
+  --del: #f27983;
+  --light-idle: #3a4150;
+  --shadow: 0 0 0 1px rgba(10, 12, 18, 0.5), 0 2px 6px rgba(10, 12, 18, 0.26),
+    0 30px 80px rgba(10, 12, 18, 0.42);
+}
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+}
+
+#root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  color: var(--ink);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-variant-ligatures: none;
+  font-feature-settings: "zero";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* One layer for the whole scene, at 1:1. Without it Chrome draws resting text with LCD
+   antialiasing and switches to grayscale whenever something fades, so text shimmers at every
+   fade and the loop stops closing. */
+#scene {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  border-radius: 28px;
+  overflow: hidden;
+  background: url("stage.png") center / cover no-repeat;
+  image-rendering: pixelated;
+}
+
+/* ---------- The card ---------- */
+
+/* Films place #shell at 48, 48, 1824 x 984 and lay out 1:1, never scaled. */
+.shell {
+  position: absolute;
+  left: 48px;
+  top: 48px;
+  width: 1824px;
+  height: 984px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  background: var(--bg);
+  border: 1px solid var(--rim);
+  box-shadow: var(--shadow);
+}
+
+.shell-bar {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  height: 56px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+  font-size: 21px;
+  color: var(--ink-2);
+}
+
+.shell-bar .tag {
+  margin-left: auto;
+  font-size: 19px;
+  color: var(--ink-3);
+}
+
+/* ---------- Sub-cards ---------- */
+
+.panel {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--card-line);
+  overflow: hidden;
+}
+
+/* A neutral focus outline drawn just inside the edge, so clipping cards still show it. */
+.panel .focus {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  border: 1px solid var(--ink-3);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.panel-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  height: 56px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--card-line);
+  font-size: 21px;
+  color: var(--ink);
+}
+
+.panel-head .tag {
+  margin-left: auto;
+  font-size: 19px;
+  color: var(--ink-3);
+}
+
+/* ---------- Window controls ---------- */
+
+.lights {
+  position: relative;
+  flex: none;
+  width: 68px;
+  height: 16px;
+}
+
+.lights span {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  gap: 10px;
+}
+
+.lights i {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--light-idle);
+}
+
+.lights .live i:nth-child(1) {
+  background: #ff5f57;
+}
+.lights .live i:nth-child(2) {
+  background: #febc2e;
+}
+.lights .live i:nth-child(3) {
+  background: #28c840;
+}
+
+/* ---------- Fields ---------- */
+
+.field {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 22px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  white-space: pre;
+}
+
+.field .ring {
+  position: absolute;
+  inset: -1px;
+  border-radius: 8px;
+  border: 1px solid var(--ink-2);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.field .lab {
+  color: var(--ink-3);
+  margin-right: 16px;
+}
+
+.field .ph {
+  color: var(--ink-3);
+}
+
+.caret {
+  display: inline-block;
+  width: 0.56em;
+  height: 1.2em;
+  margin-left: 1px;
+  vertical-align: -0.24em;
+  background: var(--accent);
+}
+
+/* ---------- Pointer ---------- */
+
+.pointer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 34px;
+  height: 50px;
+  z-index: 50;
+  transform-origin: 4px 3px;
+  will-change: transform;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35));
+}
+
+.add {
+  color: var(--add);
+}
+.del {
+  color: var(--del);
+}
+.dim {
+  color: var(--ink-2);
+}
+.faint {
+  color: var(--ink-3);
+}
+
+.sel {
+  background: rgba(64, 159, 255, 0.28);
+}
+
+.caret.bar {
+  width: 3px;
+  height: 1.1em;
+  margin-left: 1px;
+  vertical-align: -0.2em;
+}
+
+/* ---------- Code ---------- */
+
+.code {
+  padding: 18px 0;
+  font-size: 24px;
+}
+
+.ln {
+  position: relative;
+  display: flex;
+  height: 42px;
+  line-height: 42px;
+  white-space: pre;
+  color: var(--ink-2);
+}
+
+.ln .hl {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-2);
+  opacity: 0;
+}
+
+.ln .no {
+  position: relative;
+  flex: none;
+  width: 76px;
+  padding-right: 28px;
+  box-sizing: border-box;
+  text-align: right;
+  color: var(--ink-3);
+}
+
+.ln .src {
+  position: relative;
+}
+
+/* The English inside strings is the brightest thing on screen; the code around it recedes. */
+.st {
+  color: var(--ink);
+}
+.kw,
+.pu,
+.cm {
+  color: var(--ink-3);
+}
+.nu {
+  color: var(--ink);
+}
+
+/* ---------- Terminal ---------- */
+
+.term-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 18px;
+  padding: 0 28px;
+  font-size: 22px;
+  line-height: 40px;
+  color: var(--ink);
+  white-space: pre;
+}
+
+.term-line {
+  height: 40px;
+}
+
+.prompt {
+  color: var(--ink-3);
+}
+
+/* ---------- Package card ---------- */
+
+.pkg-body {
+  padding: 26px 26px 0;
+}
+.pkg-label {
+  font-size: 19px;
+  color: var(--ink-2);
+}
+.pkg-value {
+  margin-top: 6px;
+  font-size: 46px;
+  color: var(--ink);
+}
+.pkg-bar {
+  position: relative;
+  margin-top: 16px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--line);
+}
+.pkg-bar i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  background: var(--ink);
+  transform-origin: left center;
+}
+.pkg-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 16px;
+  color: var(--ink-3);
+}
+.pkg-facts {
+  margin-top: 30px;
+  font-size: 19px;
+  line-height: 34px;
+  color: var(--ink-2);
+}

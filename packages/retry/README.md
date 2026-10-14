@@ -5,6 +5,10 @@ schedules. Parsing runs locally with a small bundled model. Nothing leaves the
 device. The package never executes requests, classifies errors, sleeps or handles
 cancellation.
 
+<p align="center">
+  <img alt="An editor and terminal. parse('retry three times, double the delay, cap at one minute') prints missing-initial-delay; after adding { defaults: { initialDelayMs: 250 } } it prints delays of 250, 500 and 1000 ms as bars." src="https://raw.githubusercontent.com/berezovyy/syntaxless/master/docs/media/v3/films/retry.webp" width="100%" />
+</p>
+
 ## Install
 
 ```sh
