@@ -38,6 +38,18 @@ instead of guessing.
 - **Honest.** Unsupported wording, conflicts and low-confidence predictions come
   back as failures with a code and a reason your UI can act on.
 
+## Packages
+
+| Package                                                   | Plain English                                       | Output                                              |
+| :-------------------------------------------------------- | :-------------------------------------------------- | :-------------------------------------------------- |
+| [`@syntaxless/cron`](packages/cron/README.md)             | `weekdays at 9:30am`                                | cron expression `30 9 * * 1-5` and next runs        |
+| [`@syntaxless/validation`](packages/validation/README.md) | `required email with max 100 characters`            | JSON Schema                                         |
+| [`@syntaxless/filter`](packages/filter/README.md)         | `active customers spending over 100`                | SQLite `WHERE` with parameters, JS predicate        |
+| [`@syntaxless/sort`](packages/sort/README.md)             | `newest first, then cheapest`                       | SQLite `ORDER BY`, JS comparator                    |
+| [`@syntaxless/retry`](packages/retry/README.md)           | `retry three times, start at 250ms, double it`      | bounded exponential backoff delays                  |
+| [`@syntaxless/retention`](packages/retention/README.md)   | `keep daily backups for a week, monthly for a year` | keep/remove preview of your backups                 |
+| [`@syntaxless/format`](packages/format/README.md)         | `euros, two decimals, negatives in parentheses`     | `Intl` number, currency, percent and date formatter |
+
 ## Quick start
 
 ```sh
