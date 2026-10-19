@@ -6,8 +6,8 @@
 </h1>
 
 <p align="center">
-  <strong>Plain English in. Typed, deterministic output out.</strong><br />
-  Small natural-language parsers for TypeScript and JavaScript that run on the device and refuse instead of guessing.
+  Syntaxless turns plain English into cron expressions, SQL filters, validation rules, and more.<br />
+  The packages work in TypeScript and JavaScript, with no API calls or runtime dependencies.
 </p>
 
 <p align="center">
@@ -18,43 +18,51 @@
 </p>
 
 <p align="center">
-  <img alt="A browser app with a customers table, DevTools Network and a size card. Typing 'active customers spending over 100, excluding trials' strikes out the rows that fail; Network shows the whole package loading as 9 requests, 36.1 kB gzip with the model. With the network set to Offline, a second query, 'spending between 50 and 200', still filters the table with 0 requests. The same app then uses the other packages, each loading in Network and adding a bar to the size card, all under 100 kB: 'biggest spenders first' sorts the table, 'euros, two decimals' formats it, 'every monday at 9am' becomes 0 9 * * 1, 'required email with max 100 characters' becomes JSON Schema, 'retry three times, start at 250ms, double the delay' becomes delays of 250, 500 and 1000 ms, and a retention policy keeps 18 of 420 backups." src="docs/media/v3/films/hero.webp" width="100%" />
+  <img alt="A browser demo filters a customer table from English instructions, then runs another query offline with no network requests. Further examples show sorting, formatting, recurring schedules, validation rules, retry delays, and backup retention. The size chart shows each package below 100 kB gzip, including its model." src="docs/media/v3/films/hero.webp" width="100%" />
 </p>
 
-Each Syntaxless package turns one kind of English instruction into a typed,
-editable intent with a small bundled model, then compiles that intent with
-ordinary, deterministic code. Nothing is sent to a server. When a package can't
-interpret the input safely, it returns a failure with a code and a reason
-instead of guessing.
+Each package parses one kind of English instruction with a small model included
+in the package. A successful parse returns a typed intent, which is a JavaScript object
+containing the requested settings. You can save or edit the intent, then compile
+it into the output your app needs.
 
-- **Small.** Each package is under 100 kB gzip with its model included;
-  `@syntaxless/filter` is 36.1 kB.
-- **Local.** The model ships inside the package, loads lazily and runs in
-  Node.js, Bun and the browser, offline. No API keys, no server, no runtime
-  dependencies.
-- **Typed.** Every parse returns a typed intent: plain data you can store, show,
-  edit and compile again without re-parsing the text.
-- **Deterministic.** The same intent always compiles to the same output.
-- **Honest.** Unsupported wording, conflicts and low-confidence predictions come
-  back as failures with a code and a reason your UI can act on.
+Parsing runs locally, and no input is sent to a server. Each package is under
+100 kB after gzip compression, including its model. The packages use ES modules
+and run in Node.js 18 or newer, Bun, and modern browsers. The model loads on the
+first parse, and parsing works offline once the package is available locally.
+
+Compilation uses ordinary code, and the same intent and options produce the
+same output. When the parser detects conflicting instructions, unsupported
+wording, or a prediction below its confidence threshold, it returns an error
+code and a reason. Each package's evaluation documentation describes its
+measured accuracy and known limitations.
 
 ## Packages
 
-| Package                                                   | Plain English                                       | Output                                              |
-| :-------------------------------------------------------- | :-------------------------------------------------- | :-------------------------------------------------- |
-| [`@syntaxless/cron`](packages/cron/README.md)             | `weekdays at 9:30am`                                | cron expression `30 9 * * 1-5` and next runs        |
-| [`@syntaxless/validation`](packages/validation/README.md) | `required email with max 100 characters`            | JSON Schema                                         |
-| [`@syntaxless/filter`](packages/filter/README.md)         | `active customers spending over 100`                | SQLite `WHERE` with parameters, JS predicate        |
-| [`@syntaxless/sort`](packages/sort/README.md)             | `newest first, then cheapest`                       | SQLite `ORDER BY`, JS comparator                    |
-| [`@syntaxless/retry`](packages/retry/README.md)           | `retry three times, start at 250ms, double it`      | bounded exponential backoff delays                  |
-| [`@syntaxless/retention`](packages/retention/README.md)   | `keep daily backups for a week, monthly for a year` | keep/remove preview of your backups                 |
-| [`@syntaxless/format`](packages/format/README.md)         | `euros, two decimals, negatives in parentheses`     | `Intl` number, currency, percent and date formatter |
+Choose a package for the kind of instruction your app accepts. Sizes include
+the entire built package and its model, compressed with `gzip -9`.
+
+| Package                                                   | Example input                                       | Output                                                             | Size, gzip |
+| --------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------ | ---------- |
+| [`@syntaxless/cron`](packages/cron/README.md)             | `weekdays at 9:30am`                                | Cron expression `30 9 * * 1-5` and next occurrences                | 92.6 kB    |
+| [`@syntaxless/validation`](packages/validation/README.md) | `required email with max 100 characters`            | JSON Schema                                                        | 75.5 kB    |
+| [`@syntaxless/filter`](packages/filter/README.md)         | `active customers spending over 100`                | SQLite `WHERE` with parameters and a JavaScript predicate          | 36.1 kB    |
+| [`@syntaxless/sort`](packages/sort/README.md)             | `newest first, then cheapest`                       | SQLite `ORDER BY` and a JavaScript comparator                      | 35.0 kB    |
+| [`@syntaxless/retry`](packages/retry/README.md)           | `retry three times, start at 250ms, double it`      | Retry delays with exponential backoff                              | 35.9 kB    |
+| [`@syntaxless/retention`](packages/retention/README.md)   | `keep daily backups for a week, monthly for a year` | A preview of which backups to keep or remove                       | 35.7 kB    |
+| [`@syntaxless/format`](packages/format/README.md)         | `euros, two decimals, negatives in parentheses`     | An `Intl` formatter for numbers, currencies, percentages, or dates | 37.5 kB    |
 
 ## Quick start
+
+Install the packages you need. For example, install `cron` to parse recurring
+schedules and `format` to parse formatting instructions:
 
 ```sh
 npm install @syntaxless/cron @syntaxless/format
 ```
+
+The `cron` function parses and compiles a schedule in one call. For formatting,
+call `parse` to get the intent, then pass the intent and a locale to `compile`:
 
 ```ts
 import { cron } from "@syntaxless/cron";
@@ -77,179 +85,199 @@ if (parsed.ok) {
 
 ## How it works
 
-<p align="center">
-  <img alt="The string 'weekdays at 9:30am' is split into six lexemes, tagged with roles such as DAYGROUP_WEEKDAY and HOUR_9 with their confidences, resolved into a typed ScheduleIntent and compiled to the cron expression 30 9 * * 1-5. The string 'remind me tomorrow at 3' is refused with unsafe-context." src="docs/media/v3/films/how-it-works.webp" width="100%" />
-</p>
-
-1. **Tokenize.** A tokenizer splits the text into lexemes with fixed features.
-2. **Tag.** A small int6-quantized tagger, shipped as generated TypeScript,
-   labels each lexeme with a role and a confidence.
-3. **Resolve.** A deterministic resolver builds a typed intent from the roles. It
-   refuses conflicts, unsupported wording and low-confidence predictions.
-4. **Compile.** A compiler turns the intent into the target output: a cron
-   expression, JSON Schema, a SQL fragment, a delay schedule, an `Intl`
-   formatter and so on.
-
-Models are trained on generated corpora. A model is promoted only through a
-release gate that runs one-shot, reserved evaluation sets. Each package's
-`evaluation/README.md` documents its protocol, results and limitations.
-
-## Where to use it
-
-Every value on screen is the package's real output for the code shown, run
-with Bun.
-
-### [`@syntaxless/cron`](packages/cron/README.md): schedule fields
-
-Recurring schedules to 5-field cron expressions, plus the next occurrences.
-When cron can't express a schedule, it says so and keeps the intent.
+The model labels parts of the input, and the remaining code builds and compiles
+the intent. For example, the cron parser identifies the days and time in
+`weekdays at 9:30am` before compiling the schedule to `30 9 * * 1-5`.
 
 <p align="center">
-  <img alt="An editor and terminal. cron('weekdays at 9:30am') prints 30 9 * * 1-5 and the next four runs. Changed to 'first friday of every month at noon', it prints 'cron cannot represent an ordinal weekday', while recurrences() still lists the dates." src="docs/media/v3/films/cron.webp" width="100%" />
+  <img alt="The parser splits 'weekdays at 9:30am' into tokens and labels the days and time with confidence scores. The resolver builds a ScheduleIntent, and the compiler returns 30 9 * * 1-5. The input 'remind me tomorrow at 3' returns an unsafe-context error." src="docs/media/v3/films/how-it-works.webp" width="100%" />
 </p>
 
-### [`@syntaxless/validation`](packages/validation/README.md): form builders
+1. First, the tokenizer splits the input into tokens and calculates a fixed set
+   of features for each token.
+2. Second, the model assigns each token a role and a confidence score. The model
+   stores its weights as 6-bit integers in generated TypeScript.
+3. Third, the resolver builds a typed intent from the token roles. It checks for
+   conflicts, unsupported wording, and predictions below the confidence threshold.
+4. Fourth, the compiler validates the intent and produces the package's output,
+   such as a cron expression or SQL filter.
 
-Field constraints to a typed intent and JSON Schema.
+The models are trained on generated examples. Before a model can replace the
+bundled version, it must pass the package's release checks, including an
+evaluation on examples excluded from training and tuning. Each acceptance set
+is used for one release evaluation, then retained for regression tests. Each
+package's `evaluation/README.md` documents the procedure, results, and limitations.
+
+## Usage examples
+
+The demos below show package output from the displayed code, run with Bun.
+Each package's README includes its API and supported inputs.
+
+### Recurring schedules with [`@syntaxless/cron`](packages/cron/README.md)
+
+The cron package compiles recurring schedules into cron expressions with five
+fields and calculates the next occurrences. If cron can't represent a parsed
+schedule, the result includes an error and preserves the intent. You can use
+the intent to calculate occurrences separately.
 
 <p align="center">
-  <img alt="An editor and terminal. schema() turns 'required email with max 100 characters' and 'optional integer between 1 and 10' into JSON Schema objects, and refuses 'every weekday at 9' with unrecognized." src="docs/media/v3/films/validation.webp" width="100%" />
+  <img alt="The call cron('weekdays at 9:30am') returns 30 9 * * 1-5 and the next four occurrences. For 'first friday of every month at noon', cron() returns an ordinal weekday error, while recurrences() still lists the dates." src="docs/media/v3/films/cron.webp" width="100%" />
 </p>
 
-### [`@syntaxless/filter`](packages/filter/README.md): search over your data
+### Form validation with [`@syntaxless/validation`](packages/validation/README.md)
 
-Predicates you can evaluate in JavaScript or compile to parameterized SQLite
-`WHERE` fragments.
+The validation package parses field requirements into a typed intent and
+compiles the intent into JSON Schema. You can use it to define rules for form
+fields, such as a required email address with a maximum length.
 
 <p align="center">
-  <img alt="An editor and terminal. parse('active customers spending over 100, excluding trials') compiles to SQLite parameters ["active", 100, 1] and matches three customers; changed to 'spending between 50 and 200', it prints [50, 200] and four customers." src="docs/media/v3/films/filter.webp" width="100%" />
+  <img alt="The schema() function compiles 'required email with max 100 characters' and 'optional integer between 1 and 10' into JSON Schema objects. The input 'every weekday at 9' returns an unrecognized error." src="docs/media/v3/films/validation.webp" width="100%" />
 </p>
 
-### [`@syntaxless/sort`](packages/sort/README.md): ordering lists and tables
+### Data filtering with [`@syntaxless/filter`](packages/filter/README.md)
 
-Sort keys, a JavaScript comparator and SQLite `ORDER BY` fragments.
+The filter package compiles conditions into a JavaScript predicate, which tests
+whether a record matches the conditions. You can also compile the intent into
+a SQLite `WHERE` fragment with separate query parameters.
 
 <p align="center">
-  <img alt="An editor with a live preview. parse('newest first, then cheapest, missing prices last') reorders a product table to ids 3, 2, 6, 5, 1, 4." src="docs/media/v3/films/sort.webp" width="100%" />
+  <img alt="The input 'active customers spending over 100, excluding trials' compiles to a SQLite filter with separate parameters and matches three customers. Changing the input to 'spending between 50 and 200' matches four customers." src="docs/media/v3/films/filter.webp" width="100%" />
 </p>
 
-### [`@syntaxless/retry`](packages/retry/README.md): retry policies
+### Data sorting with [`@syntaxless/sort`](packages/sort/README.md)
 
-Retry policies to deterministic, bounded delay schedules. It never invents a
-missing value.
+The sort package parses instructions into sort keys and directions. It compiles
+the intent into a JavaScript comparator for sorting arrays or a SQLite
+`ORDER BY` fragment for database queries.
 
 <p align="center">
-  <img alt="An editor and terminal. parse('retry three times, double the delay, cap at one minute') prints missing-initial-delay; after adding { defaults: { initialDelayMs: 250 } } it prints delays of 250, 500 and 1000 ms as bars." src="docs/media/v3/films/retry.webp" width="100%" />
+  <img alt="The input 'newest first, then cheapest, missing prices last' sorts a product table into the order 3, 2, 6, 5, 1, 4." src="docs/media/v3/films/sort.webp" width="100%" />
 </p>
 
-### [`@syntaxless/retention`](packages/retention/README.md): backup retention
+### Retry policies with [`@syntaxless/retry`](packages/retry/README.md)
 
-Retention policies to keep/remove previews. It recommends; it never deletes.
+The retry package calculates delays from instructions about retry counts,
+initial delays, and delay limits. The package returns errors for missing required
+values unless you supply defaults in the options.
 
 <p align="center">
-  <img alt="An editor with a live preview of 420 daily backups. 'keep daily backups for a week and monthly backups for a year' keeps 18, the last seven days and the newest of each month, and recommends removing 402." src="docs/media/v3/films/retention.webp" width="100%" />
+  <img alt="The input 'retry three times, double the delay, cap at one minute' returns a missing-initial-delay error. Supplying an initialDelayMs default of 250 produces delays of 250, 500, and 1000 ms." src="docs/media/v3/films/retry.webp" width="100%" />
 </p>
 
-### [`@syntaxless/format`](packages/format/README.md): number and date formats
+### Backup retention with [`@syntaxless/retention`](packages/retention/README.md)
 
-Number, currency, percentage and date/time formats as validated `Intl`
-formatters.
+The retention package parses backup retention rules and previews which backups
+to keep or remove. Your app controls deletion, and the package doesn't delete
+any backups.
 
 <p align="center">
-  <img alt="An editor and terminal. 'euros, two decimals, negatives in parentheses' formats a ledger as (€1,234.50), €98,000.00 and so on; changing only the locale to de-DE prints (1.234,50 €), 98.000,00 € and so on." src="docs/media/v3/films/format.webp" width="100%" />
+  <img alt="For a list of 420 daily backups, 'keep daily backups for a week and monthly backups for a year' selects 18 backups to keep and 402 to remove." src="docs/media/v3/films/retention.webp" width="100%" />
 </p>
 
-## Packages
+### Number and date formatting with [`@syntaxless/format`](packages/format/README.md)
 
-| Package                                                   | Turns text into                                                                   | Size, gzip |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------- |
-| [`@syntaxless/cron`](packages/cron/README.md)             | Recurring schedules and 5-field cron expressions                                  | 92.6 kB    |
-| [`@syntaxless/validation`](packages/validation/README.md) | Field constraints and JSON Schema                                                 | 75.5 kB    |
-| [`@syntaxless/filter`](packages/filter/README.md)         | Predicates, a JavaScript matcher and parameterized SQLite `WHERE` fragments       | 36.1 kB    |
-| [`@syntaxless/sort`](packages/sort/README.md)             | Sort keys, a JavaScript comparator and SQLite `ORDER BY` fragments                | 35.0 kB    |
-| [`@syntaxless/retry`](packages/retry/README.md)           | Retry policies and deterministic, bounded delay schedules                         | 35.9 kB    |
-| [`@syntaxless/retention`](packages/retention/README.md)   | Backup retention policies and keep/remove previews                                | 35.7 kB    |
-| [`@syntaxless/format`](packages/format/README.md)         | Number, currency, percentage and date/time formats as validated `Intl` formatters | 37.5 kB    |
+The format package compiles formatting instructions into validated `Intl`
+formatters for numbers, currencies, percentages, and dates. Supply a locale to
+control regional formatting, and supply a time zone for dates and times.
 
-All packages are ESM-only, have no runtime dependencies, and run in Node.js 18+,
-Bun and modern browsers. The model loads lazily on first use. Sizes are the
-whole built package, model included, at `gzip -9`.
+<p align="center">
+  <img alt="The input 'euros, two decimals, negatives in parentheses' formats amounts as (€1,234.50) and €98,000.00 with the en-US locale. Changing the locale to de-DE produces (1.234,50 €) and 98.000,00 €." src="docs/media/v3/films/format.webp" width="100%" />
+</p>
 
 ## Development
 
-Requirements: Bun 1.4.3 or newer. Python training also needs Python 3.13 and
-[uv](https://docs.astral.sh/uv/).
+Development requires Bun 1.4.3 or newer. Training and Python tests also require
+Python 3.13 and [uv](https://docs.astral.sh/uv/).
 
-Formatting needs `bun fmt`, which so far ships only in canary builds
-(`1.4.4-canary.1` or newer). `bun run format` and `bun run check` fetch that
-pinned canary with `bunx`, so they work on stable Bun. To run `bun fmt`
-directly, install a canary with `bun upgrade --canary`.
+The formatting scripts use the Bun canary version pinned in `package.json`
+because the project uses `bun fmt`. The scripts fetch the pinned version with
+`bunx`, so you can run them from a stable Bun installation.
 
-With [Nix](https://nixos.org/), `nix develop` (or `direnv allow`) gives you all of
-this, pinned in `flake.nix`: the same Bun canary, Node.js 22, Python 3.13 and uv.
-Linux and Apple Silicon macOS are supported.
+You can also use `nix develop` or `direnv allow` to load the environment defined
+in [flake.nix](flake.nix). It provides the pinned Bun canary, Node.js 22,
+Python 3.13, and uv on Linux and Apple Silicon macOS.
+
+First, install the workspace dependencies:
 
 ```sh
 bun install --frozen-lockfile
-bun run check          # formatting, lint, type checking, TypeScript tests and builds with size gates
-bun run format         # format sources and docs
 ```
 
-The checks also run individually: `bun run format:check`, `bun run lint`, `bun run typecheck`,
-`bun run test` and `bun run build`. Package-level checks run from each package
-directory, for example:
+Second, run the checks for formatting, linting, types, TypeScript tests, and
+builds, including package size limits:
 
 ```sh
-bun run --cwd packages/format check:package   # packed tarball in Bun and Node consumers
-bun run --cwd packages/format test:browser    # offline Chromium check (needs Playwright's Chromium)
+bun run check
 ```
 
-Python tests:
+To format the source files and documentation, run `bun run format`. You can run
+each check separately with `bun run format:check`, `bun run lint`,
+`bun run typecheck`, `bun run test`, or `bun run build`.
+
+After building a package, check its packed archive in Bun and Node.js and test
+it offline in Chromium. For example, run the format package's checks from the
+repository root:
+
+```sh
+bun run --cwd packages/format check:package
+bun run --cwd packages/format test:browser
+```
+
+The browser check requires Playwright's Chromium. See [TESTING.md](TESTING.md)
+for setup instructions, test coverage, and review requirements.
+
+For Python tests, first install the Python dependencies, then run the suites:
 
 ```sh
 uv sync --project training/cron --locked
 bun run test:python
 ```
 
-See [TESTING.md](TESTING.md) for what the tests cover and the review standard,
-and [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution instructions.
 
 <details>
-<summary><strong>Repository layout</strong></summary>
+<summary>Repository layout</summary>
 
-```
-packages/<package>/            published runtime: src/, tests/, scripts/ (build, size, package and browser checks)
-packages/<package>/training/   private TypeScript workspace: corpus, featurization, evaluation and release gate
-packages/<package>/evaluation/ reserved evaluation sets, consumption records and protocol
-packages/shared/               private TypeScript shared by the runtimes (model decoding, inference, tokenizer)
-                               and by training (JSONL, binary shards, reserved-wording checks, statistics)
-training/cron/                 Python training and export harness for cron, and the shared uv environment
-training/shared/               Python training and export harness for the other six packages
-training/validation/           validation's boundary-calibrating exporter
-scripts/                       build helpers shared by every package (declarations, tarball check)
-docs/media/                    README media: logo/ holds the logo and its generator, v3/ the films and their HyperFrames sources
+The published packages live under `packages/`, alongside their training code
+and evaluation data.
+
+```text
+packages/<package>/            Package source, tests, and build scripts
+packages/<package>/training/   TypeScript code for data generation, evaluation, and release checks
+packages/<package>/evaluation/ Evaluation sets, usage records, and procedures
+packages/shared/              TypeScript code shared by the packages and training tools
+training/cron/                Python training and export code for cron, and the shared uv environment
+training/shared/              Python training and export code for the other packages
+training/validation/          Python export code for validation thresholds
+scripts/                      Shared build and package checks
+docs/media/                   README images, videos, and their source files
 ```
 
 </details>
 
 ## Training
 
-Each package has one coordinator command, run from the repository root:
+Run a package's training command from the repository root:
 
 ```sh
 bun run train:cron
-bun run train:validation   # also: train:filter, train:sort, train:retry, train:retention, train:format
+bun run train:validation
 ```
 
-A coordinator generates a fresh corpus, then trains, exports and evaluates a
-candidate in a new run directory. It never changes the bundled model; promotion
-requires the package's full release gate. See each package's
-`training/README.md` for inputs, outputs and the recipe.
+The other packages use the same command pattern, such as `bun run train:filter`
+or `bun run train:format`. Each package's `training/README.md` describes its
+inputs, outputs, and settings.
 
-Corpora, runs, caches and build outputs are ignored by Git. Regenerate them
-through the training pipeline; never hand-edit generated model artifacts or
-reserved evaluation data.
+The training command writes a candidate model to a new run directory. First,
+it generates training examples. Second, it trains and exports the candidate.
+Third, it evaluates the candidate without replacing the bundled model.
+Replacing the bundled model requires a separate run of the package's release
+checks.
+
+Git ignores generated training data, run directories, caches, and build outputs.
+Use the training commands to regenerate model files, and don't edit generated
+model files or reserved evaluation data by hand.
 
 ## License
 
-[MIT](LICENSE)
+Syntaxless is available under the [MIT License](LICENSE).
